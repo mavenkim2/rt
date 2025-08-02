@@ -2,6 +2,7 @@
 #include "../memory.h"
 #include "../math/math_include.h"
 #include "../math/ray.h"
+#include "../math/eigen.h"
 #include "../thread_context.h"
 #include "../dgfs.h"
 #include "../radix_sort.h"
@@ -4468,11 +4469,49 @@ __forceinline Mask<T> TriangleAABB_SAT(Vec3<T> v[3], Mask<T> &resultMask)
     return resultMask;
 }
 
-void Voxelize(Mesh *mesh)
+static u32 EvolveSobolSeed(u32 &seed)
+{
+    // constant from: https://www.pcg-random.org/posts/does-it-beat-the-minimal-standard.html
+    const u32 MCG_C = 2739110765;
+    seed += MCG_C;
+
+    // Generated using https://github.com/skeeto/hash-prospector
+    // Estimated Bias ~583
+    u32 hash = seed;
+    hash *= 0x92955555u;
+    hash ^= hash >> 15;
+    return hash;
+}
+
+static u32 FastOwenScrambling(u32 index, u32 seed)
+{
+    index += seed;
+    index ^= index * 0x9c117646u;
+    index ^= index * 0xe0705d72u;
+    return ReverseBits32(index);
+}
+
+static Vec2f GetSobolSample(u32 sampleIndex, u32 &seed)
+{
+    u32 sobolIndex = FastOwenScrambling(sampleIndex, EvolveSobolSeed(seed));
+    Vec2u result(sobolIndex);
+    result.y ^= result.y >> 16;
+    result.y ^= (result.y & 0xFF00FF00) >> 8;
+    result.y ^= (result.y & 0xF0F0F0F0) >> 4;
+    result.y ^= (result.y & 0xCCCCCCCC) >> 2;
+    result.y ^= (result.y & 0xAAAAAAAA) >> 1;
+
+    result.x = FastOwenScrambling(result.x, EvolveSobolSeed(seed));
+    result.y = FastOwenScrambling(result.y, EvolveSobolSeed(seed));
+
+    return Vec2f(result.x >> 8, result.y >> 8) * 5.96046447754e-08f;
+}
+
+void Voxelize(Mesh *mesh, string filename)
 {
     ScratchArena scratch;
 
-    f32 voxelSize    = 1.f;
+    f32 voxelSize    = 4.f;
     f32 rcpVoxelSize = 1.f / voxelSize;
 
     u32 voxelCount = 0;
@@ -4579,8 +4618,6 @@ void Voxelize(Mesh *mesh)
         }
     }
 
-    Assert(voxelHashSet.totalCount < maxNumVoxels);
-
     const u32 numRays = 64;
 
     struct SGGX
@@ -4605,19 +4642,41 @@ void Voxelize(Mesh *mesh)
 
             nzz += n.z * n.z;
         }
+
+        // 2. incorporate voxelization into main simplification code
+        // 3. runtime sggx importance sampling and evaluation
+        // 4. runtime acceleration structure builds
+        // 5. data format, writing to disk
+        // 6. offline verification of voxels
+
+        // void Fit()
+        // {
+        //     float m[9] = {
+        //         nxx, nxy, nxz, nxy, nyy, nyz, nxz, nyz, nzz,
+        //     };
+        //     float eigenVectors[9] = {};
+        //
+        //     float eigenValues[3] = {};
+        //     Eigen::jacobiEigenSolver(m, eigenValues, eigenVectors, 1e-8f);
+        //
+        //     for (int axis = 0; axis < 3; axis++)
+        //     {
+        //         int nextAxis = (1 << axis) & 3;
+        //         Min(
+        //     }
+        // }
     };
 
-    auto GenerateRay = [&](u32 sampleIndex, float voxelSize, Vec3f &outOrigin, Vec3f &outDir,
-                           float &outTMax) {
+    auto GenerateRay = [&](u32 sampleIndex, u32 &seed, float voxelSize, Vec3f &outOrigin,
+                           Vec3f &outDir, float &outTMax) {
         for (;;)
         {
-            Vec2f u;
-            Vec3f dir = SampleUniformSphere(u);
+            Vec3f dir = SampleUniformSphere(GetSobolSample(sampleIndex, seed));
 
             Vec3f tx, ty;
             CoordinateSystem(dir, &tx, &ty);
 
-            Vec2f disk = SampleUniformDiskConcentric(u);
+            Vec2f disk = SampleUniformDiskConcentric(GetSobolSample(sampleIndex, seed));
             disk *= voxelSize * Sqrt(3) * 0.5f;
 
             Vec3f invDir = 1.f / dir;
@@ -4635,6 +4694,7 @@ void Voxelize(Mesh *mesh)
             if (minT < maxT)
             {
                 outOrigin = origin + dir * minT;
+                outDir    = dir;
                 outTMax   = maxT - minT;
                 break;
             }
@@ -4660,8 +4720,12 @@ void Voxelize(Mesh *mesh)
         arenas[i]->align = 16;
     }
 
+    PrimitiveIndices ind = {};
+    ind.alphaTexture     = 0;
+
     ScenePrimitives scene = {};
-    scene.primitives      = &mesh;
+    scene.primitives      = mesh;
+    scene.primIndices     = &ind;
     scene.numPrimitives   = 1;
     scene.BuildTriangleBVH(arenas);
 
@@ -4683,10 +4747,16 @@ void Voxelize(Mesh *mesh)
 
             for (u32 sample = 0; sample < numRays; sample++)
             {
+                u32 seed        = 0;
+                u32 sampleIndex = ReverseBits32((MortonCode3(voxel.x & 1023) |
+                                                 (MortonCode3(voxel.y & 1023) << 1) |
+                                                 (MortonCode3(voxel.z & 1023) << 2)) *
+                                                    numRays +
+                                                sample);
                 SurfaceInteraction si;
                 Ray2 ray;
 
-                GenerateRay(sample, voxelSize, ray.o, ray.d, ray.tFar);
+                GenerateRay(sampleIndex, seed, voxelSize, ray.o, ray.d, ray.tFar);
                 ray.o += voxelCenter;
 
                 bool intersect = scene.Intersect(ray, si);
@@ -4730,6 +4800,72 @@ void Voxelize(Mesh *mesh)
         }
     }
 
+    // Output voxels to OBJ
+#if 1
+    // output voxels
+    Mesh outputMesh        = {};
+    outputMesh.numVertices = 8 * voxels.Length();
+    outputMesh.numIndices  = 36 * voxels.Length();
+    outputMesh.p       = PushArrayNoZero(scratch.temp.arena, Vec3f, outputMesh.numVertices);
+    outputMesh.indices = PushArrayNoZero(scratch.temp.arena, u32, outputMesh.numIndices);
+
+    u32 numIndices        = 0;
+    u32 numVertices       = 0;
+    const u32 cubeTable[] = {
+        // Front Face
+        0, 1, 2, // Triangle 1
+        1, 3, 2, // Triangle 2
+
+        // Back Face
+        4, 6, 5, // Triangle 3
+        5, 6, 7, // Triangle 4
+
+        // Left Face
+        4, 0, 6, // Triangle 5
+        0, 2, 6, // Triangle 6
+
+        // Right Face
+        1, 5, 3, // Triangle 7
+        5, 7, 3, // Triangle 8
+
+        // Top Face
+        2, 3, 6, // Triangle 9
+        3, 7, 6, // Triangle 10
+
+        // Bottom Face
+        4, 5, 0, // Triangle 11
+        5, 1, 0  // Triangle 12;
+    };
+    for (auto &v : voxels)
+    {
+        Vec3i voxel = v.loc;
+
+        for (int z = 0; z < 2; z++)
+        {
+            for (int y = 0; y < 2; y++)
+            {
+                for (int x = 0; x < 2; x++)
+                {
+                    Vec3f p                     = (Vec3f(voxel) + Vec3f(x, y, -z)) * voxelSize;
+                    outputMesh.p[numVertices++] = p;
+                }
+            }
+        }
+        for (int i = 0; i < 36; i++)
+        {
+            outputMesh.indices[numIndices + i] = cubeTable[i] + numVertices - 8;
+        }
+        numIndices += 36;
+    }
+
+    outputMesh.numVertices = numVertices;
+    outputMesh.numIndices  = numIndices;
+
+    WriteTriOBJ(outputMesh,
+                PushStr8F(scratch.temp.arena, "%S_voxel.obj", RemoveFileExtension(filename)));
+#endif
+
+#if 0
     Assert(voxels.Length());
     SortHandles(handles.data, handles.Length());
 
@@ -4739,7 +4875,7 @@ void Voxelize(Mesh *mesh)
     {
         Voxel &voxel = voxels[handles[handleIndex].index];
 
-        FixedArray<u32> neighbors;
+        FixedArray<u32, 27> neighbors;
         for (int x = -1; x <= 1; x++)
         {
             for (int y = -1; y <= 1; y++)
@@ -4753,7 +4889,7 @@ void Voxelize(Mesh *mesh)
                     {
                         if (voxels[hashIndex].loc == neighborLoc)
                         {
-                            neighbors.Push((u32)hashindex);
+                            neighbors.Push((u32)hashIndex);
                             break;
                         }
                     }
@@ -4771,6 +4907,7 @@ void Voxelize(Mesh *mesh)
         // TODO: add to extra voxel list
         numVoxels--;
     }
+#endif
 }
 
 #if 0

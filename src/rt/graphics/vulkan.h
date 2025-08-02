@@ -75,9 +75,11 @@ inline u32 GetNumLevels(u32 width, u32 height)
 
 enum class CLASOpType
 {
-    Move = (1 << 0),
-    CLAS = (1 << 1),
-    BLAS = (1 << 2),
+    Move                = (1 << 0),
+    CLAS                = (1 << 1),
+    BLAS                = (1 << 2),
+    BuildTemplate       = (1 << 3),
+    InstantiateTemplate = (1 << 4),
 };
 ENUM_CLASS_FLAGS(CLASOpType)
 
@@ -730,6 +732,10 @@ struct CommandBuffer
                           u32 maxTotalClusterCount,
                           u32 maxClusterCountPerAccelerationStructure,
                           u32 maxAccelerationStructureCount);
+    void ComputeCLASTemplateSizes(GPUBuffer *srcInfosArray, GPUBuffer *scratchBuffer,
+                                  GPUBuffer *dstSizes, GPUBuffer *srcInfosCount,
+                                  u32 srcInfosOffset, u32 maxNumTriangles, u32 maxNumVertices,
+                                  u32 maxNumClusters);
     void BuildCLAS(CLASOpMode opMode, GPUBuffer *dstImplicitData, GPUBuffer *scratchBuffer,
                    GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddresses,
                    GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
@@ -1008,6 +1014,9 @@ struct Vulkan
     void GetCLASBuildSizes(CLASOpMode opMode, int maxNumClusters, u32 maxNumTriangles,
                            u32 maxNumVertices, u32 &scratchSize,
                            u32 &accelerationStructureSize);
+    void GetCLASTemplateBuildSizes(CLASOpMode opMode, int maxNumClusters, u32 maxNumTriangles,
+                                   u32 maxNumVertices, u32 &scratchSize,
+                                   u32 &accelerationStructureSize);
     void GetClusterBLASBuildSizes(CLASOpMode opMode, u32 maxTotalClusterCount,
                                   u32 maxClusterCountPerAccelerationStructure,
                                   u32 maxAccelerationStructureCount, u32 &scratchSize,

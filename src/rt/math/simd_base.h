@@ -2,6 +2,7 @@
 #define SIMD_BASE_H
 
 #include <limits>
+#include <immintrin.h>
 
 #include "../base.h"
 
@@ -499,6 +500,10 @@ static const __m128 _mm_lookupmask_ps[16] = {
     _mm_castsi128_ps(_mm_set_epi32(-1, -1, -1, 0)),
     _mm_castsi128_ps(_mm_set_epi32(-1, -1, -1, -1)),
 };
+
+// __forceinline u32 TrailingZeroCount(u32 val) { return __tzcnt_u32(val); }
+//
+// __forceinline u32 LeadingZeroCount(u32 val) { return __lzcnt32(val); }
 
 __forceinline u32 Bsf(u32 val)
 {

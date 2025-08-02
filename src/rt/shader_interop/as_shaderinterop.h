@@ -243,40 +243,10 @@ struct GPUClusterFixup
     uint offset;
 };
 
-struct TestDenseGeometry
+struct Brick
 {
-    uint baseAddress;
-    uint geoBaseAddress;
-    uint shadBaseAddress;
-
-    float4 lodBounds;
-    float lodError;
-
-    int3 anchor;
-    uint2 octBase;
-
-    uint3 posBitWidths;
-    uint2 octBitWidths;
-    uint indexBitWidth;
-    uint numFaceIDBits;
-
-    uint numTriangles;
-    uint numVertices;
-
-    uint normalOffset;
-    uint faceIDOffset;
-    uint indexOffset;
-    uint ctrlOffset;
-    uint firstBitOffset;
-    int posPrecision;
-    uint materialInfo;
-
-    uint3 numPrevRestartsBeforeDwords;
-    uint3 prevHighRestartBeforeDwords;
-    int3 prevHighEdge1BeforeDwords;
-    int3 prevHighEdge2BeforeDwords;
-
-    bool debug;
+    uint64_t bitMask;
+    uint3 minVoxel;
 };
 
 #define GLOBALS_VERTEX_BUFFER_OFFSET_INDEX 0

@@ -123,7 +123,7 @@ struct MeshSimplifier
 
 void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndices,
                     string filename);
-void Voxelize(Mesh *mesh);
+void Voxelize(Mesh *mesh, string filename);
 
 } // namespace rt
 

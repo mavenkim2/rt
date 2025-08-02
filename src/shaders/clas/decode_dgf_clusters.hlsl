@@ -7,7 +7,8 @@ RWStructuredBuffer<float3> decodeVertexBuffer : register(u1);
 StructuredBuffer<DecodeClusterData> decodeClusterDatas : register(t2);
 StructuredBuffer<uint> globals : register(t3);
 
-[numthreads(32, 1, 1)] 
+#define THREAD_GROUP_SIZE 32
+[numthreads(THREAD_GROUP_SIZE, 1, 1)] 
 void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
 {
     uint clusterID = groupID.x;
@@ -25,35 +26,60 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
     DenseGeometry header = GetDenseGeometryHeader(basePageAddress, numClusters, clusterIndex);
 
     // Decode triangle indices
-    uint waveNumActiveLanes = min(32, WaveGetLaneCount());
-
-    // Decode indices
-    for (uint triangleIndex = groupIndex; triangleIndex < header.numTriangles; triangleIndex += waveNumActiveLanes)
+    if (header.numBricks)
     {
-        // write u8 indices
-        uint3 triangleIndices = header.DecodeTriangle(triangleIndex);
-
-        uint indexBits = triangleIndices[0] | (triangleIndices[1] << 8u) | (triangleIndices[2] << 16u);
-        uint2 offset = GetAlignedAddressAndBitOffset(indexBufferOffset + triangleIndex * 3, 0);
-
-        const uint writeBitSize = 24;
-
-        // Write the uint8 indices atomically
-        if (offset[1] + writeBitSize >= 32)
+        float voxelSize = header.lodError;
+        for (uint brickIndex = groupIndex; brickIndex < header.numBricks; brickIndex += THREAD_GROUP_SIZE)
         {
-            uint mask = ~0u << ((writeBitSize + offset[1]) & 31u);
-            indexBuffer.InterlockedAnd(offset[0] + 4, mask);
-            indexBuffer.InterlockedOr(offset[0] + 4, indexBits >> (32 - offset[1]));
-        }
-        uint mask = ~(((1u << writeBitSize) - 1u) << offset[1]);
-        indexBuffer.InterlockedAnd(offset[0], mask);
-        indexBuffer.InterlockedOr(offset[0], indexBits << offset[1]);
-    }
+            Brick brick = header.DecodeBrick(brickIndex);
+            // Get the brick bounds
+            uint3 minP, maxP;
+            GetBrickBounds(brick.bitMask, minP, maxP);
+            
+            float3 aabbMin = (brick.minVoxel + minP + 0.5f) * voxelSize;
+            float3 aabbMax = (brick.minVoxel + maxP + 0.5f) * voxelSize;
 
-    // Decode vertices
-    for (uint vertexIndex = groupIndex; vertexIndex < header.numVertices; vertexIndex += waveNumActiveLanes)
+            for (uint i = 0; i < 8; i++)
+            {
+                uint x = i & 1u;
+                uint y = (i >> 1u) & 1u;
+                uint z = i >> 2u;
+
+                float3 position = float3(x ? aabbMax.x : aabbMin.x, y ? aabbMax.y : aabbMin.y, z ? aabbMax.z : aabbMin.z);
+                decodeVertexBuffer[vertexBufferOffset + brickIndex * 8u + i] = position;
+            }
+        }
+    }
+    else 
     {
-        float3 position = header.DecodePosition(vertexIndex);
-        decodeVertexBuffer[vertexBufferOffset + vertexIndex] = position;
+        // Decode indices
+        for (uint triangleIndex = groupIndex; triangleIndex < header.numTriangles; triangleIndex += THREAD_GROUP_SIZE)
+        {
+            // write u8 indices
+            uint3 triangleIndices = header.DecodeTriangle(triangleIndex);
+
+            uint indexBits = triangleIndices[0] | (triangleIndices[1] << 8u) | (triangleIndices[2] << 16u);
+            uint2 offset = GetAlignedAddressAndBitOffset(indexBufferOffset + triangleIndex * 3, 0);
+
+            const uint writeBitSize = 24;
+
+            // Write the uint8 indices atomically
+            if (offset[1] + writeBitSize >= 32)
+            {
+                uint mask = ~0u << ((writeBitSize + offset[1]) & 31u);
+                indexBuffer.InterlockedAnd(offset[0] + 4, mask);
+                indexBuffer.InterlockedOr(offset[0] + 4, indexBits >> (32 - offset[1]));
+            }
+            uint mask = ~(((1u << writeBitSize) - 1u) << offset[1]);
+            indexBuffer.InterlockedAnd(offset[0], mask);
+            indexBuffer.InterlockedOr(offset[0], indexBits << offset[1]);
+        }
+
+        // Decode vertices
+        for (uint vertexIndex = groupIndex; vertexIndex < header.numVertices; vertexIndex += THREAD_GROUP_SIZE)
+        {
+            float3 position = header.DecodePosition(vertexIndex);
+            decodeVertexBuffer[vertexBufferOffset + vertexIndex] = position;
+        }
     }
 }

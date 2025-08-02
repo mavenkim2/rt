@@ -2325,16 +2325,15 @@ int main(int argc, char **argv)
     LoadPBRT(arena, filename);
 #endif
     int numMeshes, actualNumMeshes;
-    Mesh *meshes = LoadObj(arena,
-                           "../../data/island/pbrt-v4/obj/isMountainB/archives/"
-                           "xgFoliageA_treeMadronaBaked_canopyOnly_lo.obj",
-                           numMeshes, actualNumMeshes);
+    string testFilename = "../../data/island/pbrt-v4/obj/isMountainB/archives/"
+                          "xgFoliageA_treeMadronaBaked_canopyOnly_lo.obj";
+    Mesh *meshes        = LoadObj(arena, testFilename, numMeshes, actualNumMeshes);
 
     meshes[0].numFaces = meshes[0].numIndices / 4;
     Mesh mesh          = ConvertQuadToTriangleMesh(arena, meshes[0]);
 
     PerformanceCounter counter = OS_StartCounter();
-    Voxelize(&mesh);
+    Voxelize(&mesh, testFilename);
     f32 t = OS_GetMilliseconds(counter);
     Print("%f\n", t);
 

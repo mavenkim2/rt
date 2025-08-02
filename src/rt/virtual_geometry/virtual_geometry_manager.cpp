@@ -331,8 +331,12 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena)
             VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
         sizeof(u32) * GLOBALS_SIZE);
 
-    // TODO
-    u32 numBlas      = 1;
+    // Templates
+    u32 templateScratchSize, templateAccelSize;
+    device->GetCLASTemplateBuildSizes(CLASOpMode::ExplicitDestinations, 1,
+                                      MAX_CLUSTER_TRIANGLES, MAX_CLUSTER_VERTICES,
+                                      templateScratchSize, templateAccelSize);
+
     u32 expectedSize = maxPages * MAX_CLUSTERS_PER_PAGE * 2000;
 
     u32 clasScratchSize, clasAccelerationStructureSize;

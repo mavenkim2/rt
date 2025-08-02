@@ -43,7 +43,16 @@ struct DenseGeometry
 
     uint flags;
 
+    uint numBricks;
+    uint brickOffset;
+
     bool debug;
+
+    Brick DecodeBrick(uint brickIndex) 
+    {
+        Brick brick;
+        return brick;
+    }
 
     uint3 DecodeTriangle(uint triangleIndex)
     {
@@ -410,6 +419,22 @@ uint GetPageIndexFromClusterID(uint clusterID)
 uint GetClusterIndexFromClusterID(uint clusterID)
 {
     return clusterID & (MAX_CLUSTERS_PER_PAGE - 1);
+}
+
+void GetBrickBounds(uint64_t bitMask, out uint3 minP, out uint3 maxP)
+{
+    minP.z = firstbitlow(bitMask) >> 4u;
+    maxP.z = (firstbithigh(bitMask) >> 4u) + 1u;
+
+    uint bits = (uint)bitMask | uint(bitMask >> 32u);
+    bits |= bits >> 16u;
+    minP.y = firstbitlow(bitMask) >> 2u;
+    maxP.y = (firstbithigh((bitMask << 16u) >> 16u) >> 2u) + 1u;
+
+    bits |= bits >> 8u;
+    bits |= bits >> 4u;
+    minP.x = firstbitlow(bitMask);
+    maxP.x = (firstbithigh((bitMask << 28u) >> 28u)) + 1u;
 }
 
 #endif
