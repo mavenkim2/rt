@@ -2793,6 +2793,99 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                 }
             });
 
+            // Create edges between spatially close but separated clusters
+            struct Handle
+            {
+                u32 sortKey;
+                u32 index;
+            };
+
+            Bounds totalBounds;
+            for (auto &cluster : levelClusters)
+            {
+                totalBounds.Extend(cluster.record.geomBounds);
+            }
+            Vec3f scale = 1023.f / ToVec3f(totalBounds.maxP - totalBounds.minP);
+            Vec3f minP  = ToVec3f(totalBounds.minP);
+            StaticArray<Handle> handles(scratch.temp.arena, levelClusters.Length(),
+                                        levelClusters.Length());
+
+            ParallelFor(
+                0, levelClusters.Length(), 4096, 4096, [&](u32 jobID, u32 start, u32 count) {
+                    for (int clusterIndex = start; clusterIndex < start + count;
+                         clusterIndex++)
+                    {
+                        Cluster &cluster = levelClusters[clusterIndex];
+                        Vec3f center = ToVec3f(Bounds(cluster.record.geomBounds).Centroid());
+
+                        Vec3i quantized = Vec3i((center - minP) * scale);
+                        u32 morton      = MortonCode3(quantized.x) |
+                                     (MortonCode3(quantized.y) << 1) |
+                                     (MortonCode3(quantized.z) << 2);
+
+                        Handle handle;
+                        handle.sortKey        = morton;
+                        handle.index          = clusterIndex;
+                        handles[clusterIndex] = handle;
+                    }
+                });
+
+            SortHandles(handles.data, handles.Length());
+
+            StaticArray<u32> islandID(scratch.temp.arena, levelClusters.Length());
+            BitVector visited(scratch.temp.arena, levelClusters.Length());
+            u32 numIslands = 0;
+
+            for (int clusterIndex = 0; clusterIndex < levelClusters.Length(); clusterIndex++)
+            {
+                FixedArray<u32, 128> stack;
+                u32 islandIndex = numIslands;
+                if (!visited.GetBit(clusterIndex))
+                {
+                    numIslands++;
+                    visited.SetBit(clusterIndex);
+                    stack.Push(clusterIndex);
+                }
+                while (stack.Length())
+                {
+                    u32 neighbor      = stack.Pop();
+                    ClusterData &data = clusterDatas[neighbor];
+                    for (u32 neighborIndex = 0; neighborIndex < data.numNeighbors;
+                         neighborIndex++)
+                    {
+                        u32 neighborNeighbor = data.neighbors[neighborIndex];
+                        if (!visited.GetBit(neighborNeighbor))
+                        {
+                            visited.SetBit(neighborNeighbor);
+                            stack.Push(neighborNeighbor);
+                        }
+                    }
+                }
+            }
+
+            if (numIslands > 1)
+            {
+                ParallelFor(0, numClusters, 32, 32, [&](int jobID, int start, int count) {
+                    for (int handleIndex = start; handleIndex < start + count; handleIndex++)
+                    {
+                        Handle handle            = handles[handleIndex];
+                        Cluster &cluster         = levelClusters[handle.index];
+                        u32 currentIslandID      = islandID[handle.index];
+                        ClusterData &clusterData = clusterDatas[handle.index];
+
+                        int startIndex = handleIndex + 1;
+
+                        for (int neighborIndex = 0; neighborIndex < clusterData.numNeighbors;
+                             neighborIndex++)
+                        {
+                            u32 neighbor       = clusterData.neighbors[neighborIndex];
+                            u32 neighborIsland = islandID[neighbor];
+                            // if (
+                        }
+                    }
+                });
+            }
+
             GraphPartitionResult partitionResult;
             if (numClusters <= maxGroupSize)
             {
@@ -3076,37 +3169,6 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                                 }
                             }
                         }
-
-                        // if (depth == 7 && groupIndex == 90)
-                        // {
-                        //     Print(" %u %u\n", vertexCount, indexCount);
-                        //     // for (int i = 0; i < vertexCount; i++)
-                        //     // {
-                        //     //     Vec3f v = ((Vec3f *)groupVertices)[i];
-                        //     //     Print("%f %f %f\n", v.x, v.y, v.z);
-                        //     // }
-                        //     // for (int i = 0; i < indexCount; i += 3)
-                        //     // {
-                        //     //     Print("%u %u %u \n", indices[i], indices[i + 1],
-                        //     //           indices[i + 2]);
-                        //     // }
-                        //     // Print("%u %u\n", groupIndex, numParentClusters);
-                        //     DebugBreak();
-                        // }
-
-                        // if (groupIndex + totalNumGroups == 21894)
-                        // {
-                        //     for (int i = 0; i < vertexCount; i++)
-                        //     {
-                        //         Vec3f p = ((Vec3f *)groupVertices)[i];
-                        //         Print("%f %f %f\n", p.x, p.y, p.z);
-                        //     }
-                        //     for (int i = 0; i < indexCount; i += 3)
-                        //     {
-                        //         Print("%u %u %u\n", indices[i], indices[i + 1],
-                        //               indices[i + 2]);
-                        //     }
-                        // }
 
                         f32 invScale = 1.f / posScale;
                         f32 error    = simplifier.Simplify(vertexCount, targetNumTris,
@@ -4648,6 +4710,10 @@ void Voxelize(Mesh *mesh, string filename)
         // 4. runtime acceleration structure builds
         // 5. data format, writing to disk
         // 6. offline verification of voxels
+
+        // packing to bricks
+        // writing to disk
+        // removing extra coverage
 
         // void Fit()
         // {
