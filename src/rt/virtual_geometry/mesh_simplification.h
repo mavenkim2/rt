@@ -123,7 +123,17 @@ struct MeshSimplifier
 
 void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndices,
                     string filename);
-void Voxelize(Mesh *mesh, string filename);
+
+struct Voxel
+{
+    Vec3i loc;
+    f32 coverage;
+};
+
+static void VoxelizeTriangles(SimpleHashSet<Vec3i> &voxelHashSet, ScenePrimitives *scene,
+                              f32 *vertexData, u32 *indices, u32 numAttributes);
+static StaticArray<Voxel> CheckVoxelOccupancy(Arena *arena, ScenePrimitives *scene,
+                                              SimpleHashSet<Vec3i> &voxelHashSet);
 
 } // namespace rt
 

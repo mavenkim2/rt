@@ -218,7 +218,7 @@ struct FixedArray
         Assert(size > 0);
         T result = std::move(data[size - 1]);
         size--;
-        return
+        return result;
     }
 
     __forceinline u32 Length() const { return size; }

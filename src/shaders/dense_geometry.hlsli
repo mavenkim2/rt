@@ -423,18 +423,20 @@ uint GetClusterIndexFromClusterID(uint clusterID)
 
 void GetBrickBounds(uint64_t bitMask, out uint3 minP, out uint3 maxP)
 {
-    minP.z = firstbitlow(bitMask) >> 4u;
-    maxP.z = (firstbithigh(bitMask) >> 4u) + 1u;
+    uint bottom = uint(bitMask);
+    uint top = uint(bitMask >> 32u);
+    minP.z = (bottom ? firstbitlow(bottom) : firstbitlow(top) + 32u) >> 4u;
+    maxP.z = ((bottom ? firstbithigh(bottom) : firstbithigh(top) + 32u) >> 4u) + 1u;
 
     uint bits = (uint)bitMask | uint(bitMask >> 32u);
     bits |= bits >> 16u;
-    minP.y = firstbitlow(bitMask) >> 2u;
-    maxP.y = (firstbithigh((bitMask << 16u) >> 16u) >> 2u) + 1u;
+    minP.y = firstbitlow(bits) >> 2u;
+    maxP.y = (firstbithigh((bits << 16u) >> 16u) >> 2u) + 1u;
 
     bits |= bits >> 8u;
     bits |= bits >> 4u;
-    minP.x = firstbitlow(bitMask);
-    maxP.x = (firstbithigh((bitMask << 28u) >> 28u)) + 1u;
+    minP.x = firstbitlow(bits);
+    maxP.x = (firstbithigh((bits << 28u) >> 28u)) + 1u;
 }
 
 #endif
