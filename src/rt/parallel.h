@@ -566,6 +566,27 @@ void ParallelFor(u32 start, u32 count, u32 threshold, u32 groupSize, const Func 
 }
 
 template <typename Func>
+void ParallelForLoop(u32 start, u32 count, u32 threshold, u32 groupSize, const Func &func)
+{
+    if (count > threshold)
+    {
+        u32 taskCount = (count + groupSize - 1) / groupSize;
+        taskCount     = Min(taskCount, 768u);
+        u32 end       = start + count;
+        u32 stepSize  = count / taskCount;
+        scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
+            u32 tStart = start + jobID * stepSize;
+            u32 size   = jobID == taskCount - 1 ? end - tStart : stepSize;
+            for (int index = tStart; index < tStart + size; index++)
+            {
+                func(jobID, index);
+            }
+        });
+    }
+    else func(0, start, count);
+}
+
+template <typename Func>
 void ParallelFor2D(Vec2i start, Vec2i end, Vec2i tileSize, const Func &func)
 {
     Assert(end[0] > start[0] && end[1] > start[1]);

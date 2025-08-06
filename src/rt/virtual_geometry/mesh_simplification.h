@@ -127,13 +127,24 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 struct Voxel
 {
     Vec3i loc;
+    Vec3f normal;
     f32 coverage;
 };
 
+struct CompressedVoxel
+{
+    Vec3i pos;
+
+    u64 bitMask;
+    u32 vertOffset;
+};
+
 static void VoxelizeTriangles(SimpleHashSet<Vec3i> &voxelHashSet, ScenePrimitives *scene,
-                              f32 *vertexData, u32 *indices, u32 numAttributes);
-static StaticArray<Voxel> CheckVoxelOccupancy(Arena *arena, ScenePrimitives *scene,
-                                              SimpleHashSet<Vec3i> &voxelHashSet);
+                              f32 *vertexData, u32 *indices, u32 triangleCount,
+                              u32 numAttributes, f32 lodError);
+static void CheckVoxelOccupancy(Arena *arena, ScenePrimitives *scene,
+                                SimpleHashSet<Vec3i> &voxelHashSet, StaticArray<Voxel> &voxels,
+                                StaticArray<Vec3i> &extraVoxels);
 
 } // namespace rt
 
