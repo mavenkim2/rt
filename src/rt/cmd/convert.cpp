@@ -2333,7 +2333,10 @@ int main(int argc, char **argv)
     Mesh mesh          = ConvertQuadToTriangleMesh(arena, meshes[0]);
 
     PerformanceCounter counter = OS_StartCounter();
-    Voxelize(&mesh, testFilename);
+    StaticArray<u32> materialIndices(arena, 1);
+    materialIndices.Push(0);
+    CreateClusters(&mesh, 1, materialIndices, testFilename);
+
     f32 t = OS_GetMilliseconds(counter);
     Print("%f\n", t);
 

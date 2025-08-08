@@ -137,7 +137,7 @@ static void VoxelizeTriangles(SimpleHashSet<Vec3i> &voxelHashSet, ScenePrimitive
                               u32 numAttributes, f32 lodError);
 static void CheckVoxelOccupancy(Arena *arena, ScenePrimitives *scene,
                                 SimpleHashSet<Vec3i> &voxelHashSet, StaticArray<Voxel> &voxels,
-                                StaticArray<Vec3i> &extraVoxels);
+                                StaticArray<Vec3i> &extraVoxels, f32 voxelSize);
 
 } // namespace rt
 

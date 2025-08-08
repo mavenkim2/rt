@@ -583,7 +583,13 @@ void ParallelForLoop(u32 start, u32 count, u32 threshold, u32 groupSize, const F
             }
         });
     }
-    else func(0, start, count);
+    else
+    {
+        for (u32 i = 0; i < count; i++)
+        {
+            func(0, i);
+        }
+    }
 }
 
 template <typename Func>

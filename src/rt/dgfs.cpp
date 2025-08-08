@@ -18,7 +18,8 @@
 namespace rt
 {
 
-ClusterBuilder::ClusterBuilder(Arena *arena, PrimRef *primRefs) : primRefs(primRefs)
+ClusterBuilder::ClusterBuilder(Arena *arena, PrimRef *primRefs)
+    : primRefs(primRefs), vertexCount(0)
 {
     typedef HeuristicObjectBinning<PrimRef> Heuristic;
     u32 numProcessors = OS_NumProcessors();
@@ -126,9 +127,15 @@ ClusterIndices ClusterBuilder::GetClusterIndices(Arena *arena, RecordAOSSplits &
     }
     u32 triangleRefCount = record.count - voxelRefCount;
 
-    ClusterIndices indices;
-    indices.triangleIndices = StaticArray<u32>(arena, triangleRefCount);
-    indices.brickIndices    = StaticArray<u32>(arena, voxelRefCount);
+    ClusterIndices indices = {};
+    if (triangleRefCount)
+    {
+        indices.triangleIndices = StaticArray<Vec2u>(arena, triangleRefCount);
+    }
+    if (voxelRefCount)
+    {
+        indices.brickIndices = StaticArray<u32>(arena, voxelRefCount);
+    }
 
     u32 triangleRefOffset = 0;
     u32 voxelRefOffset    = triangleRefCount;
@@ -155,8 +162,8 @@ ClusterIndices ClusterBuilder::GetClusterIndices(Arena *arena, RecordAOSSplits &
 
 void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
                                 DenseGeometryBuildData &buildData, Mesh &mesh,
-                                StaticArray<CompressedVoxel> &voxels,
-                                StaticArray<u32> &voxelGeomIDs, Bounds &sceneBounds)
+                                Bounds &sceneBounds, StaticArray<CompressedVoxel> *voxels,
+                                StaticArray<u32> *voxelGeomIDs)
 {
 #if 0
     static const int b     = 24;
@@ -176,7 +183,7 @@ void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
 
     precision = 6;
     Assert(precision > CLUSTER_MIN_PRECISION);
-    quantizeP = quantizeP(AsFloat((127 + precision) << 23));
+    quantizeP = AsFloat((127 + precision) << 23);
 
 #if 0
     f32 offsetMinX = maxClusterEdgeLength[0] - 16.f;
@@ -218,20 +225,22 @@ void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
                 {
                     Triangles(meshScratch.temp.arena, mesh, clusterIndices.triangleIndices,
                               materialIDs, tempResources);
+                    Assert(clusterIndices.triangleIndices.Length() ==
+                           tempResources.triangleStripTypes.Length() + 1);
                 }
                 if (clusterIndices.brickIndices.Length())
                 {
-                    Voxels(meshScratch.temp.arena, mesh, voxels, clusterIndices.brickIndices,
-                           materialIDs, voxelGeomIDs, tempResources);
+                    Voxels(meshScratch.temp.arena, mesh, *voxels, clusterIndices.brickIndices,
+                           materialIDs, *voxelGeomIDs, tempResources);
                 }
-                WriteData(mesh, tempResources, buildData);
+                WriteData(mesh, tempResources, *voxels, buildData);
             }
         }
     }
 }
 
 void ClusterBuilder::Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &triangleIndices,
-                               StaticArray<u32> &materialIndices,
+                               const StaticArray<u32> &materialIndices,
                                DGFTempResources &tempResources)
 {
     static const u32 LUT[] = {1, 2, 0};
@@ -262,11 +271,9 @@ void ClusterBuilder::Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &tri
 
     StaticArray<u32> vertexIndices(clusterScratch.temp.arena, clusterNumTriangles * 3,
                                    clusterNumTriangles * 3);
-    StaticArray<u32> geomIDs(clusterScratch.temp.arena, clusterNumTriangles,
-                             clusterNumTriangles);
+    StaticArray<u32> geomIDs(clusterScratch.temp.arena, clusterNumTriangles);
 
-    u32 vertexCount = 0;
-    u32 indexCount  = 0;
+    u32 indexCount = 0;
 
     auto GetIndices = [&vertexIndices](u32 ind[3], u32 triangleIndex) {
         ind[0] = vertexIndices[3 * triangleIndex + 0];
@@ -277,14 +284,14 @@ void ClusterBuilder::Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &tri
     u32 minFaceID = pos_inf;
     u32 maxFaceID = 0;
     // bool hasFaceIDs    = false;
-    bool hasAnyNormals = false;
+    hasAnyNormals = (bool)mesh.n;
 
     for (Vec2u triangleIndex : triangleIndices)
     {
         u32 primID = triangleIndex.x;
         u32 geomID = triangleIndex.y;
 
-        geomIDs[i - start] = geomID;
+        geomIDs.Push(geomID);
 
 #if 0
             u32 faceID         = mesh.faceIDs ? mesh.faceIDs[primID] : 0u;
@@ -294,7 +301,6 @@ void ClusterBuilder::Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &tri
 #endif
 
         // hasFaceIDs |= (bool(mesh.faceIDs) && bool(materialID >> 31u));
-        hasAnyNormals |= bool(mesh.n);
 
         for (int indexIndex = 0; indexIndex < 3; indexIndex++)
         {
@@ -304,15 +310,18 @@ void ClusterBuilder::Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &tri
             minP = Min(minP, p);
             maxP = Max(maxP, p);
 
+            // TODO: if the triangles in a cluster have vertices, but the voxels don't,
+            // this errors out
             if (mesh.n)
             {
-                u32 normal = mesh.n[vertexIndex]);
-                Vec2u n    = Vec2u(normal >> 16, normal & ((1 << 16) - 1));
-                minOct     = Min(minOct, n);
-                maxOct     = Max(maxOct, n);
+                Vec3f &normal = mesh.n[vertexIndex];
+                u32 octNormal = EncodeOctahedral(normal);
+                Vec2u n       = Vec2u(octNormal >> 16, octNormal & ((1 << 16) - 1));
+                minOct        = Min(minOct, n);
+                maxOct        = Max(maxOct, n);
             }
 
-            auto *hashedIndex  = vertexHashSet.Find({indices[indexIndex]});
+            auto *hashedIndex  = vertexHashSet.Find({vertexIndex});
             u32 newVertexIndex = ~0u;
 
             if (hashedIndex)
@@ -342,9 +351,8 @@ void ClusterBuilder::Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &tri
         u32 corner0;
         u32 corner1;
 
-        // static u32 Hash(u64 key, u32 geomID) { return MixBits(key ^ geomID); }
         static u32 Hash(u64 key) { return MixBits(key); }
-        u32 Hash() const { return MixBits(key ^ geomID); }
+        u32 Hash() const { return Hash(key); }
 
         bool operator==(const EdgeKeyValue &other) const { return key == other.key; }
     };
@@ -370,7 +378,7 @@ void ClusterBuilder::Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &tri
                  hashIndex     = edgeIDMap.NextInHash(hashIndex))
             {
                 EdgeKeyValue &key = edges[hashIndex];
-                if (key.key == edgeID && key.geomID == geomID && key.corner1 == ~0u)
+                if (key.key == edgeID && key.corner1 == ~0u)
                 {
                     found       = true;
                     key.corner1 = corner;
@@ -380,7 +388,7 @@ void ClusterBuilder::Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &tri
             }
             if (!found)
             {
-                EdgeKeyValue newKey = {edgeID, geomID, 1, corner, ~0u};
+                EdgeKeyValue newKey = {edgeID, 1, corner, ~0u};
                 edges.Push(newKey);
                 edgeIDMap.AddInHash(hash, edges.Length() - 1);
             }
@@ -434,13 +442,12 @@ void ClusterBuilder::Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &tri
         {
             u64 edgeID = ComputeEdgeId(indices, edgeIndex);
             u32 corner = 3 * triangleIndex + edgeIndex;
-            int hash   = EdgeKeyValue::Hash(edgeID, geomID);
+            int hash   = EdgeKeyValue::Hash(edgeID);
             for (int hashIndex = edgeIDMap.FirstInHash(hash); hashIndex != -1;
                  hashIndex     = edgeIDMap.NextInHash(hashIndex))
             {
                 EdgeKeyValue &key = edges[hashIndex];
-                if (key.key == edgeID && key.geomID == geomID &&
-                    (corner == key.corner0 || corner == key.corner1))
+                if (key.key == edgeID && (corner == key.corner0 || corner == key.corner1))
                 {
                     data[offsets[triangleIndex]] =
                         corner == key.corner0 ? key.corner1 : key.corner0;
@@ -511,7 +518,6 @@ void ClusterBuilder::Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &tri
 
     MarkUsed(minValenceTriangle);
 
-    // TODO: half edge structure instead of hash table?
     // Find the new ordering of triangles and construct the triangle strip
     for (u32 numAddedTriangles = 1; numAddedTriangles < clusterNumTriangles;
          numAddedTriangles++)
@@ -668,7 +674,8 @@ void ClusterBuilder::Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &tri
 
     for (u32 tri : triangleOrder)
     {
-        tempResources.materialIndices.Push(materialIndices[geomIDs[tri]]);
+        u32 materialIndex = materialIndices[geomIDs[tri]];
+        tempResources.materialIndices.Push(materialIndex);
     }
 
 #if 0
@@ -704,10 +711,12 @@ void ClusterBuilder::Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &tri
 }
 
 void ClusterBuilder::Voxels(Arena *arena, Mesh &mesh, StaticArray<CompressedVoxel> &voxels,
-                            StaticArray<u32> &brickIndices, StaticArray<u32> &materialIndices,
+                            StaticArray<u32> &brickIndices,
+                            const StaticArray<u32> &materialIndices,
                             StaticArray<u32> &voxelGeomIDs, DGFTempResources &tempResources)
 {
     u32 voxelTotal = 0;
+    hasAnyNormals  = true;
     for (u32 brickIndex : brickIndices)
     {
         CompressedVoxel &voxel = voxels[brickIndex];
@@ -718,19 +727,22 @@ void ClusterBuilder::Voxels(Arena *arena, Mesh &mesh, StaticArray<CompressedVoxe
         u32 numVoxels = PopCount((u32)bitMask) + PopCount(bitMask >> 32u);
 
         voxelTotal += numVoxels;
-
-        Vec3i p = Vec3i(Round(mesh.p[voxel.positionOffset] * quantizeP));
-        minP    = Min(minP, p);
-        maxP    = Max(maxP, p);
+        vertexCount += numVoxels;
 
         for (u32 voxelIndex = 0; voxelIndex < numVoxels; voxelIndex++)
         {
             u32 vertexIndex = vertexOffset + voxelIndex;
+            Vec3i p         = Vec3i(Round(mesh.p[vertexIndex] * quantizeP));
+            minP            = Min(minP, p);
+            maxP            = Max(maxP, p);
 
             if (mesh.n)
             {
-                Vec3f n       = mesh.n[vertexIndex];
-                u32 octNormal = EncodeOctahedral(n)
+                Vec3f normal  = mesh.n[vertexIndex];
+                u32 octNormal = EncodeOctahedral(normal);
+                Vec2u n       = Vec2u(octNormal >> 16, octNormal & ((1 << 16) - 1));
+                minOct        = Min(minOct, n);
+                maxOct        = Max(maxOct, n);
             }
         }
     }
@@ -746,8 +758,9 @@ void ClusterBuilder::Voxels(Arena *arena, Mesh &mesh, StaticArray<CompressedVoxe
 
         for (u32 voxelIndex = 0; voxelIndex < numVoxels; voxelIndex++)
         {
-            u32 vertexIndex = vertexOffset + voxelIndex;
-            tempResources.materialIndices.Push(materialIndices[voxelGeomIDs[vertexIndex]]);
+            u32 vertexIndex   = vertexOffset + voxelIndex;
+            u32 materialIndex = materialIndices[voxelGeomIDs[vertexIndex]];
+            tempResources.materialIndices.Push(materialIndex);
             tempResources.voxelVertexIndices.Push(vertexIndex);
         }
     }
@@ -759,12 +772,7 @@ void ClusterBuilder::WriteData(Mesh &mesh, DGFTempResources &tempResources,
 {
     ScratchArena scratch;
 
-    StaticArray<Brick> bricks;
-
     u32 currentFirstUseBit = 0;
-    BitVector usedVertices(scratch.temp.arena, vertexCount);
-
-    Assert(vertexCount <= MAX_CLUSTER_VERTICES);
 
     u32 numBitsX = minP[0] == maxP[0] ? 0 : Log2Int(Max(maxP[0] - minP[0], 1)) + 1;
     u32 numBitsY = minP[1] == maxP[1] ? 0 : Log2Int(Max(maxP[1] - minP[1], 1)) + 1;
@@ -781,8 +789,8 @@ void ClusterBuilder::WriteData(Mesh &mesh, DGFTempResources &tempResources,
 
     Assert(numOctBitsX <= 16 && numOctBitsY <= 16);
     Assert(numBitsX < 32 && numBitsY < 32 && numBitsZ < 32);
-    ErrorExit(Abs(min[0]) < (1 << 23) && Abs(min[1]) < (1 << 23) && Abs(min[2]) < (1 << 23),
-              "%i %i %i\n", min[0], min[1], min[2]);
+    ErrorExit(Abs(minP[0]) < (1 << 23) && Abs(minP[1]) < (1 << 23) && Abs(minP[2]) < (1 << 23),
+              "%i %i %i\n", minP[0], minP[1], minP[2]);
 
     u32 numBits = vertexCount * (numBitsX + numBitsY + numBitsZ);
 
@@ -791,16 +799,16 @@ void ClusterBuilder::WriteData(Mesh &mesh, DGFTempResources &tempResources,
     u32 maxReuseIndex       = 0;
 
     u32 normalBitStreamSize = (vertexCount * (numOctBitsX + numOctBitsY) + 7) >> 3;
-    u32 faceBitStreamSize   = 4 + (((numFaceBits + 3) * clusterNumTriangles + 7) >> 3);
-    u32 geoBaseAddress      = buildData.geoByteBuffer.Length();
-    u32 shadingBaseAddress  = buildData.shadingByteBuffer.Length();
+    // u32 faceBitStreamSize   = 4 + (((numFaceBits + 3) * clusterNumTriangles + 7) >> 3);
+    u32 geoBaseAddress     = buildData.geoByteBuffer.Length();
+    u32 shadingBaseAddress = buildData.shadingByteBuffer.Length();
 
     // Use the new index order to write compressed vertex buffer and reuse buffer
-    u32 maxReuseBufferSize = clusterNumTriangles * 3;
-    StaticArray<u32> reuseBuffer(clusterScratch.temp.arena, maxReuseBufferSize);
+    u32 clusterNumTriangles = tempResources.triangleStripTypes.Length() + 1;
+    u32 maxReuseBufferSize  = clusterNumTriangles * 3;
 
-    BitVector firstUse(clusterScratch.temp.arena, clusterNumTriangles * 3);
-    u32 addedVertexCount = 0;
+    StaticArray<u32> reuseBuffer(scratch.temp.arena, maxReuseBufferSize);
+    BitVector firstUse(scratch.temp.arena, clusterNumTriangles * 3);
 
     u32 bitOffset       = 0;
     u32 normalBitOffset = 0;
@@ -823,7 +831,10 @@ void ClusterBuilder::WriteData(Mesh &mesh, DGFTempResources &tempResources,
 
     StaticArray<u32> meshVertexIndices(scratch.temp.arena, MAX_CLUSTER_VERTICES);
     {
+        BitVector usedVertices(scratch.temp.arena, MAX_CLUSTER_VERTICES_BIT);
         StaticArray<u32> mapOldIndexToDGFIndex(scratch.temp.arena, vertexCount, vertexCount);
+        u32 addedVertexCount = 0;
+
         for (auto index : tempResources.newIndexOrder)
         {
             if (usedVertices.GetBit(index))
@@ -852,7 +863,7 @@ void ClusterBuilder::WriteData(Mesh &mesh, DGFTempResources &tempResources,
 
     for (u32 index : meshVertexIndices)
     {
-        Vec3i p = Vec3i(Round(mesh.p[index.x] * quantizeP));
+        Vec3i p = Vec3i(Round(mesh.p[index] * quantizeP));
         for (int axis = 0; axis < 3; axis++)
         {
             WriteBits((u32 *)vertexNode->values, bitOffset, p[axis], bitWidths[axis]);
@@ -860,7 +871,7 @@ void ClusterBuilder::WriteData(Mesh &mesh, DGFTempResources &tempResources,
 
         if (mesh.n)
         {
-            Vec3f &n    = mesh.n[index.x];
+            Vec3f &n    = mesh.n[index];
             u32 normal  = EncodeOctahedral(n);
             u32 normalX = (normal >> 16) - minOct[0];
             u32 normalY = (normal & ((1 << 16) - 1)) - minOct[1];
@@ -869,125 +880,121 @@ void ClusterBuilder::WriteData(Mesh &mesh, DGFTempResources &tempResources,
         }
     }
 
+    FixedArray<u32, 4> restartHighBitPerDword = {0, 0, 0, 0};
+    FixedArray<u32, 4> restartCountPerDword   = {1, 0, 0, 0};
+    FixedArray<i32, 4> edge1HighBitPerDword   = {-1, -1, -1, -1};
+    FixedArray<i32, 4> edge2HighBitPerDword   = {-1, -1, -1, -1};
+
+    u32 prevEdge1HighBitPerDword = 0;
+    u32 prevEdge2HighBitPerDword = 0;
+
+    StaticArray<TriangleStripType> &triangleStripTypes = tempResources.triangleStripTypes;
+
+    BitVector backtrack(scratch.temp.arena, clusterNumTriangles);
+    BitVector restart(scratch.temp.arena, clusterNumTriangles);
+    BitVector edge(scratch.temp.arena, clusterNumTriangles);
+
+    restart.SetBit(0);
+
+    for (u32 i = 1; i < clusterNumTriangles; i++)
     {
-        StaticArray<u32> &triangleStripTypes = tempResources.triangleStripTypes;
+        u32 dwordIndex = i >> 5;
+        u32 bitIndex   = i & 31u;
 
-        BitVector backtrack(scratch.temp.arena, clusterNumTriangles);
-        BitVector restart(scratch.temp.arena, clusterNumTriangles);
-        BitVector edge(scratch.temp.arena, clusterNumTriangles);
-
-        restart.SetBit(0);
-
-        for (u32 i = 1; i < clusterNumTriangles; i++)
+        TriangleStripType stripType = triangleStripTypes[i - 1];
+        if (stripType == TriangleStripType::Backtrack)
         {
-            u32 dwordIndex = i >> 5;
-            u32 bitIndex   = i & 31u;
-
-            TriangleStripType stripType = triangleStripTypes[i - 1];
-            if (stripType == TriangleStripType::Backtrack)
+            Assert(i > 1);
+            TriangleStripType prevType = triangleStripTypes[i - 2];
+            Assert(prevType == TriangleStripType::Edge1 ||
+                   prevType == TriangleStripType::Edge2);
+            backtrack.SetBit(i);
+            u32 prevDwordIndex = (i - 1) >> 5;
+            if (prevType == TriangleStripType::Edge2)
             {
-                Assert(i > 1);
-                TriangleStripType prevType = triangleStripTypes[i - 2];
-                Assert(prevType == TriangleStripType::Edge1 ||
-                       prevType == TriangleStripType::Edge2);
-                backtrack.SetBit(i);
-                u32 prevDwordIndex = (i - 1) >> 5;
-                if (prevType == TriangleStripType::Edge2)
-                {
-                    Assert(edge2HighBitPerDword[prevDwordIndex] == (int)i - 1);
-                    edge1HighBitPerDword[prevDwordIndex] = i - 1;
-                    edge2HighBitPerDword[prevDwordIndex] = prevEdge2HighBitPerDword;
-                    edge.SetBit(i);
-                }
-                else if (prevType == TriangleStripType::Edge1)
-                {
-                    Assert(edge1HighBitPerDword[prevDwordIndex] == (int)i - 1);
-                    edge2HighBitPerDword[prevDwordIndex] = i - 1;
-                    edge1HighBitPerDword[prevDwordIndex] = prevEdge1HighBitPerDword;
-                }
-            }
-            else if (stripType == TriangleStripType::Edge1)
-            {
+                Assert(edge2HighBitPerDword[prevDwordIndex] == (int)i - 1);
+                edge1HighBitPerDword[prevDwordIndex] = i - 1;
+                edge2HighBitPerDword[prevDwordIndex] = prevEdge2HighBitPerDword;
                 edge.SetBit(i);
-                prevEdge1HighBitPerDword         = edge1HighBitPerDword[dwordIndex];
-                edge1HighBitPerDword[dwordIndex] = i;
             }
-            else if (stripType == TriangleStripType::Edge2)
+            else if (prevType == TriangleStripType::Edge1)
             {
-                prevEdge2HighBitPerDword         = edge2HighBitPerDword[dwordIndex];
-                edge2HighBitPerDword[dwordIndex] = i;
-            }
-            else if (stripType == TriangleStripType::Restart)
-            {
-                restart.SetBit(i);
-                restartHighBitPerDword[dwordIndex] = i;
-                restartCountPerDword[dwordIndex]++;
+                Assert(edge1HighBitPerDword[prevDwordIndex] == (int)i - 1);
+                edge2HighBitPerDword[prevDwordIndex] = i - 1;
+                edge1HighBitPerDword[prevDwordIndex] = prevEdge1HighBitPerDword;
             }
         }
-
-        FixedArray<u32, 4> restartHighBitPerDword = {0, 0, 0, 0};
-        FixedArray<u32, 4> restartCountPerDword   = {1, 0, 0, 0};
-        FixedArray<i32, 4> edge1HighBitPerDword   = {-1, -1, -1, -1};
-        FixedArray<i32, 4> edge2HighBitPerDword   = {-1, -1, -1, -1};
-
-        u32 prevEdge1HighBitPerDword = 0;
-        u32 prevEdge2HighBitPerDword = 0;
-
-        for (u32 i = 1; i < 4; i++)
+        else if (stripType == TriangleStripType::Edge1)
         {
-            restartCountPerDword[i] += restartCountPerDword[i - 1];
-            restartHighBitPerDword[i] =
-                Max(restartHighBitPerDword[i], restartHighBitPerDword[i - 1]);
-            edge1HighBitPerDword[i] =
-                Max(edge1HighBitPerDword[i], edge1HighBitPerDword[i - 1]);
-            edge2HighBitPerDword[i] =
-                Max(edge2HighBitPerDword[i], edge2HighBitPerDword[i - 1]);
+            edge.SetBit(i);
+            prevEdge1HighBitPerDword         = edge1HighBitPerDword[dwordIndex];
+            edge1HighBitPerDword[dwordIndex] = i;
         }
-
-        // Write reuse buffer (byte aligned)
-        u32 numIndexBits = Log2Int(Max(maxReuseIndex, 1u)) + 1;
-        Assert(numIndexBits >= 1 && numIndexBits <= 8);
-        u32 ctrlBitSize = ((clusterNumTriangles + 31) >> 5u) * 12u;
-        u32 bitStreamSize =
-            ((numIndexBits * reuseBuffer.Length() + currentFirstUseBit + 7) >> 3) +
-            ctrlBitSize;
-        u32 numBitStreamBits =
-            numIndexBits * reuseBuffer.Length() + (ctrlBitSize << 3) + currentFirstUseBit;
-        auto *node = buildData.geoByteBuffer.AddNode(bitStreamSize);
-
-        // Write control bits
-        int numRemainingTriangles = clusterNumTriangles;
-        u32 dwordIndex            = 0;
-        while (numRemainingTriangles > 0)
+        else if (stripType == TriangleStripType::Edge2)
         {
-            WriteBits((u32 *)node->values, bitOffset, restart.bits[dwordIndex], 32);
-            WriteBits((u32 *)node->values, bitOffset, edge.bits[dwordIndex], 32);
-            WriteBits((u32 *)node->values, bitOffset, backtrack.bits[dwordIndex], 32);
-            dwordIndex++;
-            numRemainingTriangles -= 32;
+            prevEdge2HighBitPerDword         = edge2HighBitPerDword[dwordIndex];
+            edge2HighBitPerDword[dwordIndex] = i;
         }
-        for (u32 reuseIndex : reuseBuffer)
+        else if (stripType == TriangleStripType::Restart)
         {
-            WriteBits((u32 *)node->values, bitOffset, reuseIndex, numIndexBits);
+            restart.SetBit(i);
+            restartHighBitPerDword[dwordIndex] = i;
+            restartCountPerDword[dwordIndex]++;
         }
-        // Write first use bits
-        u32 firstBitWriteOffset  = 0;
-        u32 firstUseBitWriteSize = Min(currentFirstUseBit - firstBitWriteOffset, 32u);
-        while (firstBitWriteOffset != currentFirstUseBit)
-        {
-            WriteBits((u32 *)node->values, bitOffset, firstUse.bits[firstBitWriteOffset >> 5],
-                      firstUseBitWriteSize);
-            firstBitWriteOffset += firstUseBitWriteSize;
-            firstUseBitWriteSize = Min(currentFirstUseBit - firstBitWriteOffset, 32u);
-        }
-
-        Assert(bitOffset == numBitStreamBits);
     }
 
-    u32 brickBitOffset     = 0;
-    u32 brickOffset        = buildData.geoByteBuffer.Length();
-    u32 brickBitStreamSize = ((64 + MAX_CLUSTER_VERTICES_BIT) * bricks.Length() + 7u) >> 3u;
-    auto *brickNode        = buildData.geoByteBuffer.AddNode(brickBitStreamSize);
+    for (u32 i = 1; i < 4; i++)
+    {
+        restartCountPerDword[i] += restartCountPerDword[i - 1];
+        restartHighBitPerDword[i] =
+            Max(restartHighBitPerDword[i], restartHighBitPerDword[i - 1]);
+        edge1HighBitPerDword[i] = Max(edge1HighBitPerDword[i], edge1HighBitPerDword[i - 1]);
+        edge2HighBitPerDword[i] = Max(edge2HighBitPerDword[i], edge2HighBitPerDword[i - 1]);
+    }
+
+    // Write reuse buffer (byte aligned)
+    u32 numIndexBits = Log2Int(Max(maxReuseIndex, 1u)) + 1;
+    Assert(numIndexBits >= 1 && numIndexBits <= 8);
+    u32 ctrlBitSize = ((clusterNumTriangles + 31) >> 5u) * 12u;
+    u32 bitStreamSize =
+        ((numIndexBits * reuseBuffer.Length() + currentFirstUseBit + 7) >> 3) + ctrlBitSize;
+    u32 numBitStreamBits =
+        numIndexBits * reuseBuffer.Length() + (ctrlBitSize << 3) + currentFirstUseBit;
+    auto *node = buildData.geoByteBuffer.AddNode(bitStreamSize);
+
+    // Write control bits
+    int numRemainingTriangles = clusterNumTriangles;
+    u32 dwordIndex            = 0;
+    while (numRemainingTriangles > 0)
+    {
+        WriteBits((u32 *)node->values, bitOffset, restart.bits[dwordIndex], 32);
+        WriteBits((u32 *)node->values, bitOffset, edge.bits[dwordIndex], 32);
+        WriteBits((u32 *)node->values, bitOffset, backtrack.bits[dwordIndex], 32);
+        dwordIndex++;
+        numRemainingTriangles -= 32;
+    }
+    for (u32 reuseIndex : reuseBuffer)
+    {
+        WriteBits((u32 *)node->values, bitOffset, reuseIndex, numIndexBits);
+    }
+    // Write first use bits
+    u32 firstBitWriteOffset  = 0;
+    u32 firstUseBitWriteSize = Min(currentFirstUseBit - firstBitWriteOffset, 32u);
+    while (firstBitWriteOffset != currentFirstUseBit)
+    {
+        WriteBits((u32 *)node->values, bitOffset, firstUse.bits[firstBitWriteOffset >> 5],
+                  firstUseBitWriteSize);
+        firstBitWriteOffset += firstUseBitWriteSize;
+        firstUseBitWriteSize = Min(currentFirstUseBit - firstBitWriteOffset, 32u);
+    }
+
+    Assert(bitOffset == numBitStreamBits);
+
+    u32 brickBitOffset = 0;
+    u32 brickOffset    = buildData.geoByteBuffer.Length();
+    u32 brickBitStreamSize =
+        ((64 + MAX_CLUSTER_VERTICES_BIT) * compressedVoxels.Length() + 7u) >> 3u;
+    auto *brickNode = buildData.geoByteBuffer.AddNode(brickBitStreamSize);
     for (CompressedVoxel &brick : compressedVoxels)
     {
         WriteBits((u32 *)brickNode->values, brickBitOffset, (u32)brick.bitMask, 32);
@@ -1020,7 +1027,7 @@ void ClusterBuilder::WriteData(Mesh &mesh, DGFTempResources &tempResources,
     else
     {
         u32 commonMSBs        = 32;
-        u32 currentCommonMSBs = materialIDStart;
+        u32 currentCommonMSBs = materialIndices[0];
 
         u32 numUniqueMaterialIDs = 1;
         StaticArray<u32> uniqueMaterialIDs(scratch.temp.arena, clusterNumTriangles);
@@ -1085,7 +1092,7 @@ void ClusterBuilder::WriteData(Mesh &mesh, DGFTempResources &tempResources,
 
         Assert(materialTableOffset < (1 << 22));
         Assert(commonMSBs > 0);
-        headerOffset = 0;
+        u32 headerOffset = 0;
 
         packed.j = BitFieldPackU32(packed.j, commonMSBs - 1, headerOffset, 5);
         packed.j = BitFieldPackU32(packed.j, uniqueMaterialIDs.Length(), headerOffset, 5);
@@ -1131,7 +1138,9 @@ void ClusterBuilder::WriteData(Mesh &mesh, DGFTempResources &tempResources,
     packed.h     = BitFieldPackU32(packed.h, restartCountPerDword[0], headerOffset, 6);
     packed.h     = BitFieldPackU32(packed.h, restartCountPerDword[1], headerOffset, 7);
     packed.h     = BitFieldPackU32(packed.h, restartCountPerDword[2], headerOffset, 8);
-    packed.h     = BitFieldPackU32(packed.h, numFaceBits, headerOffset, 6);
+
+    // packed.h     = BitFieldPackU32(packed.h, numFaceBits, headerOffset, 6);
+    packed.h = BitFieldPackU32(packed.h, compressedVoxels.Length(), headerOffset, 6);
 
     headerOffset = 0;
     packed.i     = BitFieldPackU32(packed.i, minOct[0], headerOffset, 16);

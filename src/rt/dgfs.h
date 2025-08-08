@@ -74,7 +74,6 @@ struct ClusterIndices
 struct CompressedVoxel
 {
     u64 bitMask;
-    u32 positionOffset;
     u32 vertexOffset;
 };
 
@@ -87,6 +86,8 @@ struct ClusterBuilder
 
     Vec3f quantizeP;
     int precision;
+    bool hasAnyNormals;
+    u32 vertexCount;
 
     Vec3i minP;
     Vec3i maxP;
@@ -101,16 +102,16 @@ struct ClusterBuilder
 
     ClusterIndices GetClusterIndices(Arena *arena, RecordAOSSplits &record);
     void Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &triangleIndices,
-                   StaticArray<u32> &materialIndices, DGFTempResources &tempResources);
+                   const StaticArray<u32> &materialIndices, DGFTempResources &tempResources);
     void Voxels(Arena *arena, Mesh &mesh, StaticArray<CompressedVoxel> &voxels,
-                StaticArray<u32> &brickIndices, StaticArray<u32> &materialIndices,
+                StaticArray<u32> &brickIndices, const StaticArray<u32> &materialIndices,
                 StaticArray<u32> &voxelGeomIDs, DGFTempResources &tempResources);
     void WriteData(Mesh &mesh, DGFTempResources &tempResources,
                    StaticArray<CompressedVoxel> &compressedVoxels,
                    DenseGeometryBuildData &buildData);
     void CreateDGFs(const StaticArray<u32> &materialIDs, DenseGeometryBuildData &buildData,
-                    Mesh &mesh, StaticArray<CompressedVoxel> &voxels,
-                    StaticArray<u32> &voxelGeomIDs, Bounds &sceneBounds);
+                    Mesh &mesh, Bounds &sceneBounds, StaticArray<CompressedVoxel> *voxels = 0,
+                    StaticArray<u32> *voxelGeomIDs = 0);
 };
 
 void WriteBits(u32 *data, u32 &position, u32 value, u32 numBits);
