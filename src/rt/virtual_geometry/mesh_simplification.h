@@ -129,14 +129,7 @@ struct Voxel
     Vec3i loc;
     Vec3f normal;
     f32 coverage;
-};
-
-struct CompressedVoxel
-{
-    Vec3i pos;
-
-    u64 bitMask;
-    u32 vertOffset;
+    u32 geomID;
 };
 
 static void VoxelizeTriangles(SimpleHashSet<Vec3i> &voxelHashSet, ScenePrimitives *scene,

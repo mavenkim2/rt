@@ -3,6 +3,7 @@
 
 #include "containers.h"
 #include "math/simd_base.h"
+#include "math/vec3.h"
 #include "shader_interop/dense_geometry_shaderinterop.h"
 
 namespace rt
@@ -38,7 +39,6 @@ struct alignas(CACHE_LINE_SIZE) DenseGeometryBuildData
     ChunkedLinkedList<u8> geoByteBuffer;
     ChunkedLinkedList<u8> shadingByteBuffer;
     ChunkedLinkedList<PackedDenseGeometryHeader> headers;
-    u32 numBlocks;
 
     // Debug
 #if 0
@@ -55,6 +55,29 @@ struct alignas(CACHE_LINE_SIZE) DenseGeometryBuildData
     DenseGeometryBuildData();
 };
 
+struct DGFTempResources
+{
+    StaticArray<TriangleStripType> triangleStripTypes;
+
+    StaticArray<u32> newIndexOrder;
+    StaticArray<u32> voxelVertexIndices;
+
+    Array<u32> materialIndices;
+};
+
+struct ClusterIndices
+{
+    StaticArray<Vec2u> triangleIndices;
+    StaticArray<u32> brickIndices;
+};
+
+struct CompressedVoxel
+{
+    u64 bitMask;
+    u32 positionOffset;
+    u32 vertexOffset;
+};
+
 struct ClusterBuilder
 {
     Arena **arenas;
@@ -62,17 +85,32 @@ struct ClusterBuilder
     PrimRef *primRefs;
     void *h;
 
+    Vec3f quantizeP;
+    int precision;
+
+    Vec3i minP;
+    Vec3i maxP;
+
+    Vec2u minOct;
+    Vec2u maxOct;
+
     ClusterBuilder() {}
     ClusterBuilder(Arena *arena, PrimRef *primRefs);
     void BuildClusters(RecordAOSSplits &record, bool parallel,
                        u32 maxTriangles = MAX_CLUSTER_TRIANGLES);
-    void CreateDGFs(const StaticArray<u32> &materialIDs, DenseGeometryBuildData *buildData,
-                    Mesh *meshes, int numMeshes, Bounds &sceneBounds);
-    void CreateDGFs(const StaticArray<u32> &materialIDs, DenseGeometryBuildData *buildDatas,
-                    Arena *arena, Mesh *meshes, int numMeshes,
-                    const StaticArray<StaticArray<Vec3i>> &quantizedVertices,
-                    const StaticArray<StaticArray<u32>> &normals, RecordAOSSplits &cluster,
-                    int precision);
+
+    ClusterIndices GetClusterIndices(Arena *arena, RecordAOSSplits &record);
+    void Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &triangleIndices,
+                   StaticArray<u32> &materialIndices, DGFTempResources &tempResources);
+    void Voxels(Arena *arena, Mesh &mesh, StaticArray<CompressedVoxel> &voxels,
+                StaticArray<u32> &brickIndices, StaticArray<u32> &materialIndices,
+                StaticArray<u32> &voxelGeomIDs, DGFTempResources &tempResources);
+    void WriteData(Mesh &mesh, DGFTempResources &tempResources,
+                   StaticArray<CompressedVoxel> &compressedVoxels,
+                   DenseGeometryBuildData &buildData);
+    void CreateDGFs(const StaticArray<u32> &materialIDs, DenseGeometryBuildData &buildData,
+                    Mesh &mesh, StaticArray<CompressedVoxel> &voxels,
+                    StaticArray<u32> &voxelGeomIDs, Bounds &sceneBounds);
 };
 
 void WriteBits(u32 *data, u32 &position, u32 value, u32 numBits);

@@ -149,7 +149,6 @@ set (RT_SOURCE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/tables/primes.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/tables/sobolmatrices.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/sampler.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/dgfs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/graphics/ptex.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/bit_packing.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/virtual_geometry/virtual_geometry_manager.cpp
