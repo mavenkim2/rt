@@ -132,9 +132,9 @@ struct Voxel
     u32 geomID;
 };
 
-static void VoxelizeTriangles(SimpleHashSet<Vec3i> &voxelHashSet, ScenePrimitives *scene,
+static void VoxelizeTriangles(Arena *arena, SimpleHashSet<Vec3i> &voxelHashSet,
                               f32 *vertexData, u32 *indices, u32 triangleCount,
-                              u32 numAttributes, f32 lodError);
+                              u32 numAttributes, f32 voxelSize);
 static void CheckVoxelOccupancy(Arena *arena, ScenePrimitives *scene,
                                 SimpleHashSet<Vec3i> &voxelHashSet, StaticArray<Voxel> &voxels,
                                 StaticArray<Vec3i> &extraVoxels, f32 voxelSize);

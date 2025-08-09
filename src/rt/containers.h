@@ -366,6 +366,19 @@ struct Array
         return Back();
     }
 
+    bool AddUnique(T element)
+    {
+        for (int i = 0; i < size; i++)
+        {
+            if (data[i] == element)
+            {
+                return false;
+            }
+        }
+        Add(element);
+        return true;
+    }
+
     void Append(Array<T> &other)
     {
         AddOrGrow(other.size);

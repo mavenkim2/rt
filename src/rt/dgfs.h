@@ -58,9 +58,11 @@ struct alignas(CACHE_LINE_SIZE) DenseGeometryBuildData
 struct DGFTempResources
 {
     StaticArray<TriangleStripType> triangleStripTypes;
-
+    StaticArray<u32> clusterVertexIndexToMeshVertexIndex;
     StaticArray<u32> newIndexOrder;
+
     StaticArray<u32> voxelVertexIndices;
+    StaticArray<u32> voxelClusterVertexIndices;
 
     Array<u32> materialIndices;
 };
@@ -107,8 +109,8 @@ struct ClusterBuilder
                 StaticArray<u32> &brickIndices, const StaticArray<u32> &materialIndices,
                 StaticArray<u32> &voxelGeomIDs, DGFTempResources &tempResources);
     void WriteData(Mesh &mesh, DGFTempResources &tempResources,
-                   StaticArray<CompressedVoxel> &compressedVoxels,
-                   DenseGeometryBuildData &buildData);
+                   StaticArray<CompressedVoxel> *compressedVoxels,
+                   ClusterIndices &clusterIndices, DenseGeometryBuildData &buildData);
     void CreateDGFs(const StaticArray<u32> &materialIDs, DenseGeometryBuildData &buildData,
                     Mesh &mesh, Bounds &sceneBounds, StaticArray<CompressedVoxel> *voxels = 0,
                     StaticArray<u32> *voxelGeomIDs = 0);

@@ -18,8 +18,7 @@
 namespace rt
 {
 
-ClusterBuilder::ClusterBuilder(Arena *arena, PrimRef *primRefs)
-    : primRefs(primRefs), vertexCount(0)
+ClusterBuilder::ClusterBuilder(Arena *arena, PrimRef *primRefs) : primRefs(primRefs)
 {
     typedef HeuristicObjectBinning<PrimRef> Heuristic;
     u32 numProcessors = OS_NumProcessors();
@@ -120,7 +119,7 @@ void ClusterBuilder::BuildClusters(RecordAOSSplits &record, bool parallel, u32 m
 ClusterIndices ClusterBuilder::GetClusterIndices(Arena *arena, RecordAOSSplits &record)
 {
     u32 voxelRefCount = 0;
-    for (int index = record.start; index < record.count; index++)
+    for (int index = record.start; index < record.start + record.count; index++)
     {
         PrimRef &ref = primRefs[index];
         voxelRefCount += ref.primID >= 0x80000000u;
@@ -140,7 +139,7 @@ ClusterIndices ClusterBuilder::GetClusterIndices(Arena *arena, RecordAOSSplits &
     u32 triangleRefOffset = 0;
     u32 voxelRefOffset    = triangleRefCount;
 
-    for (int index = record.start; index < record.count; index++)
+    for (int index = record.start; index < record.start + record.count; index++)
     {
         PrimRef &ref = primRefs[index];
         bool isVoxel = ref.primID >= 0x80000000u;
@@ -214,6 +213,13 @@ void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
             {
                 RecordAOSSplits &cluster = node->values[clusterIndex];
 
+                hasAnyNormals = false;
+                vertexCount   = 0;
+                minP          = pos_inf;
+                maxP          = neg_inf;
+                minOct        = Vec2u(65536);
+                maxOct        = 0;
+
                 ClusterIndices clusterIndices =
                     GetClusterIndices(meshScratch.temp.arena, cluster);
 
@@ -233,7 +239,7 @@ void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
                     Voxels(meshScratch.temp.arena, mesh, *voxels, clusterIndices.brickIndices,
                            materialIDs, *voxelGeomIDs, tempResources);
                 }
-                WriteData(mesh, tempResources, *voxels, buildData);
+                WriteData(mesh, tempResources, voxels, clusterIndices, buildData);
             }
         }
     }
@@ -272,6 +278,10 @@ void ClusterBuilder::Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &tri
     StaticArray<u32> vertexIndices(clusterScratch.temp.arena, clusterNumTriangles * 3,
                                    clusterNumTriangles * 3);
     StaticArray<u32> geomIDs(clusterScratch.temp.arena, clusterNumTriangles);
+    tempResources.clusterVertexIndexToMeshVertexIndex =
+        StaticArray<u32>(arena, MAX_CLUSTER_VERTICES);
+    auto &clusterVertexIndexToMeshVertexIndex =
+        tempResources.clusterVertexIndexToMeshVertexIndex;
 
     u32 indexCount = 0;
 
@@ -306,12 +316,11 @@ void ClusterBuilder::Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &tri
         {
             u32 vertexIndex = mesh.indices[3 * primID + indexIndex];
             Vec3i p(Round(mesh.p[vertexIndex] * quantizeP));
+            Assert(p.x != INT_MIN && p.y != INT_MIN && p.z != INT_MIN);
 
             minP = Min(minP, p);
             maxP = Max(maxP, p);
 
-            // TODO: if the triangles in a cluster have vertices, but the voxels don't,
-            // this errors out
             if (mesh.n)
             {
                 Vec3f &normal = mesh.n[vertexIndex];
@@ -333,6 +342,7 @@ void ClusterBuilder::Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &tri
             {
                 vertexHashSet.Add(clusterScratch.temp.arena, {vertexIndex, vertexCount});
                 vertexIndices[indexCount++] = vertexCount;
+                clusterVertexIndexToMeshVertexIndex.Push(vertexIndex);
 
                 vertexCount++;
             }
@@ -716,7 +726,6 @@ void ClusterBuilder::Voxels(Arena *arena, Mesh &mesh, StaticArray<CompressedVoxe
                             StaticArray<u32> &voxelGeomIDs, DGFTempResources &tempResources)
 {
     u32 voxelTotal = 0;
-    hasAnyNormals  = true;
     for (u32 brickIndex : brickIndices)
     {
         CompressedVoxel &voxel = voxels[brickIndex];
@@ -727,14 +736,14 @@ void ClusterBuilder::Voxels(Arena *arena, Mesh &mesh, StaticArray<CompressedVoxe
         u32 numVoxels = PopCount((u32)bitMask) + PopCount(bitMask >> 32u);
 
         voxelTotal += numVoxels;
-        vertexCount += numVoxels;
 
         for (u32 voxelIndex = 0; voxelIndex < numVoxels; voxelIndex++)
         {
             u32 vertexIndex = vertexOffset + voxelIndex;
             Vec3i p         = Vec3i(Round(mesh.p[vertexIndex] * quantizeP));
-            minP            = Min(minP, p);
-            maxP            = Max(maxP, p);
+            Assert(p.x != INT_MIN && p.y != INT_MIN && p.z != INT_MIN);
+            minP = Min(minP, p);
+            maxP = Max(maxP, p);
 
             if (mesh.n)
             {
@@ -747,7 +756,9 @@ void ClusterBuilder::Voxels(Arena *arena, Mesh &mesh, StaticArray<CompressedVoxe
         }
     }
 
-    tempResources.voxelVertexIndices = StaticArray<u32>(arena, voxelTotal);
+    tempResources.voxelVertexIndices        = StaticArray<u32>(arena, voxelTotal);
+    tempResources.voxelClusterVertexIndices = StaticArray<u32>(arena, voxels.Length());
+    voxelTotal                              = 0;
     for (u32 brickIndex : brickIndices)
     {
         CompressedVoxel &voxel = voxels[brickIndex];
@@ -756,18 +767,22 @@ void ClusterBuilder::Voxels(Arena *arena, Mesh &mesh, StaticArray<CompressedVoxe
         u32 numVoxels    = PopCount((u32)bitMask) + PopCount(bitMask >> 32u);
         u32 vertexOffset = voxel.vertexOffset;
 
+        tempResources.voxelClusterVertexIndices.Push(vertexCount);
         for (u32 voxelIndex = 0; voxelIndex < numVoxels; voxelIndex++)
         {
             u32 vertexIndex   = vertexOffset + voxelIndex;
-            u32 materialIndex = materialIndices[voxelGeomIDs[vertexIndex]];
+            u32 materialIndex = materialIndices[voxelGeomIDs[voxelTotal + voxelIndex]];
             tempResources.materialIndices.Push(materialIndex);
             tempResources.voxelVertexIndices.Push(vertexIndex);
         }
+        vertexCount += numVoxels;
+        voxelTotal += numVoxels;
     }
 }
 
 void ClusterBuilder::WriteData(Mesh &mesh, DGFTempResources &tempResources,
-                               StaticArray<CompressedVoxel> &compressedVoxels,
+                               StaticArray<CompressedVoxel> *compressedVoxels,
+                               ClusterIndices &clusterIndices,
                                DenseGeometryBuildData &buildData)
 {
     ScratchArena scratch;
@@ -814,9 +829,7 @@ void ClusterBuilder::WriteData(Mesh &mesh, DGFTempResources &tempResources,
     u32 normalBitOffset = 0;
     u32 faceBitOffset   = 0;
 
-    Assert(bitOffset == numBits);
     Assert(normalBitOffset == vertexCount * (numOctBitsX + numOctBitsY));
-    bitOffset = 0;
 
     u32 totalSize = 0;
     ChunkedLinkedList<u8>::ChunkNode *vertexNode =
@@ -831,7 +844,7 @@ void ClusterBuilder::WriteData(Mesh &mesh, DGFTempResources &tempResources,
 
     StaticArray<u32> meshVertexIndices(scratch.temp.arena, MAX_CLUSTER_VERTICES);
     {
-        BitVector usedVertices(scratch.temp.arena, MAX_CLUSTER_VERTICES_BIT);
+        BitVector usedVertices(scratch.temp.arena, MAX_CLUSTER_VERTICES);
         StaticArray<u32> mapOldIndexToDGFIndex(scratch.temp.arena, vertexCount, vertexCount);
         u32 addedVertexCount = 0;
 
@@ -851,7 +864,8 @@ void ClusterBuilder::WriteData(Mesh &mesh, DGFTempResources &tempResources,
                 mapOldIndexToDGFIndex[index] = addedVertexCount;
                 addedVertexCount++;
 
-                meshVertexIndices.Push(index);
+                meshVertexIndices.Push(
+                    tempResources.clusterVertexIndexToMeshVertexIndex[index]);
             }
         }
 
@@ -863,7 +877,7 @@ void ClusterBuilder::WriteData(Mesh &mesh, DGFTempResources &tempResources,
 
     for (u32 index : meshVertexIndices)
     {
-        Vec3i p = Vec3i(Round(mesh.p[index] * quantizeP));
+        Vec3i p = Vec3i(Round(mesh.p[index] * quantizeP)) - minP;
         for (int axis = 0; axis < 3; axis++)
         {
             WriteBits((u32 *)vertexNode->values, bitOffset, p[axis], bitWidths[axis]);
@@ -879,6 +893,8 @@ void ClusterBuilder::WriteData(Mesh &mesh, DGFTempResources &tempResources,
             WriteBits((u32 *)normalNode->values, normalBitOffset, normalY, numOctBitsY);
         }
     }
+
+    Assert(bitOffset == numBits);
 
     FixedArray<u32, 4> restartHighBitPerDword = {0, 0, 0, 0};
     FixedArray<u32, 4> restartCountPerDword   = {1, 0, 0, 0};
@@ -965,42 +981,52 @@ void ClusterBuilder::WriteData(Mesh &mesh, DGFTempResources &tempResources,
     // Write control bits
     int numRemainingTriangles = clusterNumTriangles;
     u32 dwordIndex            = 0;
+    u32 indexBitOffset        = 0;
     while (numRemainingTriangles > 0)
     {
-        WriteBits((u32 *)node->values, bitOffset, restart.bits[dwordIndex], 32);
-        WriteBits((u32 *)node->values, bitOffset, edge.bits[dwordIndex], 32);
-        WriteBits((u32 *)node->values, bitOffset, backtrack.bits[dwordIndex], 32);
+        WriteBits((u32 *)node->values, indexBitOffset, restart.bits[dwordIndex], 32);
+        WriteBits((u32 *)node->values, indexBitOffset, edge.bits[dwordIndex], 32);
+        WriteBits((u32 *)node->values, indexBitOffset, backtrack.bits[dwordIndex], 32);
         dwordIndex++;
         numRemainingTriangles -= 32;
     }
     for (u32 reuseIndex : reuseBuffer)
     {
-        WriteBits((u32 *)node->values, bitOffset, reuseIndex, numIndexBits);
+        WriteBits((u32 *)node->values, indexBitOffset, reuseIndex, numIndexBits);
     }
     // Write first use bits
     u32 firstBitWriteOffset  = 0;
     u32 firstUseBitWriteSize = Min(currentFirstUseBit - firstBitWriteOffset, 32u);
     while (firstBitWriteOffset != currentFirstUseBit)
     {
-        WriteBits((u32 *)node->values, bitOffset, firstUse.bits[firstBitWriteOffset >> 5],
+        WriteBits((u32 *)node->values, indexBitOffset, firstUse.bits[firstBitWriteOffset >> 5],
                   firstUseBitWriteSize);
         firstBitWriteOffset += firstUseBitWriteSize;
         firstUseBitWriteSize = Min(currentFirstUseBit - firstBitWriteOffset, 32u);
     }
 
-    Assert(bitOffset == numBitStreamBits);
+    Assert(indexBitOffset == numBitStreamBits);
 
-    u32 brickBitOffset = 0;
-    u32 brickOffset    = buildData.geoByteBuffer.Length();
-    u32 brickBitStreamSize =
-        ((64 + MAX_CLUSTER_VERTICES_BIT) * compressedVoxels.Length() + 7u) >> 3u;
-    auto *brickNode = buildData.geoByteBuffer.AddNode(brickBitStreamSize);
-    for (CompressedVoxel &brick : compressedVoxels)
+    u32 brickBitOffset      = 0;
+    u32 brickOffset         = buildData.geoByteBuffer.Length();
+    u32 numCompressedVoxels = clusterIndices.brickIndices.Length();
+
+    if (numCompressedVoxels)
     {
-        WriteBits((u32 *)brickNode->values, brickBitOffset, (u32)brick.bitMask, 32);
-        WriteBits((u32 *)brickNode->values, brickBitOffset, brick.bitMask >> 32u, 32);
-        WriteBits((u32 *)brickNode->values, brickBitOffset, brick.vertexOffset,
-                  MAX_CLUSTER_VERTICES_BIT);
+        Assert(tempResources.voxelClusterVertexIndices.Length() == numCompressedVoxels);
+        u32 brickBitStreamSize =
+            ((64 + MAX_CLUSTER_VERTICES_BIT) * numCompressedVoxels + 7u) >> 3u;
+        auto *brickNode = buildData.geoByteBuffer.AddNode(brickBitStreamSize);
+        for (u32 brickIndexIndex = 0; brickIndexIndex < numCompressedVoxels; brickIndexIndex++)
+        {
+            CompressedVoxel &brick =
+                (*compressedVoxels)[clusterIndices.brickIndices[brickIndexIndex]];
+            WriteBits((u32 *)brickNode->values, brickBitOffset, (u32)brick.bitMask, 32);
+            WriteBits((u32 *)brickNode->values, brickBitOffset, brick.bitMask >> 32u, 32);
+            WriteBits((u32 *)brickNode->values, brickBitOffset,
+                      tempResources.voxelClusterVertexIndices[brickIndexIndex],
+                      MAX_CLUSTER_VERTICES_BIT);
+        }
     }
 
     PackedDenseGeometryHeader packed = {};
@@ -1140,7 +1166,7 @@ void ClusterBuilder::WriteData(Mesh &mesh, DGFTempResources &tempResources,
     packed.h     = BitFieldPackU32(packed.h, restartCountPerDword[2], headerOffset, 8);
 
     // packed.h     = BitFieldPackU32(packed.h, numFaceBits, headerOffset, 6);
-    packed.h = BitFieldPackU32(packed.h, compressedVoxels.Length(), headerOffset, 6);
+    packed.h = BitFieldPackU32(packed.h, numCompressedVoxels, headerOffset, 6);
 
     headerOffset = 0;
     packed.i     = BitFieldPackU32(packed.i, minOct[0], headerOffset, 16);

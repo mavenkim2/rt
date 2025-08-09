@@ -1671,7 +1671,7 @@ struct HeuristicSpatialSplits
         u32 mid;
         u32 newEnd;
 
-        if (split.bestSAH == f32(pos_inf))
+        if (IsInf(split.bestSAH))
         {
             mid    = SplitFallback(record, split, primRefs, outLeft, outRight);
             newEnd = record.End();
