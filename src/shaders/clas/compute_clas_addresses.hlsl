@@ -3,10 +3,13 @@
 #include "../dense_geometry.hlsli"
 
 StructuredBuffer<uint> pageIndices : register(t0);
-RWStructuredBuffer<uint64_t> clasAddresses : register(u1);
-StructuredBuffer<uint> clasSizes : register(t2);
-RWStructuredBuffer<uint> globals : register(u3);
-RWStructuredBuffer<CLASPageInfo> clasPageInfos : register(u4);
+RWStructuredBuffer<uint64_t> clasBuildAddresses : register(u1);
+StructuredBuffer<uint> clasBuildSizes : register(t2);
+RWStructuredBuffer<uint64_t> clasTemplateAddresses : register(u3);
+StructuredBuffer<uint> clasTemplateSizes : register(t4);
+RWStructuredBuffer<uint> globals : register(u5);
+RWStructuredBuffer<CLASPageInfo> clasPageInfos : register(u6);
+StructuredBuffer<DecodeClusterData> decodeClusterDatas : register(t7);
 
 groupshared uint pageClusterAccelSize;
 groupshared uint pageClusterAccelOffset;
@@ -29,9 +32,23 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
 
     if (groupIndex >= numClusters) return;
 
-    uint descriptorIndex = clasPageInfos[pageIndex].addressStartIndex + groupIndex;
+    uint decodeDataIndex = clasPageInfos[pageIndex].decodeStartIndex + groupIndex;
+    DecodeClusterData decodeClusterData = decodeClusterDatas[decodeDataIndex];
+
+    uint addressIndex = decodeClusterData.addressIndex;
+    uint clasSize = 0;
+
+    if (addressIndex >> 31u)
+    {
+        uint index = addressIndex & 0x7fffffffu;
+        clasSize = clasTemplateSizes[index];
+    }
+    else 
+    {
+        clasSize = clasBuildSizes[addressIndex];
+    }
+
     uint clasOldPageDataByteOffset = globals[GLOBALS_OLD_PAGE_DATA_BYTES];
-    uint clasSize = clasSizes[descriptorIndex];
 
     // TODO: perform prefix sum to order CLAS within a page
     uint clusterInPageOffset;
@@ -46,9 +63,16 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
     GroupMemoryBarrierWithGroupSync();
 
     uint64_t clusterBaseAddress = ((uint64_t)pc.addressHighBits << 32u) | (uint64_t)pc.addressLowBits;
-
     uint64_t clasAddress = clusterBaseAddress + clasOldPageDataByteOffset + pageClusterAccelOffset + clusterInPageOffset;
-    clasAddresses[descriptorIndex] = clasAddress;
+
+    if (addressIndex >> 31u)
+    {
+        clasTemplateAddresses[addressIndex] = clasAddress;
+    }
+    else 
+    {
+        clasBuildAddresses[addressIndex] = clasAddress;
+    }
 
     if (groupIndex == 0)
     {

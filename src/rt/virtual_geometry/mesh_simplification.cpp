@@ -2099,18 +2099,8 @@ void RecursivePartitionGraph(ArrayView<int> clusterIndices, ArrayView<idx_t> clu
             numAdjacency);
     };
 
-    // TODO: for whatever reason multithreading METIS causes inscrutable errors. fix this if
-    // speedup needed
-    //
-    // if (numClusters > 256)
-    // {
-    //     scheduler.ScheduleAndWait(2, 1, Recurse);
-    // }
-    // else
-    // {
     Recurse(0);
     Recurse(1);
-    // }
 }
 
 struct GraphPartitionResult
@@ -2407,6 +2397,8 @@ static ClusterBuilder GenerateValidClusters(Arena *arena, PrimRef *newPrimRefs,
             }
         };
         clusterBuilder = ClusterBuilder(arena, newPrimRefs);
+
+        // TODO: use graph partitioning with triangles edges to cluster instead
         clusterBuilder.BuildClusters(r, false, maxNumPrimitives);
 
         bool valid = true;
@@ -4425,7 +4417,6 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                 header.z                         = currentShadOffset;
                 header.a                         = currentGeoOffset;
 
-                // TODO: frustum culling bounds
                 MemoryCopy(ptr + currentPageOffset, &cluster.lodBounds, sizeof(Vec4f));
 
                 for (u32 i = 1; i < 4; i++)
@@ -5452,7 +5443,6 @@ static void CheckVoxelOccupancy(Arena *arena, ScenePrimitives *scene,
             neighborVoxel.coverage = newCoverage;
         }
 
-        // TODO: add to extra voxel list
         numVoxels--;
     }
 #endif

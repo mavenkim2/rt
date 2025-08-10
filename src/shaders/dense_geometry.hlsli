@@ -50,7 +50,18 @@ struct DenseGeometry
 
     Brick DecodeBrick(uint brickIndex) 
     {
+        uint2 offsets = GetAlignedAddressAndBitOffset(brickOffset, brickIndex * (64 + MAX_CLUSTER_VERTICES_BIT));
+        uint3 data = clusterPageData.Load3(offsets.x);
+
+        uint3 packed = uint3(BitAlignU32(data.y, data.x, offsets.y),
+                             BitAlignU32(data.z, data.y, offsets.y), 
+                             data.z >> offsets.y);
+
         Brick brick;
+        brick.bitMask = packed.x;
+        brick.bitMask |= (packed.y << 32u);
+        brick.vertexOffset = BitFieldExtractU32(packed.z, MAX_CLUSTER_VERTICES_BIT, 0);
+
         return brick;
     }
 
@@ -421,22 +432,19 @@ uint GetClusterIndexFromClusterID(uint clusterID)
     return clusterID & (MAX_CLUSTERS_PER_PAGE - 1);
 }
 
-void GetBrickBounds(uint64_t bitMask, out uint3 minP, out uint3 maxP)
+void GetBrickMax(uint64_t bitMask, out uint3 maxP)
 {
     uint bottom = uint(bitMask);
     uint top = uint(bitMask >> 32u);
-    minP.z = (bottom ? firstbitlow(bottom) : firstbitlow(top) + 32u) >> 4u;
-    maxP.z = ((bottom ? firstbithigh(bottom) : firstbithigh(top) + 32u) >> 4u) + 1u;
+    maxP.z = ((top ? firstbithigh(top) + 32u : firstbithigh(bottom)) >> 4u) + 1u;
 
     uint bits = (uint)bitMask | uint(bitMask >> 32u);
-    bits |= bits >> 16u;
-    minP.y = firstbitlow(bits) >> 2u;
-    maxP.y = (firstbithigh((bits << 16u) >> 16u) >> 2u) + 1u;
+    bits |= bits << 16u;
+    maxP.y = (firstbithigh(bits >> 16u) >> 2u) + 1u;
 
-    bits |= bits >> 8u;
-    bits |= bits >> 4u;
-    minP.x = firstbitlow(bits);
-    maxP.x = (firstbithigh((bits << 28u) >> 28u)) + 1u;
+    bits |= bits << 8u;
+    bits |= bits << 4u;
+    maxP.x = firstbithigh(bits >> 28u) + 1u;
 }
 
 #endif

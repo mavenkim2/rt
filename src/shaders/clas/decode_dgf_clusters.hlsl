@@ -32,21 +32,26 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
         for (uint brickIndex = groupIndex; brickIndex < header.numBricks; brickIndex += THREAD_GROUP_SIZE)
         {
             Brick brick = header.DecodeBrick(brickIndex);
+            float3 position = header.DecodePosition(brick.vertexOffset);
+
             // Get the brick bounds
-            uint3 minP, maxP;
-            GetBrickBounds(brick.bitMask, minP, maxP);
+            uint3 maxP;
+            GetBrickMax(brick.bitMask, maxP);
             
-            float3 aabbMin = (brick.minVoxel + minP + 0.5f) * voxelSize;
-            float3 aabbMax = (brick.minVoxel + maxP + 0.5f) * voxelSize;
+            float3 aabbMin = position;
+            float3 aabbMax = position + float3(maxP) * voxelSize;
 
-            for (uint i = 0; i < 8; i++)
+            for (int z = 0; z < 2; z++)
             {
-                uint x = i & 1u;
-                uint y = (i >> 1u) & 1u;
-                uint z = i >> 2u;
-
-                float3 position = float3(x ? aabbMax.x : aabbMin.x, y ? aabbMax.y : aabbMin.y, z ? aabbMax.z : aabbMin.z);
-                decodeVertexBuffer[vertexBufferOffset + brickIndex * 8u + i] = position;
+                for (int y = 0; y < 2; y++)
+                {
+                    for (int x = 0; x < 2; x++)
+                    {
+                        float3 position = float3(x ? aabbMax.x : aabbMin.x, y ? aabbMax.y : aabbMin.y, z ? aabbMax.z : aabbMin.z);
+                        uint i = 4 * z + 2 * y + x;
+                        decodeVertexBuffer[vertexBufferOffset + brickIndex * 8u + i] = position;
+                    }
+                }
             }
         }
     }

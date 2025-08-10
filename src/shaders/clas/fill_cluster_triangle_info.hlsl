@@ -9,6 +9,9 @@ RWStructuredBuffer<DecodeClusterData> decodeClusterDatas : register(u2);
 RWStructuredBuffer<uint> globals : register(u3);
 RWStructuredBuffer<CLASPageInfo> clasPageInfos : register(u4);
 
+StructuredBuffer<uint64_t> clasTemplateAddresses : register(t5);
+RWStructuredBuffer<INSTANTIATE_CLUSTER_TEMPLATE_INFO> instantiateClusterTriangleInfos : register(u6);
+
 [[vk::push_constant]] FillClusterTriangleInfoPushConstant pc;
 
 groupshared uint clusterStartIndex;
@@ -31,6 +34,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
         InterlockedAdd(globals[GLOBALS_CLAS_COUNT_INDEX], numClusters, clusterStartIndex);
         CLASPageInfo pageInfo;
         pageInfo.addressStartIndex = pc.clusterOffset + clusterStartIndex;
+        pageInfo.decodeStartIndex = clusterStartIndex;
         clasPageInfos[pageIndex] = pageInfo;
     }
     GroupMemoryBarrierWithGroupSync();
@@ -47,37 +51,61 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
     DenseGeometry header = GetDenseGeometryHeader(basePageAddress, numClusters, clusterID);
     header.baseAddress = groupIndex;
 
-    uint vertexBufferOffset, indexBufferOffset;
-    InterlockedAdd(globals[GLOBALS_VERTEX_BUFFER_OFFSET_INDEX], header.numVertices, vertexBufferOffset);
-    InterlockedAdd(globals[GLOBALS_INDEX_BUFFER_OFFSET_INDEX], header.numTriangles * 3, indexBufferOffset);
+    uint vertexBufferOffset = 0;
+    uint indexBufferOffset = 0;
+    uint addressIndex = 0;
 
-    BUILD_CLUSTERS_TRIANGLE_INFO desc = (BUILD_CLUSTERS_TRIANGLE_INFO)0;
-    desc.clusterId = pageIndex * MAX_CLUSTERS_PER_PAGE + clusterID;
-    desc.clusterFlags = 0;
-    desc.triangleCount = header.numTriangles;
-    desc.vertexCount = header.numVertices;
-    desc.positionTruncateBitCount = 0;
-    desc.indexFormat = 1; // VK_CLUSTER_ACCELERATION_STRUCTURE_INDEX_FORMAT_8BIT_NV
-    desc.opacityMicromapIndexFormat = 0;
-    desc.baseGeometryIndexAndFlags = 0;
-    desc.indexBufferStride = 0; // tightly packed
-    desc.vertexBufferStride = 0;
-    desc.geometryIndexAndFlagsBufferStride = 0;
-    desc.opacityMicromapIndexBufferStride = 0;
-    desc.indexBuffer = indexBufferBaseAddress + indexBufferOffset * 1;
-    desc.vertexBuffer = vertexBufferBaseAddress + vertexBufferOffset * 12;
-    desc.geometryIndexAndFlagsBuffer = 0;
-    desc.opacityMicromapArray = 0;
-    desc.opacityMicromapIndexBuffer = 0;
+    if (header.numBricks)
+    {
+        uint templateDescriptorIndex;
+        InterlockedAdd(globals[GLOBALS_CLAS_TEMPLATE_COUNT], 1, templateDescriptorIndex);
+        InterlockedAdd(globals[GLOBALS_VERTEX_BUFFER_OFFSET_INDEX], 8 * header.numBricks, vertexBufferOffset);
 
-    buildClusterTriangleInfos[descriptorIndex] = desc;
+        INSTANTIATE_CLUSTER_TEMPLATE_INFO desc = (INSTANTIATE_CLUSTER_TEMPLATE_INFO)0;
+        desc.clusterIdOffset = pageIndex * MAX_CLUSTERS_PER_PAGE + clusterID;
+        desc.clusterTemplateAddress = clasTemplateAddresses[header.numBricks - 1];
+        desc.vertexBuffer.startAddress = vertexBufferBaseAddress + vertexBufferOffset * 12;
+        desc.vertexBuffer.strideInBytes = 12;
+
+        instantiateClusterTriangleInfos[templateDescriptorIndex] = desc; 
+        addressIndex = (1u << 31u) | templateDescriptorIndex;
+    }
+    else 
+    {
+        uint buildDescriptorIndex;
+        InterlockedAdd(globals[GLOBALS_CLAS_BUILD_COUNT], 1, buildDescriptorIndex);
+        InterlockedAdd(globals[GLOBALS_VERTEX_BUFFER_OFFSET_INDEX], header.numVertices, vertexBufferOffset);
+        InterlockedAdd(globals[GLOBALS_INDEX_BUFFER_OFFSET_INDEX], header.numTriangles * 3, indexBufferOffset);
+
+        BUILD_CLUSTERS_TRIANGLE_INFO desc = (BUILD_CLUSTERS_TRIANGLE_INFO)0;
+        desc.clusterId = pageIndex * MAX_CLUSTERS_PER_PAGE + clusterID;
+        desc.clusterFlags = 0;
+        desc.triangleCount = header.numTriangles;
+        desc.vertexCount = header.numVertices;
+        desc.positionTruncateBitCount = 0;
+        desc.indexFormat = 1; // VK_CLUSTER_ACCELERATION_STRUCTURE_INDEX_FORMAT_8BIT_NV
+        desc.opacityMicromapIndexFormat = 0;
+        desc.baseGeometryIndexAndFlags = 0;
+        desc.indexBufferStride = 0; // tightly packed
+        desc.vertexBufferStride = 0;
+        desc.geometryIndexAndFlagsBufferStride = 0;
+        desc.opacityMicromapIndexBufferStride = 0;
+        desc.indexBuffer = indexBufferBaseAddress + indexBufferOffset * 1;
+        desc.vertexBuffer = vertexBufferBaseAddress + vertexBufferOffset * 12;
+        desc.geometryIndexAndFlagsBuffer = 0;
+        desc.opacityMicromapArray = 0;
+        desc.opacityMicromapIndexBuffer = 0;
+
+        buildClusterTriangleInfos[buildDescriptorIndex] = desc;
+        addressIndex = buildDescriptorIndex;
+    }
 
     DecodeClusterData clusterData;
     clusterData.pageIndex = pageIndex;
     clusterData.clusterIndex = clusterID;
     clusterData.indexBufferOffset = indexBufferOffset;
     clusterData.vertexBufferOffset = vertexBufferOffset;
+    clusterData.addressIndex = addressIndex;
 
     decodeClusterDatas[descriptorIndex] = clusterData;
-
 }

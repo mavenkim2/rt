@@ -3089,7 +3089,7 @@ void CommandBuffer::ComputeCLASTemplateSizes(GPUBuffer *srcInfosArray,
                                              GPUBuffer *scratchBuffer, GPUBuffer *dstSizes,
                                              GPUBuffer *srcInfosCount, u32 srcInfosOffset,
                                              u32 maxNumTriangles, u32 maxNumVertices,
-                                             u32 maxNumClusters)
+                                             u32 maxNumClusters, u32 dstAddressesOffset)
 {
     CLASOpInput opInput;
     opInput.triangleClusters.maxNumTriangles = maxNumTriangles;
@@ -3099,7 +3099,7 @@ void CommandBuffer::ComputeCLASTemplateSizes(GPUBuffer *srcInfosArray,
 
     CLASIndirect(opInput, CLASOpMode::ComputeSizes,
                  CLASOpType::CLAS | CLASOpType::BuildTemplate, 0, scratchBuffer, 0, dstSizes,
-                 srcInfosArray, srcInfosCount, srcInfosOffset);
+                 srcInfosArray, srcInfosCount, srcInfosOffset, dstAddressesOffset);
 }
 
 void CommandBuffer::BuildCLAS(CLASOpMode opMode, GPUBuffer *dstImplicitData,
@@ -3158,23 +3158,42 @@ void CommandBuffer::MoveCLAS(CLASOpMode opMode, GPUBuffer *dstImplicitData,
                  srcInfosOffset, dstClasOffset);
 }
 
-// void CommandBuffer::BuildCLASTemplate(CLASOpMode opMode, GPUBuffer *dstImplicitData,
-//                                       GPUBuffer *scratchbuffer, GPUBuffer *dstAddresses,
-//                                       GPUBuffer *dstSizes, GPUBuffer *srcInfosArray,
-//                                       GPUBuffer *srcInfosCount, u32 srcInfosOffset,
-//                                       u32 maxNumTriangles, u32 maxNumVertices)
-// {
-//
-//     CLASOpInput opInput;
-//     opInput.triangleClusters.maxNumTriangles = maxNumTriangles;
-//     opInput.triangleClusters.maxNumVertices  = maxNumVertices;
-//
-//     opInput.maxAccelerationStructureCount = ? ;
-//
-//     opInput.triangleClusters.maxNumTriangles = CLASIndirect(
-//         opInput, opMode, CLASOpType::BuildTemplate | CLASOpType::CLAS, dstImplicitData,
-//         scratchBuffer, dstAddresses, dstSizes, srcInfosArray, srcInfosCount, srcInfosOffset);
-// }
+void CommandBuffer::BuildCLASTemplates(CLASOpMode opMode, GPUBuffer *dstImplicitData,
+                                       GPUBuffer *scratchBuffer, GPUBuffer *dstAddresses,
+                                       GPUBuffer *dstSizes, GPUBuffer *srcInfosArray,
+                                       GPUBuffer *srcInfosCount, u32 srcInfosOffset,
+                                       u32 maxNumTriangles, u32 maxNumVertices,
+                                       u32 numTemplates)
+{
+
+    CLASOpInput opInput;
+    opInput.triangleClusters.maxNumTriangles = maxNumTriangles;
+    opInput.triangleClusters.maxNumVertices  = maxNumVertices;
+
+    opInput.maxAccelerationStructureCount = numTemplates;
+
+    CLASIndirect(opInput, opMode, CLASOpType::BuildTemplate | CLASOpType::CLAS,
+                 dstImplicitData, scratchBuffer, dstAddresses, dstSizes, srcInfosArray,
+                 srcInfosCount, srcInfosOffset);
+}
+
+void CommandBuffer::InstantiateCLASTemplate(CLASOpMode opMode, GPUBuffer *dstImplicitData,
+                                            GPUBuffer *scratchBuffer, GPUBuffer *dstAddresses,
+                                            GPUBuffer *dstSizes, GPUBuffer *srcInfosArray,
+                                            GPUBuffer *srcInfosCount, u32 srcInfosOffset,
+                                            u32 maxNumTriangles, u32 maxNumVertices,
+                                            u32 maxNumClusters, u32 dstClasOffset)
+{
+    CLASOpInput opInput;
+    opInput.triangleClusters.maxNumTriangles = maxNumTriangles;
+    opInput.triangleClusters.maxNumVertices  = maxNumVertices;
+
+    opInput.maxAccelerationStructureCount = maxNumClusters;
+
+    CLASIndirect(opInput, opMode, CLASOpType::InstantiateTemplate | CLASOpType::CLAS,
+                 dstImplicitData, scratchBuffer, dstAddresses, dstSizes, srcInfosArray,
+                 srcInfosCount, srcInfosOffset, dstClasOffset);
+}
 
 void CommandBuffer::BuildPTLAS(GPUBuffer *ptlasBuffer, GPUBuffer *scratchBuffer,
                                GPUBuffer *srcInfos, GPUBuffer *srcInfosCount,
@@ -3357,6 +3376,20 @@ void Vulkan::GetCLASTemplateBuildSizes(CLASOpMode opMode, int maxNumClusters,
 
     u32 updateScratchSize;
     GetClusterBuildSizes(opInput, opMode, CLASOpType::CLAS | CLASOpType::BuildTemplate,
+                         scratchSize, updateScratchSize, accelerationStructureSize);
+}
+
+void Vulkan::GetCLASTemplateInstantiateSizes(CLASOpMode opMode, int maxNumClusters,
+                                             u32 maxNumTriangles, u32 maxNumVertices,
+                                             u32 &scratchSize, u32 &accelerationStructureSize)
+{
+    CLASOpInput opInput;
+    opInput.triangleClusters.maxNumTriangles = maxNumTriangles;
+    opInput.triangleClusters.maxNumVertices  = maxNumVertices;
+    opInput.maxAccelerationStructureCount    = maxNumClusters;
+
+    u32 updateScratchSize;
+    GetClusterBuildSizes(opInput, opMode, CLASOpType::CLAS | CLASOpType::InstantiateTemplate,
                          scratchSize, updateScratchSize, accelerationStructureSize);
 }
 

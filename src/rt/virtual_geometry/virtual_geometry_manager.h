@@ -242,6 +242,9 @@ struct VirtualGeometryManager
     DescriptorSetLayout clusterFixupLayout = {};
     VkPipeline clusterFixupPipeline;
 
+    DescriptorSetLayout writeClasAddressesLayout = {};
+    VkPipeline writeClasAddressesPipeline;
+
     GPUBuffer evictedPagesBuffer;
     GPUBuffer hierarchyNodeBuffer;
     GPUBuffer clusterPageDataBuffer;
@@ -253,6 +256,9 @@ struct VirtualGeometryManager
     GPUBuffer uploadBuffer;
     GPUBuffer streamingRequestsBuffer;
     GPUBuffer readbackBuffer;
+
+    GPUBuffer clusterTempAccelAddresses;
+    GPUBuffer clusterTempAccelSizes;
 
     GPUBuffer clusterAccelAddresses;
     GPUBuffer clusterAccelSizes;
@@ -296,6 +302,12 @@ struct VirtualGeometryManager
     GPUBuffer ptlasUpdateInfosBuffer;
     GPUBuffer ptlasInstanceBitVectorBuffer;
 
+    GPUBuffer templateIndexBuffer;
+    GPUBuffer templateInfosBuffer;
+    GPUBuffer templateImplicitDataBuffer;
+    GPUBuffer templateScratchDataBuffer;
+    GPUBuffer templateAddressesBuffer;
+
     // u32 requestBatchWriteIndex;
     // RingBuffer<StreamingRequestBatch> streamingRequestBatches;
     // StaticArray<StreamingRequest, maxQueueBatches * maxStreamingRequestsPerFrame>
@@ -313,7 +325,7 @@ struct VirtualGeometryManager
     StaticArray<VirtualPage> virtualTable;
     StaticArray<Page> physicalPages;
 
-    VirtualGeometryManager(Arena *arena);
+    VirtualGeometryManager(CommandBuffer *cmd, Arena *arena);
     void EditRegistration(u32 instanceID, u32 pageIndex, bool add);
     void RecursePageDependencies(StaticArray<VirtualPageHandle> &pages, u32 instanceID,
                                  u32 pageIndex, u32 priority);

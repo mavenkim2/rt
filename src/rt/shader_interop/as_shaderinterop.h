@@ -54,6 +54,7 @@ struct DecodeClusterData
     uint32_t clusterIndex;
     uint32_t indexBufferOffset;
     uint32_t vertexBufferOffset;
+    uint32_t addressIndex;
 };
 
 struct BLASData
@@ -110,6 +111,19 @@ struct BUILD_CLUSTERS_TRIANGLE_INFO
     uint64_t geometryIndexAndFlagsBuffer;
     uint64_t opacityMicromapArray;
     uint64_t opacityMicromapIndexBuffer;
+};
+
+struct INSTANTIATE_CLUSTER_TEMPLATE_INFO
+{
+    uint32_t clusterIdOffset;
+    uint32_t geometryIndexOffset : 24;
+    uint32_t reserved : 8;
+    uint64_t clusterTemplateAddress;
+    struct
+    {
+        uint64_t startAddress;
+        uint64_t strideInBytes;
+    } vertexBuffer;
 };
 
 struct BUILD_RANGE_INFO
@@ -246,7 +260,7 @@ struct GPUClusterFixup
 struct Brick
 {
     uint64_t bitMask;
-    uint3 minVoxel;
+    uint vertexOffset;
 };
 
 #define GLOBALS_VERTEX_BUFFER_OFFSET_INDEX 0
@@ -283,7 +297,10 @@ struct Brick
 #define GLOBALS_PTLAS_UPDATE_INSTANCE_INDEX 22
 #define GLOBALS_DEBUG                       23
 
-#define GLOBALS_SIZE 24
+#define GLOBALS_CLAS_TEMPLATE_COUNT 24
+#define GLOBALS_CLAS_BUILD_COUNT    25
+
+#define GLOBALS_SIZE 26
 
 #ifdef __cplusplus
 }

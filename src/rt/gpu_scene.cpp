@@ -588,8 +588,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     }
 
     // Virtual geometry initialization
-    VirtualGeometryManager virtualGeometryManager(sceneScratch.temp.arena);
     CommandBuffer *dgfTransferCmd = device->BeginCommandBuffer(QueueType_Copy);
+    VirtualGeometryManager virtualGeometryManager(dgfTransferCmd, sceneScratch.temp.arena);
 
     for (int sceneIndex = 0; sceneIndex < numBlas; sceneIndex++)
     {
