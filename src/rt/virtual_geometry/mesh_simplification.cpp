@@ -2389,12 +2389,13 @@ static ClusterBuilder GenerateValidClusters(Arena *arena, PrimRef *newPrimRefs,
                                             RecordAOSSplits &r, u32 *indices,
                                             StaticArray<CompressedVoxel> *bricks = 0)
 {
-    u32 maxNumTriangles = MAX_CLUSTER_TRIANGLES;
+    u32 maxNumPrimitives = bricks ? MAX_CLUSTER_BRICKS : MAX_CLUSTER_TRIANGLES;
     ClusterBuilder clusterBuilder;
     ScratchArena scratch;
     u32 iters = 0;
     for (;;)
     {
+        Assert(maxNumPrimitives);
         struct HashedIndex
         {
             u32 geomID;
@@ -2406,7 +2407,7 @@ static ClusterBuilder GenerateValidClusters(Arena *arena, PrimRef *newPrimRefs,
             }
         };
         clusterBuilder = ClusterBuilder(arena, newPrimRefs);
-        clusterBuilder.BuildClusters(r, false, maxNumTriangles);
+        clusterBuilder.BuildClusters(r, false, maxNumPrimitives);
 
         bool valid = true;
         for (auto &list : clusterBuilder.threadClusters)
@@ -2416,7 +2417,7 @@ static ClusterBuilder GenerateValidClusters(Arena *arena, PrimRef *newPrimRefs,
                 for (int i = 0; i < node->count; i++)
                 {
                     RecordAOSSplits &record = node->values[i];
-                    Assert(record.count <= maxNumTriangles);
+                    Assert(record.count <= maxNumPrimitives);
                     u32 clusterNumTriangles = record.count;
                     HashMap<HashedIndex> vertexHashSet(
                         scratch.temp.arena, NextPowerOfTwo(clusterNumTriangles * 3));
@@ -2431,16 +2432,16 @@ static ClusterBuilder GenerateValidClusters(Arena *arena, PrimRef *newPrimRefs,
                         PrimRef &ref = newPrimRefs[i];
                         if (ref.primID >= 0x80000000u)
                         {
-                            u32 brickIndex = ref.primID & 0x7fffffffu;
-                            Assert(bricks);
-                            CompressedVoxel &brick = (*bricks)[brickIndex];
-                            vertexCount += 8;
-                            primCount += 12;
-
+                            u32 brickID            = ref.primID & 0x7fffffffu;
+                            CompressedVoxel &voxel = (*bricks)[brickID];
+                            u32 numVertices =
+                                PopCount(voxel.bitMask) + PopCount(voxel.bitMask >> 32u);
+                            vertexCount += numVertices;
                             numBricks++;
                         }
                         else
                         {
+                            Assert(!bricks);
                             for (int vertexIndex = 0; vertexIndex < 3; vertexIndex++)
                             {
                                 u32 index         = indices[3 * ref.primID + vertexIndex];
@@ -2455,7 +2456,7 @@ static ClusterBuilder GenerateValidClusters(Arena *arena, PrimRef *newPrimRefs,
                         }
                     }
                     if (vertexCount > MAX_CLUSTER_VERTICES ||
-                        primCount > MAX_CLUSTER_TRIANGLES)
+                        primCount > MAX_CLUSTER_TRIANGLES || numBricks > MAX_CLUSTER_BRICKS)
                     {
                         valid = false;
                         break;
@@ -2469,7 +2470,7 @@ static ClusterBuilder GenerateValidClusters(Arena *arena, PrimRef *newPrimRefs,
         if (valid) break;
 
         iters++;
-        maxNumTriangles -= 2;
+        maxNumPrimitives -= 2;
         ReleaseArenaArray(clusterBuilder.arenas);
     }
     return clusterBuilder;
@@ -3313,18 +3314,16 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                         groupNumTriangles += cluster.clusterIndices.triangleIndices.Length();
                     }
 
-                    u32 numSlots = NextPowerOfTwo(groupNumTriangles);
-                    SimpleHashSet<Vec3i> voxelHashSet(scratch.temp.arena, numSlots);
-
                     f32 *groupVertices =
                         PushArrayNoZero(scratch.temp.arena, f32,
                                         (groupNumTriangles * 3) * (3 + numAttributes));
                     u32 *indices =
                         PushArrayNoZero(scratch.temp.arena, u32, groupNumTriangles * 3);
                     u32 *geomIDs = PushArrayNoZero(scratch.temp.arena, u32, groupNumTriangles);
-                    u32 vertexCount   = 0;
-                    u32 indexCount    = 0;
-                    u32 triangleCount = 0;
+                    u32 vertexCount            = 0;
+                    u32 indexCount             = 0;
+                    u32 triangleCount          = 0;
+                    u32 clusterTotalVoxelCount = 0;
 
                     u32 numHash = NextPowerOfTwo(groupNumTriangles * 3);
 
@@ -3343,13 +3342,21 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                         u32 groupID      = clusterToGroupID[clusterIndex];
                         Cluster &cluster = levelClusters[clusterIndex];
 
-                        const ClusterGroup &prevClusterGroup =
+                        ClusterGroup &prevClusterGroup =
                             clusterGroups[cluster.childGroupIndex];
 
                         total += cluster.record.count;
 
                         hasVoxels |= (bool)cluster.clusterIndices.brickIndices.Length();
                         maxLodError = Max(cluster.lodError, maxLodError);
+
+                        for (u32 brickID : cluster.clusterIndices.brickIndices)
+                        {
+                            CompressedVoxel &voxel =
+                                prevClusterGroup.compressedVoxels[brickID];
+                            clusterTotalVoxelCount +=
+                                PopCount(voxel.bitMask) + PopCount(voxel.bitMask >> 32u);
+                        }
 
                         for (Vec2u triangleIDs : cluster.clusterIndices.triangleIndices)
                         {
@@ -3415,7 +3422,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                         totalSurfaceArea += area;
                     }
 
-                    u32 targetNumVoxels = (vertexCount * 3) / 4;
+                    u32 targetNumVoxels = ((vertexCount + clusterTotalVoxelCount) * 3) / 4;
                     f32 voxelSize       = Sqrt(totalSurfaceArea / targetNumVoxels) * .75f;
                     voxelSize           = Max(maxLodError, voxelSize);
 
@@ -3459,168 +3466,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                         }
                     }
 
-                    u32 *voxelizedIndices =
-                        PushArrayNoZero(scratch.temp.arena, u32, groupNumTriangles * 3);
-                    u32 numVoxelizedTris = 0;
-                    f32 rcpVoxelSize     = 1.f / voxelSize;
-
-                    if (numIslands > 1 || hasVoxels)
-                    {
-                        BitVector isIslandVoxelized(scratch.temp.arena, numIslands);
-
-                        Graph<u32> islandGraph;
-
-                        islandGraph.InitializeStatic(
-                            scratch.temp.arena, triangleCount, numIslands,
-                            [&](u32 triIndex, u32 *offsets, u32 *data = 0) {
-                                u32 dataIndex = offsets[islands[triIndex]]++;
-                                if (data) data[dataIndex] = triIndex;
-                                return 1;
-                            });
-
-                        for (u32 island = 0; island < numIslands; island++)
-                        {
-                            u32 count =
-                                islandGraph.offsets[island + 1] - islandGraph.offsets[island];
-                            Vec3f *points =
-                                PushArrayNoZero(scratch.temp.arena, Vec3f, 3 * count);
-                            for (u32 dataIndex = 0; dataIndex < count; dataIndex++)
-                            {
-                                u32 tri =
-                                    islandGraph.data[islandGraph.offsets[island] + dataIndex];
-                                GetTriangle(
-                                    groupVertices, indices, tri, points[3 * dataIndex + 0],
-                                    points[3 * dataIndex + 1], points[3 * dataIndex + 2]);
-                            }
-
-                            Vec4f sphere = ConstructSphereFromPoints(points, 3 * count);
-
-                            if (sphere.w < voxelSize)
-                            {
-                                isIslandVoxelized.SetBit(island);
-                                // Separate triangles in island into separate list
-                                for (u32 dataIndex = 0; dataIndex < count; dataIndex++)
-                                {
-                                    u32 tri =
-                                        islandGraph
-                                            .data[islandGraph.offsets[island] + dataIndex];
-                                    MemoryCopy(voxelizedIndices + numVoxelizedTris * 3,
-                                               indices + 3 * tri, sizeof(u32) * 3);
-                                    numVoxelizedTris++;
-                                }
-                            }
-                        }
-
-                        // Compact triangle index buffer
-                        u32 newTriCount = 0;
-
-                        for (u32 triIndex = 0; triIndex < triangleCount; triIndex++)
-                        {
-                            u32 island = islands[triIndex];
-                            if (!isIslandVoxelized.GetBit(island))
-                            {
-                                indices[3 * newTriCount + 0] = indices[3 * triIndex + 0];
-                                indices[3 * newTriCount + 1] = indices[3 * triIndex + 1];
-                                indices[3 * newTriCount + 2] = indices[3 * triIndex + 2];
-
-                                geomIDs[newTriCount] = geomIDs[triIndex];
-                                newTriCount++;
-                            }
-                        }
-                        indexCount = newTriCount * 3;
-                    }
-
-                    // Gather voxels
-                    for (int clusterIndexIndex = range.begin; clusterIndexIndex < range.end;
-                         clusterIndexIndex++)
-                    {
-                        int clusterIndex = partitionResult.clusterIndices[clusterIndexIndex];
-                        Cluster &cluster = levelClusters[clusterIndex];
-                        ClusterGroup &childGroup = clusterGroups[cluster.childGroupIndex];
-                        for (u32 voxelIndex : cluster.clusterIndices.brickIndices)
-                        {
-                            CompressedVoxel &voxel = childGroup.compressedVoxels[voxelIndex];
-
-                            u32 vertexOffset = voxel.vertexOffset;
-                            u32 brickNumVoxels =
-                                PopCount((u32)voxel.bitMask) + PopCount(voxel.bitMask >> 32u);
-                            for (u32 i = 0; i < brickNumVoxels; i++)
-                            {
-                                u32 vertexIndex = vertexOffset + i;
-                                Vec3f minP = GetPosition(childGroup.vertexData, vertexIndex);
-
-                                Vec3i minVoxel = Floor(minP * rcpVoxelSize);
-                                Vec3i maxVoxel =
-                                    Ceil((minP + cluster.lodError) * rcpVoxelSize);
-
-                                for (int x = minVoxel.x; x <= maxVoxel.x; x++)
-                                {
-                                    for (int y = minVoxel.y; y <= maxVoxel.y; y++)
-                                    {
-                                        for (int z = minVoxel.z; z <= maxVoxel.z; z++)
-                                        {
-                                            Vec3i p  = Vec3i(x, y, z);
-                                            int hash = Hash(p);
-                                            voxelHashSet.AddUnique(scratch.temp.arena, hash,
-                                                                   Vec3i(x, y, z));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if (!childGroup.extraVoxels.data) continue;
-
-                        u32 clusterLocalIndex = cluster.clusterInChildGroupIndex;
-                        for (u32 voxelIndex =
-                                 childGroup.extraVoxels.offsets[clusterLocalIndex];
-                             voxelIndex <
-                             childGroup.extraVoxels.offsets[clusterLocalIndex + 1];
-                             voxelIndex++)
-
-                        {
-                            Vec3i voxel = childGroup.extraVoxels.data[voxelIndex];
-
-                            Vec3i minVoxel =
-                                Vec3i(Floor(Vec3f(voxel) * cluster.lodError * rcpVoxelSize));
-                            Vec3i maxVoxel = Vec3i(
-                                Ceil(Vec3f(voxel + 1) * cluster.lodError * rcpVoxelSize));
-
-                            for (int x = minVoxel.x; x <= maxVoxel.x; x++)
-                            {
-                                for (int y = minVoxel.y; y <= maxVoxel.y; y++)
-                                {
-                                    for (int z = minVoxel.z; z <= maxVoxel.z; z++)
-                                    {
-                                        Vec3i p  = Vec3i(x, y, z);
-                                        int hash = Hash(p);
-                                        voxelHashSet.AddUnique(scratch.temp.arena, hash,
-                                                               Vec3i(x, y, z));
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    VoxelizeTriangles(arena, voxelHashSet, groupVertices, voxelizedIndices,
-                                      numVoxelizedTris, numAttributes, voxelSize);
-                    StaticArray<Voxel> voxels;
-                    StaticArray<Vec3i> extraVoxels;
-                    StaticArray<CompressedVoxel> compressedVoxels;
-                    CheckVoxelOccupancy(arena, &scene, voxelHashSet, voxels, extraVoxels,
-                                        voxelSize);
-
-                    Mesh voxelMesh = {};
-                    StaticArray<u32> voxelGeomIDs;
-
-                    if (voxels.Length())
-                    {
-                        voxelMesh = CompressVoxels(arena, voxels, voxelGeomIDs,
-                                                   compressedVoxels, voxelSize);
-                        // Print("num bricks: %u\n", compressedVoxels.Length());
-                    }
-
                     Mesh simplifiedMesh = {};
+                    f32 simplifyError   = pos_inf;
                     if (indexCount)
                     {
                         // Normalize the positions
@@ -3639,6 +3486,11 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                             Float(f32 f) : value(f) {}
                         };
 
+                        f32 *tempVertices = PushArrayNoZero(scratch.temp.arena, f32,
+                                                            (3 + numAttributes) * vertexCount);
+                        MemoryCopy(tempVertices, groupVertices,
+                                   vertexCount * sizeof(f32) * (3 + numAttributes));
+
                         f32 triangleSize = Sqrt(totalSurfaceArea / (float)numTris);
                         Float currentSize(Max(triangleSize, .00002f));
                         Float desired(.25f);
@@ -3649,7 +3501,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                         float posScale = scale.value;
                         for (int i = 0; i < vertexCount; i++)
                         {
-                            GetPosition(groupVertices, i) *= posScale;
+                            GetPosition(tempVertices, i) *= posScale;
                         }
 
                         // Simplify the clusters
@@ -3659,8 +3511,12 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                         u32 targetNumTris = targetNumParents * MAX_CLUSTER_TRIANGLES;
 
                         f32 targetError = 0.f;
-                        MeshSimplifier simplifier(scratch.temp.arena, (f32 *)groupVertices,
-                                                  vertexCount, indices, indexCount,
+                        u32 *tempIndices =
+                            PushArrayNoZero(scratch.temp.arena, u32, indexCount);
+                        MemoryCopy(tempIndices, indices, sizeof(u32) * indexCount);
+
+                        MeshSimplifier simplifier(scratch.temp.arena, tempVertices,
+                                                  vertexCount, tempIndices, indexCount,
                                                   numAttributes);
 
                         // Lock edges shared with other groups
@@ -3684,11 +3540,11 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                             }
                         }
 
-                        f32 invScale = 1.f / posScale;
-                        f32 error    = simplifier.Simplify(vertexCount, targetNumTris,
-                                                           Sqr(targetError), 0, 0, FLT_MAX);
-                        f32 preError = error;
-                        error        = Sqrt(error) * invScale;
+                        f32 invScale  = 1.f / posScale;
+                        simplifyError = simplifier.Simplify(vertexCount, targetNumTris,
+                                                            Sqr(targetError), 0, 0, FLT_MAX);
+                        f32 preError  = simplifyError;
+                        simplifyError = Sqrt(simplifyError) * invScale;
 
                         simplifier.Finalize(simplifiedMesh.numVertices,
                                             simplifiedMesh.numIndices, geomIDs);
@@ -3713,6 +3569,138 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                         numIndices.fetch_add(simplifiedMesh.numIndices);
                     }
 
+                    StaticArray<Voxel> voxels;
+                    StaticArray<Vec3i> extraVoxels;
+                    StaticArray<CompressedVoxel> compressedVoxels;
+                    Graph<Vec3i> groupExtraVoxels;
+                    Mesh voxelMesh = {};
+                    StaticArray<u32> voxelGeomIDs;
+                    f32 error = 0.f;
+
+                    if (numIslands > 1 || hasVoxels)
+                    {
+                        u32 targetNumBricks =
+                            (range.end - range.begin) * MAX_CLUSTER_TRIANGLES;
+                        u32 numSlots =
+                            NextPowerOfTwo(groupNumTriangles + clusterTotalVoxelCount);
+                        Assert(numSlots);
+
+                        while (voxelSize < simplifyError)
+                        {
+                            SimpleHashSet<Vec3i> voxelHashSet(scratch.temp.arena, numSlots);
+                            f32 rcpVoxelSize = 1.f / voxelSize;
+                            // Gather voxels
+                            if (groupNumTriangles)
+                            {
+                                VoxelizeTriangles(arena, voxelHashSet, groupVertices, indices,
+                                                  groupNumTriangles, numAttributes, voxelSize);
+                            }
+
+                            for (int clusterIndexIndex = range.begin;
+                                 clusterIndexIndex < range.end; clusterIndexIndex++)
+                            {
+                                int clusterIndex =
+                                    partitionResult.clusterIndices[clusterIndexIndex];
+                                Cluster &cluster = levelClusters[clusterIndex];
+                                ClusterGroup &childGroup =
+                                    clusterGroups[cluster.childGroupIndex];
+                                for (u32 voxelIndex : cluster.clusterIndices.brickIndices)
+                                {
+                                    CompressedVoxel &voxel =
+                                        childGroup.compressedVoxels[voxelIndex];
+
+                                    u32 vertexOffset   = voxel.vertexOffset;
+                                    u32 brickNumVoxels = PopCount((u32)voxel.bitMask) +
+                                                         PopCount(voxel.bitMask >> 32u);
+                                    for (u32 i = 0; i < brickNumVoxels; i++)
+                                    {
+                                        u32 vertexIndex = vertexOffset + i;
+                                        Vec3f minP =
+                                            GetPosition(childGroup.vertexData, vertexIndex);
+
+                                        Vec3i minVoxel = Floor(minP * rcpVoxelSize);
+                                        Vec3i maxVoxel =
+                                            Floor((minP + cluster.lodError) * rcpVoxelSize);
+
+                                        for (int x = minVoxel.x; x <= maxVoxel.x; x++)
+                                        {
+                                            for (int y = minVoxel.y; y <= maxVoxel.y; y++)
+                                            {
+                                                for (int z = minVoxel.z; z <= maxVoxel.z; z++)
+                                                {
+                                                    Vec3i p  = Vec3i(x, y, z);
+                                                    int hash = Hash(p);
+                                                    voxelHashSet.AddUnique(scratch.temp.arena,
+                                                                           hash,
+                                                                           Vec3i(x, y, z));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                if (!childGroup.extraVoxels.data) continue;
+                                u32 clusterLocalIndex = cluster.clusterInChildGroupIndex;
+                                for (u32 voxelIndex =
+                                         childGroup.extraVoxels.offsets[clusterLocalIndex];
+                                     voxelIndex <
+                                     childGroup.extraVoxels.offsets[clusterLocalIndex + 1];
+                                     voxelIndex++)
+
+                                {
+                                    Vec3i voxel = childGroup.extraVoxels.data[voxelIndex];
+
+                                    Vec3i minVoxel = Vec3i(
+                                        Floor(Vec3f(voxel) * cluster.lodError * rcpVoxelSize));
+                                    Vec3i maxVoxel = Vec3i(Floor(
+                                        Vec3f(voxel + 1) * cluster.lodError * rcpVoxelSize));
+
+                                    for (int x = minVoxel.x; x <= maxVoxel.x; x++)
+                                    {
+                                        for (int y = minVoxel.y; y <= maxVoxel.y; y++)
+                                        {
+                                            for (int z = minVoxel.z; z <= maxVoxel.z; z++)
+                                            {
+                                                Vec3i p  = Vec3i(x, y, z);
+                                                int hash = Hash(p);
+                                                voxelHashSet.AddUnique(scratch.temp.arena,
+                                                                       hash, Vec3i(x, y, z));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            CheckVoxelOccupancy(arena, &scene, voxelHashSet, voxels,
+                                                extraVoxels, voxelSize);
+
+                            if (voxels.Length())
+                            {
+                                voxelMesh = CompressVoxels(arena, voxels, voxelGeomIDs,
+                                                           compressedVoxels, voxelSize);
+                                // Print("num bricks: %u\n", compressedVoxels.Length());
+                            }
+
+                            if (voxels.Length() < targetNumVoxels &&
+                                compressedVoxels.Length() < targetNumBricks)
+                            {
+                                break;
+                            }
+                            // Print("again\n");
+                            voxelSize *= 1.1f;
+                        }
+                        if (voxelSize < simplifyError)
+                        {
+                            error          = voxelSize;
+                            simplifiedMesh = {};
+                        }
+                        else
+                        {
+                            error = simplifyError;
+                            compressedVoxels.Clear();
+                            voxels.Clear();
+                        }
+                    }
+
                     // Split the simplified meshes into clusters
                     u32 numFaces            = simplifiedMesh.numIndices / 3;
                     simplifiedMesh.numFaces = numFaces;
@@ -3721,8 +3709,11 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                     PrimRef *newPrimRefs = PushArrayNoZero(
                         scratch.temp.arena, PrimRef, numFaces + compressedVoxels.Length());
 
-                    GenerateMeshRefs<GeometryType::TriangleMesh>(&simplifiedMesh, newPrimRefs,
-                                                                 0, numFaces, 0, 1, record);
+                    if (numFaces)
+                    {
+                        GenerateMeshRefs<GeometryType::TriangleMesh>(
+                            &simplifiedMesh, newPrimRefs, 0, numFaces, 0, 1, record);
+                    }
                     GenerateVoxelRefs(newPrimRefs + numFaces, compressedVoxels, voxelMesh,
                                       record, voxelSize);
 
@@ -3741,11 +3732,6 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                     }
 
                     u32 maxNumTriangles = MAX_CLUSTER_TRIANGLES;
-
-                    if (depth == 4)
-                    {
-                        int stop = 5;
-                    }
 
                     ClusterBuilder clusterBuilder = GenerateValidClusters(
                         arena, newPrimRefs, record, simplifiedMesh.indices, &compressedVoxels);
@@ -3767,7 +3753,6 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                     Bounds parentBounds;
                     // Set the child start index of last level's clusters
 
-                    f32 error = 0.f;
                     for (int clusterIndexIndex = range.begin; clusterIndexIndex < range.end;
                          clusterIndexIndex++)
                     {
@@ -3777,9 +3762,6 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
                         clusterSpheres[clusterIndexIndex - range.begin] =
                             levelClusters[clusterIndex].lodBounds;
-
-                        // Parent error should always be >= to child error
-                        error = Max(error, levelClusters[clusterIndex].lodError);
                     }
 
                     Vec4f parentSphereBounds =
@@ -3813,14 +3795,13 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                         }
                     }
 
-                    Graph<Vec3i> groupExtraVoxels;
                     if (extraVoxels.Length())
                     {
                         groupExtraVoxels.InitializeStatic(
                             arena, extraVoxels.Length(), numParentClusters,
                             [&](u32 voxelIndex, u32 *offsets, Vec3i *data = 0) {
                                 Vec3i &extraVoxel = extraVoxels[voxelIndex];
-                                Vec3f pos         = Vec3f(extraVoxel) * voxelSize;
+                                Vec3f pos         = (Vec3f(extraVoxel) + 0.5f) * voxelSize;
                                 f32 bestDist      = pos_inf;
                                 int bestIndex     = -1;
                                 for (int parentIndex = parentStartIndex;
@@ -3911,7 +3892,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
             u32 voxelCount  = numVoxels.load();
 
             vertexCount += 8 * voxelCount;
-            indexCount += 36 * indexCount;
+            indexCount += 36 * voxelCount;
             Mesh levelMesh    = {};
             u32 vertexOffset  = 0;
             u32 indexOffset   = 0;
@@ -4007,6 +3988,11 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                         vertexHash.AddInHash(hash, vertexIndex);
                     }
                     levelMesh.indices[indexOffset++] = vertexIndex;
+                }
+
+                if (depth == 1 && indexOffset > 2000000)
+                {
+                    int stop = 5;
                 }
 
                 f32 voxelSize = clusterGroup.maxParentError;
@@ -5189,7 +5175,7 @@ static void CheckVoxelOccupancy(Arena *arena, ScenePrimitives *scene,
                                 f32 voxelSize)
 {
     ScratchArena scratch(&arena, 1);
-    const u32 numRays = 64;
+    const u32 numRays = 16;
 
     struct SGGX
     {

@@ -18,6 +18,8 @@ namespace rt
 #define MAX_CLUSTER_VERTICES_BIT 8
 #define MAX_CLUSTER_VERTICES     (1 << MAX_CLUSTER_VERTICES_BIT)
 
+#define MAX_CLUSTER_BRICKS 21
+
 #define CLUSTER_MIN_PRECISION -20
 
 struct PackedDenseGeometryHeader
