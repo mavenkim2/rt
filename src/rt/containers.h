@@ -166,9 +166,9 @@ struct StaticArray
 template <typename T>
 void Copy(StaticArray<T> &to, StaticArray<T> &from)
 {
-    Assert(to.capacity >= from.capacity && to.capacity >= from.size);
-    MemoryCopy(to.data, from.data, sizeof(T) * from.size);
-    to.size = from.size;
+    Assert(to.capacity >= from.size_);
+    MemoryCopy(to.data, from.data, sizeof(T) * from.size_);
+    to.size_ = from.size_;
 }
 
 template <typename T>
@@ -176,7 +176,7 @@ void Copy(StaticArray<T> &to, std::vector<T> &from)
 {
     Assert(to.capacity >= from.size());
     MemoryCopy(to.data, from.data(), sizeof(T) * from.size());
-    to.size = (int)from.size();
+    to.size_ = (int)from.size();
 }
 
 template <typename T, u32 capacity>
@@ -1108,6 +1108,96 @@ inline int AtomicHashIndex::FindConcurrent(int inHash, Predicate &predicate) con
     EndLock(key);
     return index;
 }
+
+template <typename T>
+struct Graph
+{
+    u32 *offsets;
+    T *data;
+
+    Graph() : offsets(0), data(0) {}
+
+    template <typename F>
+    u32 InitializeStatic(Arena *arena, u32 itrCount, u32 count, F &&func)
+    {
+        offsets       = PushArray(arena, u32, count + 1);
+        u32 *offsets1 = &offsets[1];
+        u32 total     = 0;
+        for (u32 index = 0; index < itrCount; index++)
+        {
+            total += func(index, offsets1);
+        }
+
+        u32 out = total;
+
+        data = PushArrayNoZero(arena, T, total);
+
+        total = 0;
+        for (u32 index = 0; index < count; index++)
+        {
+            u32 num         = offsets1[index];
+            offsets1[index] = total;
+            total += num;
+        }
+
+        for (u32 index = 0; index < itrCount; index++)
+        {
+            func(index, offsets1, data);
+        }
+
+        return total;
+    }
+
+    template <typename F>
+    u32 InitializeStatic(Arena *arena, u32 count, F &&func)
+    {
+        return InitializeStatic(arena, count, count, func);
+    }
+};
+
+template <typename T>
+struct ArrayView
+{
+    T *data;
+    u32 num;
+
+    ArrayView(Array<T> &array, u32 offset, u32 num) : num(num)
+    {
+        Assert(offset + num <= array.Length());
+        data = array.data + offset;
+    }
+    ArrayView(Array<T> &array) : num(array.Length()) { data = array.data; }
+    ArrayView(StaticArray<T> &array, u32 offset, u32 num) : num(num)
+    {
+        Assert(offset + num <= array.Length());
+        data = array.data + offset;
+    }
+    ArrayView(StaticArray<T> &array) : num(array.Length()) { data = array.data; }
+    ArrayView(ArrayView<T> &view, u32 offset, u32 num) : num(num)
+    {
+        Assert(offset + num <= view.num);
+        data = view.data + offset;
+    }
+    ArrayView(T *data, u32 num) : data(data), num(num) {}
+    T &operator[](u32 index)
+    {
+        Assert(index < num);
+        return data[index];
+    }
+    const T &operator[](u32 index) const
+    {
+        Assert(index < num);
+        return data[index];
+    }
+    u32 Length() const { return num; }
+
+    void Copy(StaticArray<T> &array)
+    {
+        Assert(array.capacity >= num);
+        MemoryCopy(array.data, data, sizeof(T) * num);
+        array.size() = num;
+    }
+};
 
 } // namespace rt
 #endif

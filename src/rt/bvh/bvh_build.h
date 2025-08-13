@@ -786,7 +786,8 @@ __forceinline BVHNodeN BuildQuantizedSBVH(BuildSettings settings, Arena **inAren
                                           const ScenePrimitives *scene, PrimRef *refs,
                                           RecordAOSSplits &record)
 {
-    return BuildQuantizedSBVH<DefaultN, 8, type>(settings, inArenas, scene, refs, record);
+    return BuildQuantizedSBVH<DefaultN, DefaultN, type>(settings, inArenas, scene, refs,
+                                                        record);
 }
 
 template <i32 N>

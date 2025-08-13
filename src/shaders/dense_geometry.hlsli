@@ -372,7 +372,10 @@ DenseGeometry GetDenseGeometryHeader(uint4 packed[NUM_CLUSTER_HEADER_FLOAT4S], u
     result.numPrevRestartsBeforeDwords[0] = BitFieldExtractU32(packed[3].x, 6, 5);
     result.numPrevRestartsBeforeDwords[1] = BitFieldExtractU32(packed[3].x, 7, 11);
     result.numPrevRestartsBeforeDwords[2] = BitFieldExtractU32(packed[3].x, 8, 18);
-    result.numFaceIDBits = BitFieldExtractU32(packed[3].x, 6, 26); 
+
+    result.numFaceIDBits = 0;
+    result.numBricks = BitFieldExtractU32(packed[3].x, 6, 26); 
+    //result.numFaceIDBits = BitFieldExtractU32(packed[3].x, 6, 26); 
 
     result.octBase[0] = BitFieldExtractU32(packed[3].y, 16, 0);
     result.octBase[1] = BitFieldExtractU32(packed[3].y, 16, 16);
@@ -393,6 +396,9 @@ DenseGeometry GetDenseGeometryHeader(uint4 packed[NUM_CLUSTER_HEADER_FLOAT4S], u
     result.ctrlOffset = (result.numVertices * vertexBitWidth + 7) >> 3;
     result.indexOffset = result.ctrlOffset + 12 * ((result.numTriangles + 31u) >> 5u);
     result.firstBitOffset = (result.indexOffset << 3) + reuseBufferLength * result.indexBitWidth;
+
+    // TODO
+    //result.brickOffset = (result.firstBitOffset + result.indexCount + 7) >> 3;
 
     result.debug = debug;
 

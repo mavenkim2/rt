@@ -7,6 +7,8 @@
 namespace rt
 {
 
+struct ScenePrimitives;
+
 struct Quadric
 {
     static const u32 maxAttributes = 6;

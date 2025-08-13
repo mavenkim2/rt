@@ -2,7 +2,7 @@
 #define RT_VULKAN_H
 
 #include "../base.h"
-#include "../bvh/bvh_types.h"
+// #include "../bvh/bvh_types.h"
 #include "../containers.h"
 #include "../math/math_include.h"
 #include "../platform.h"

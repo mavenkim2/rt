@@ -9,6 +9,7 @@ enum class GeometryType;
 struct Light;
 struct MaterialNode;
 struct Mesh;
+struct ScenePrimitives;
 struct PrimitiveIndices;
 
 void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, GeometryType type,

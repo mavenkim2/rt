@@ -91,7 +91,7 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
     Shader clusterFixupShader =
         device->CreateShader(ShaderStage::Compute, "cluster fixup", clusterFixupData);
 
-    string writeClasAddressesName   = "../src/shaders/clas/write_clas_addresses.spv";
+    string writeClasAddressesName   = "../src/shaders/write_clas_addresses.spv";
     string writeClasAddressesData   = OS_ReadFile(arena, writeClasAddressesName);
     Shader writeClasAddressesShader = device->CreateShader(
         ShaderStage::Compute, "write clas addresses", writeClasAddressesData);
@@ -1361,6 +1361,32 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
                      VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
         cmd->FlushBarriers();
         device->EndEvent(cmd);
+    }
+
+    // if (device->frameCount > 10)
+    {
+        GPUBuffer readback =
+            device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT, templateInfosBuffer.size,
+                                 MemoryUsage::GPU_TO_CPU);
+
+        // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+        //              VK_ACCESS_2_TRANSFER_READ_BIT);
+        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                     VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+        cmd->FlushBarriers();
+        cmd->CopyBuffer(&readback, &templateInfosBuffer);
+        Semaphore testSemaphore   = device->CreateSemaphore();
+        testSemaphore.signalValue = 1;
+        cmd->SignalOutsideFrame(testSemaphore);
+        device->SubmitCommandBuffer(cmd);
+        device->Wait(testSemaphore);
+
+        INSTANTIATE_CLUSTER_TEMPLATE_INFO *data =
+            (INSTANTIATE_CLUSTER_TEMPLATE_INFO *)readback.mappedPtr;
+
+        int stop = 5;
     }
 
     // Decode the clusters

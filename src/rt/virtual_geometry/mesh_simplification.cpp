@@ -1,5 +1,4 @@
 #include "../hash.h"
-#include "../memory.h"
 #include "../math/math_include.h"
 #include "../math/ray.h"
 #include "../math/eigen.h"
@@ -22,52 +21,6 @@
 
 namespace rt
 {
-
-template <typename T>
-struct Graph
-{
-    u32 *offsets;
-    T *data;
-
-    Graph() : offsets(0), data(0) {}
-
-    template <typename F>
-    u32 InitializeStatic(Arena *arena, u32 itrCount, u32 count, F &&func)
-    {
-        offsets       = PushArray(arena, u32, count + 1);
-        u32 *offsets1 = &offsets[1];
-        u32 total     = 0;
-        for (u32 index = 0; index < itrCount; index++)
-        {
-            total += func(index, offsets1);
-        }
-
-        u32 out = total;
-
-        data = PushArrayNoZero(arena, T, total);
-
-        total = 0;
-        for (u32 index = 0; index < count; index++)
-        {
-            u32 num         = offsets1[index];
-            offsets1[index] = total;
-            total += num;
-        }
-
-        for (u32 index = 0; index < itrCount; index++)
-        {
-            func(index, offsets1, data);
-        }
-
-        return total;
-    }
-
-    template <typename F>
-    u32 InitializeStatic(Arena *arena, u32 count, F &&func)
-    {
-        return InitializeStatic(arena, count, count, func);
-    }
-};
 
 struct ClusterFixup
 {
@@ -1873,65 +1826,19 @@ int HashEdge(Vec3f &p0, Vec3f &p1)
     return hash;
 }
 
-static const u32 minGroupSize = 8;
-static const u32 maxGroupSize = 32;
-
-struct Range
+struct PartitionRange
 {
     u32 begin;
     u32 end;
-};
-
-template <typename T>
-struct ArrayView
-{
-    T *data;
-    u32 num;
-
-    ArrayView(Array<T> &array, u32 offset, u32 num) : num(num)
-    {
-        Assert(offset + num <= array.Length());
-        data = array.data + offset;
-    }
-    ArrayView(Array<T> &array) : num(array.Length()) { data = array.data; }
-    ArrayView(StaticArray<T> &array, u32 offset, u32 num) : num(num)
-    {
-        Assert(offset + num <= array.Length());
-        data = array.data + offset;
-    }
-    ArrayView(StaticArray<T> &array) : num(array.Length()) { data = array.data; }
-    ArrayView(ArrayView<T> &view, u32 offset, u32 num) : num(num)
-    {
-        Assert(offset + num <= view.num);
-        data = view.data + offset;
-    }
-    ArrayView(T *data, u32 num) : data(data), num(num) {}
-    T &operator[](u32 index)
-    {
-        Assert(index < num);
-        return data[index];
-    }
-    const T &operator[](u32 index) const
-    {
-        Assert(index < num);
-        return data[index];
-    }
-    u32 Length() const { return num; }
-
-    void Copy(StaticArray<T> &array)
-    {
-        Assert(array.capacity >= num);
-        MemoryCopy(array.data, data, sizeof(T) * num);
-        array.size() = num;
-    }
 };
 
 void PartitionGraph(ArrayView<int> clusterIndices, ArrayView<idx_t> clusterOffsets,
                     ArrayView<idx_t> clusterData, ArrayView<idx_t> clusterWeights,
                     ArrayView<int> newClusterIndices, ArrayView<idx_t> newClusterOffsets,
                     ArrayView<idx_t> newClusterData, ArrayView<idx_t> newClusterWeights,
-                    int numClusters, Range &left, Range &right, u32 &newAdjOffset,
-                    u32 numAdjacency, Vec2u &newNumAdjacency)
+                    int numClusters, PartitionRange &left, PartitionRange &right,
+                    u32 &newAdjOffset, u32 numAdjacency, Vec2u &newNumAdjacency,
+                    u32 minGroupSize, u32 maxGroupSize)
 
 {
     Assert(numAdjacency == clusterData.Length());
@@ -2049,14 +1956,15 @@ void RecursivePartitionGraph(ArrayView<int> clusterIndices, ArrayView<idx_t> clu
                              ArrayView<idx_t> newClusterOffsets,
                              ArrayView<idx_t> newClusterData,
                              ArrayView<idx_t> newClusterWeights, int numClusters, int numSwaps,
-                             int globalClusterOffset, StaticArray<Range> &ranges,
-                             std::atomic<int> &numPartitions, u32 numAdjacency)
+                             int globalClusterOffset, StaticArray<PartitionRange> &ranges,
+                             std::atomic<int> &numPartitions, u32 numAdjacency,
+                             u32 minGroupSize, u32 maxGroupSize)
 {
-    if (numClusters < maxGroupSize)
+    if (numClusters <= maxGroupSize)
     {
         int rangeIndex = numPartitions.fetch_add(1, std::memory_order_relaxed);
 
-        Range range;
+        PartitionRange range;
         range.begin = globalClusterOffset;
         range.end   = range.begin + numClusters;
 
@@ -2071,11 +1979,12 @@ void RecursivePartitionGraph(ArrayView<int> clusterIndices, ArrayView<idx_t> clu
 
     u32 newAdjOffset;
     Vec2u newNumAdjacency;
-    Range left, right;
+    PartitionRange left, right;
 
     PartitionGraph(clusterIndices, clusterOffsets, clusterData, clusterWeights,
                    newClusterIndices, newClusterOffsets, newClusterData, newClusterWeights,
-                   numClusters, left, right, newAdjOffset, numAdjacency, newNumAdjacency);
+                   numClusters, left, right, newAdjOffset, numAdjacency, newNumAdjacency,
+                   minGroupSize, maxGroupSize);
 
     u32 numLeft  = left.end - left.begin;
     u32 numRight = right.end - right.begin;
@@ -2096,7 +2005,7 @@ void RecursivePartitionGraph(ArrayView<int> clusterIndices, ArrayView<idx_t> clu
             ArrayView<idx_t>(clusterData, adjOffset, numAdjacency),
             ArrayView<idx_t>(clusterWeights, adjOffset, numAdjacency), newNumClusters,
             numSwaps + 1, globalClusterOffset + clusterOffset, ranges, numPartitions,
-            numAdjacency);
+            numAdjacency, minGroupSize, maxGroupSize);
     };
 
     Recurse(0);
@@ -2105,14 +2014,19 @@ void RecursivePartitionGraph(ArrayView<int> clusterIndices, ArrayView<idx_t> clu
 
 struct GraphPartitionResult
 {
-    StaticArray<Range> ranges;
+    StaticArray<PartitionRange> ranges;
     StaticArray<int> clusterIndices;
 };
 
 GraphPartitionResult RecursivePartitionGraph(Arena *arena, idx_t *clusterOffsets,
                                              idx_t *clusterData, idx_t *clusterWeights,
-                                             int numClusters, u32 dataSize)
+                                             int numClusters, u32 dataSize, u32 minGroupSize,
+                                             u32 maxGroupSize)
 {
+    // TODO: hack because multithreaded METIS does not work
+    static Mutex mutex = {};
+    BeginMutex(&mutex);
+
     ScratchArena scratch(&arena, 1);
 
     u32 maxNumPartitions = (numClusters + minGroupSize - 1) / minGroupSize;
@@ -2130,14 +2044,16 @@ GraphPartitionResult RecursivePartitionGraph(Arena *arena, idx_t *clusterOffsets
 
     std::atomic<int> numPartitions(0);
 
-    StaticArray<Range> ranges(arena, maxNumPartitions, maxNumPartitions);
+    StaticArray<PartitionRange> ranges(arena, maxNumPartitions, maxNumPartitions);
 
     RecursivePartitionGraph(
         ArrayView<int>(clusterIndices), ArrayView<idx_t>(clusterOffsets, (u32)numClusters),
         ArrayView<idx_t>(clusterData, dataSize), ArrayView<idx_t>(clusterWeights, dataSize),
         ArrayView<int>(newClusterIndices), ArrayView<idx_t>(newClusterOffsets),
         ArrayView<idx_t>(newClusterData), ArrayView<idx_t>(newClusterWeights), numClusters, 0,
-        0, ranges, numPartitions, dataSize);
+        0, ranges, numPartitions, dataSize, minGroupSize, maxGroupSize);
+
+    EndMutex(&mutex);
 
     ranges.size() = numPartitions.load();
 
@@ -2375,6 +2291,243 @@ HierarchyNode BuildTopLevelHierarchy(Arena *arena,
 
 static_assert((sizeof(PackedDenseGeometryHeader) + 4) % 16 == 0, "bad header size");
 
+static Vec3f &GetPosition(f32 *vertexData, u32 vertexIndex, u32 numAttributes)
+{
+    return *(Vec3f *)(vertexData + (3 + numAttributes) * vertexIndex);
+}
+
+static GraphPartitionResult PartitionTriangles(Arena *arena, HashIndex &cornerHash,
+                                               f32 *groupVertices, u32 *indices,
+                                               u32 triangleCount, u32 numAttributes,
+                                               u32 maxNumTriangles)
+{
+    const u32 minGroupSize = maxNumTriangles - 4;
+    const u32 maxGroupSize = maxNumTriangles;
+
+    u32 *offsets  = PushArray(arena, u32, triangleCount + 1);
+    u32 *offsets1 = &offsets[1];
+
+    Graph<u32> triangleAdjGraph;
+    u32 total = triangleAdjGraph.InitializeStatic(
+        arena, triangleCount, [&](u32 tri, u32 *offsets, u32 *data = 0) {
+            u32 num = 0;
+            for (int vertexIndex = 0; vertexIndex < 3; vertexIndex++)
+            {
+                Vec3f &p =
+                    GetPosition(groupVertices, indices[3 * tri + vertexIndex], numAttributes);
+                int hash = Hash(p);
+                for (int hashIndex = cornerHash.FirstInHash(hash); hashIndex != -1;
+                     hashIndex     = cornerHash.NextInHash(hashIndex))
+                {
+                    u32 otherTri = (u32)hashIndex / 3;
+                    if (otherTri != tri)
+                    {
+                        Vec3f &otherP =
+                            GetPosition(groupVertices, indices[hashIndex], numAttributes);
+                        if (otherP == p)
+                        {
+                            num++;
+                            u32 dataIndex = offsets1[tri]++;
+                            if (data) data[dataIndex] = otherTri;
+                        }
+                    }
+                }
+            }
+            return num;
+        });
+
+    idx_t *weights = PushArrayNoZero(arena, idx_t, total);
+    for (u32 i = 0; i < total; i++)
+    {
+        weights[i] = 1;
+    }
+
+    GraphPartitionResult result = RecursivePartitionGraph(
+        arena, (idx_t *)triangleAdjGraph.offsets, (idx_t *)triangleAdjGraph.data, weights,
+        triangleCount, total, minGroupSize, maxGroupSize);
+
+    return result;
+}
+
+static void AddSpatialLinks(Arena *arena, u32 num, Bounds &bounds,
+                            const StaticArray<Vec3f> &centers,
+                            StaticArray<Array<int>> &graphNeighbors,
+                            StaticArray<Array<int>> &weights)
+{
+    struct Handle
+    {
+        u32 sortKey;
+        u32 index;
+    };
+
+    ScratchArena scratch(&arena, 1);
+
+    Vec3f scale = 1023.f / ToVec3f(bounds.maxP - bounds.minP);
+    Vec3f minP  = ToVec3f(bounds.minP);
+    StaticArray<Handle> handles(scratch.temp.arena, num, num);
+
+    ParallelFor(0, num, 4096, 4096, [&](u32 jobID, u32 start, u32 count) {
+        for (int index = start; index < start + count; index++)
+        {
+            Vec3f center = centers[index];
+
+            Vec3i quantized = Vec3i((center - minP) * scale);
+            u32 morton      = MortonCode3(quantized.x) | (MortonCode3(quantized.y) << 1) |
+                         (MortonCode3(quantized.z) << 2);
+
+            Handle handle;
+            handle.sortKey = morton;
+            handle.index   = index;
+            handles[index] = handle;
+        }
+    });
+
+    SortHandles(handles.data, handles.Length());
+
+    StaticArray<u32> islandIDs(scratch.temp.arena, num, num);
+    BitVector visited(scratch.temp.arena, num);
+    u32 numIslands = 0;
+
+    StaticArray<u32> stack(scratch.temp.arena, num);
+    for (int index = 0; index < num; index++)
+    {
+        stack.Empty();
+        u32 islandIndex = numIslands;
+        if (!visited.GetBit(index))
+        {
+            numIslands++;
+            visited.SetBit(index);
+            stack.Push(index);
+        }
+        while (stack.Length())
+        {
+            u32 neighbor        = stack.Pop();
+            islandIDs[neighbor] = islandIndex;
+
+            for (u32 neighborNeighbor : graphNeighbors[neighbor])
+            {
+                if (!visited.GetBit(neighborNeighbor))
+                {
+                    visited.SetBit(neighborNeighbor);
+                    stack.Push(neighborNeighbor);
+                }
+            }
+        }
+    }
+
+    if (numIslands == 1) return;
+
+    StaticArray<PartitionRange> islandRanges(scratch.temp.arena, num, num);
+    u32 currentIsland    = islandIDs[handles[0].index];
+    int startHandleIndex = 0;
+    for (int handleIndex = 1; handleIndex < num; handleIndex++)
+    {
+        Handle handle = handles[handleIndex];
+        u32 islandID  = islandIDs[handle.index];
+
+        if (islandID != currentIsland)
+        {
+            for (int i = startHandleIndex; i < handleIndex; i++)
+            {
+                PartitionRange range;
+                range.begin     = startHandleIndex;
+                range.end       = handleIndex;
+                islandRanges[i] = range;
+            }
+            startHandleIndex = handleIndex;
+            currentIsland    = islandID;
+        }
+    }
+    for (int i = startHandleIndex; i < num; i++)
+    {
+        PartitionRange range;
+        range.begin     = startHandleIndex;
+        range.end       = num;
+        islandRanges[i] = range;
+    }
+
+    const u32 numSpatialLinks = 5;
+    struct AdjInfo
+    {
+        FixedArray<u32, numSpatialLinks> neighbors;
+        FixedArray<f32, numSpatialLinks> dists;
+    };
+    StaticArray<AdjInfo> adjInfos(scratch.temp.arena, num, num);
+
+    u32 *offsets = PushArray(scratch.temp.arena, u32, num + 1);
+
+    for (int handleIndex = 0; handleIndex < num; handleIndex++)
+    {
+        Handle handle       = handles[handleIndex];
+        u32 baseIslandID    = islandIDs[handle.index];
+        u32 currentIslandID = islandIDs[handle.index];
+
+        if (islandRanges[handleIndex].end - islandRanges[handleIndex].begin >
+            MAX_CLUSTER_TRIANGLES)
+            continue;
+
+        Vec3f center = centers[handle.index];
+
+        u32 neighbors[numSpatialLinks];
+        f32 dists[numSpatialLinks];
+        for (int i = 0; i < numSpatialLinks; i++)
+        {
+            neighbors[i] = ~0u;
+            dists[i]     = pos_inf;
+        }
+        for (int direction = -1; direction <= 1; direction += 2)
+        {
+            int currentHandleIndex = handleIndex + direction;
+            for (int i = 0; i < 16; i++)
+            {
+                if (currentHandleIndex > num - 1 || currentHandleIndex < 0) break;
+
+                Handle neighborHandle = handles[currentHandleIndex];
+                u32 islandID          = islandIDs[neighborHandle.index];
+
+                if (islandID != baseIslandID)
+                {
+                    Vec3f neighborCenter = centers[neighborHandle.index];
+
+                    f32 distSqr = LengthSquared(center - neighborCenter);
+                    u32 index   = neighborHandle.index;
+                    for (int i = 0; i < numSpatialLinks; i++)
+                    {
+                        if (distSqr < dists[i])
+                        {
+                            Swap(distSqr, dists[i]);
+                            Swap(index, neighbors[i]);
+                        }
+                    }
+                    currentHandleIndex += direction;
+                }
+                else
+                {
+                    currentHandleIndex = direction == 1
+                                             ? islandRanges[currentHandleIndex].end
+                                             : islandRanges[currentHandleIndex].begin - 1;
+                }
+            }
+        }
+
+        for (int i = 0; i < numSpatialLinks; i++)
+        {
+            if (neighbors[i] != ~0u)
+            {
+                if (graphNeighbors[handle.index].AddUnique(neighbors[i]))
+                {
+                    weights[handle.index].Push(1);
+                }
+
+                if (graphNeighbors[neighbors[i]].AddUnique(handle.index))
+                {
+                    weights[neighbors[i]].Push(1);
+                }
+            }
+        }
+    }
+}
+
 static ClusterBuilder GenerateValidClusters(Arena *arena, PrimRef *newPrimRefs,
                                             RecordAOSSplits &r, u32 *indices,
                                             StaticArray<CompressedVoxel> *bricks = 0)
@@ -2473,10 +2626,6 @@ struct ClusterData
     Array<int> neighbors;
     Array<int> weights;
     StaticArray<int> externalEdges;
-
-    int numEdgeNeighbors;
-    // int numExternalEdges;
-    // int numNeighbors;
 };
 
 static void GetBrickMax(u64 bitMask, Vec3u &maxP)
@@ -2639,6 +2788,15 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     //     return;
     // }
 
+    const u32 minGroupSize = 8;
+    const u32 maxGroupSize = 32;
+
+    for (u32 i = 0; i < numMeshes; i++)
+    {
+        Assert(meshes[i].numIndices % 3 == 0);
+        meshes[i].numFaces = meshes[i].numIndices / 3;
+    }
+
     const u32 numAttributes = 0;
 
     auto GetVertexData = [numAttributes](f32 *ptr, u32 index) {
@@ -2740,8 +2898,22 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
         primRefs[primRefIndex].geomID = currentMesh;
     }
 
+    u32 hashSize = NextPowerOfTwo(combinedMesh.numIndices);
+    HashIndex cornerHash(scratch.temp.arena, hashSize, hashSize);
+    for (u32 index = 0; index < combinedMesh.numIndices; index++)
+    {
+        Vec3f pos = combinedMesh.p[combinedMesh.indices[index]];
+        int hashP = Hash(pos);
+
+        cornerHash.AddInHash(hashP, index);
+    }
+
     ClusterBuilder clusterBuilder =
         GenerateValidClusters(scratch.temp.arena, primRefs, record, indexData);
+
+    GraphPartitionResult result = PartitionTriangles(
+        scratch.temp.arena, cornerHash, (f32 *)combinedMesh.p, combinedMesh.indices,
+        combinedMesh.numFaces, 0, MAX_CLUSTER_TRIANGLES);
 
     Array<Cluster> clusters(scratch.temp.arena, totalClustersEstimate);
     Array<ClusterGroup> clusterGroups(scratch.temp.arena, totalGroupsEstimate);
@@ -2829,7 +3001,9 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     }
 
     Bounds bounds;
-    clusterBuilder.CreateDGFs(materialIndices, buildDatas[0], combinedMesh, bounds);
+
+    // for (
+    buildDatas[0].WriteTriangleData(?, combinedMesh, materialIndices);
 
     u32 depth = 0;
     {
@@ -2905,11 +3079,12 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                 }
             });
 
-            StaticArray<u32> clusterNeighborCounts(scratch.temp.arena, numClusters,
-                                                   numClusters);
-
-            StaticArray<ClusterData> clusterDatas(scratch.temp.arena, numClusters,
-                                                  numClusters);
+            StaticArray<Array<int>> clusterNeighbors(scratch.temp.arena, numClusters,
+                                                     numClusters);
+            StaticArray<Array<int>> clusterEdgeWeights(scratch.temp.arena, numClusters,
+                                                       numClusters);
+            StaticArray<StaticArray<int>> clusterExternalEdges(scratch.temp.arena, numClusters,
+                                                               numClusters);
 
             const int numSpatialLinks = 5;
             u32 numAttributes         = 0;
@@ -2954,11 +3129,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
                 if (neighbors.Length() == 0)
                 {
-                    clusterDatas[clusterIndex] = {};
-                    clusterDatas[clusterIndex].neighbors =
-                        Array<int>(arena, 2 * numSpatialLinks);
-                    clusterDatas[clusterIndex].weights =
-                        Array<int>(arena, 2 * numSpatialLinks);
+                    clusterNeighbors[clusterIndex]   = Array<int>(arena, 2 * numSpatialLinks);
+                    clusterEdgeWeights[clusterIndex] = Array<int>(arena, 2 * numSpatialLinks);
                     return;
                 }
 
@@ -2984,20 +3156,19 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                     weights[compactedNumNeighbors]++;
                 }
                 compactedNumNeighbors++;
-                ClusterData &clusterData   = clusterDatas[clusterIndex];
-                clusterData.neighbors      = Array<int>(arena, compactedNumNeighbors);
-                clusterData.neighbors.size = compactedNumNeighbors;
-                clusterData.weights        = Array<int>(arena, compactedNumNeighbors);
-                clusterData.weights.size   = compactedNumNeighbors;
-                clusterData.externalEdges =
-                    StaticArray<int>(arena, numNeighbors, numNeighbors);
-                clusterData.numEdgeNeighbors = compactedNumNeighbors;
 
-                MemoryCopy(clusterData.neighbors.data, neighbors.data,
+                clusterNeighbors[clusterIndex]      = Array<int>(arena, compactedNumNeighbors);
+                clusterNeighbors[clusterIndex].size = compactedNumNeighbors;
+                clusterEdgeWeights[clusterIndex]    = Array<int>(arena, compactedNumNeighbors);
+                clusterEdgeWeights[clusterIndex].size = compactedNumNeighbors;
+                clusterExternalEdges[clusterIndex] =
+                    StaticArray<int>(arena, numNeighbors, numNeighbors);
+
+                MemoryCopy(clusterNeighbors[clusterIndex].data, neighbors.data,
                            sizeof(int) * compactedNumNeighbors);
-                MemoryCopy(clusterData.weights.data, weights,
+                MemoryCopy(clusterEdgeWeights[clusterIndex].data, weights,
                            sizeof(int) * compactedNumNeighbors);
-                MemoryCopy(clusterData.externalEdges.data, externalEdges.data,
+                MemoryCopy(clusterExternalEdges[clusterIndex].data, externalEdges.data,
                            sizeof(int) * numNeighbors);
             });
 
@@ -3014,10 +3185,9 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                 Cluster &cluster = levelClusters[clusterIndex];
                 totalBounds.Extend(cluster.record.geomBounds);
             }
-            Vec3f scale = 1023.f / ToVec3f(totalBounds.maxP - totalBounds.minP);
-            Vec3f minP  = ToVec3f(totalBounds.minP);
-            StaticArray<Handle> handles(scratch.temp.arena, levelClusters.Length(),
-                                        levelClusters.Length());
+
+            StaticArray<Vec3f> clusterCenters(scratch.temp.arena, levelClusters.Length(),
+                                              levelClusters.Length());
 
             ParallelFor(
                 0, levelClusters.Length(), 4096, 4096, [&](u32 jobID, u32 start, u32 count) {
@@ -3027,182 +3197,20 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                         Cluster &cluster = levelClusters[clusterIndex];
                         Vec3f center = ToVec3f(Bounds(cluster.record.geomBounds).Centroid());
 
-                        Vec3i quantized = Vec3i((center - minP) * scale);
-                        u32 morton      = MortonCode3(quantized.x) |
-                                     (MortonCode3(quantized.y) << 1) |
-                                     (MortonCode3(quantized.z) << 2);
-
-                        Handle handle;
-                        handle.sortKey        = morton;
-                        handle.index          = clusterIndex;
-                        handles[clusterIndex] = handle;
+                        clusterCenters[clusterIndex] = center;
                     }
                 });
 
-            SortHandles(handles.data, handles.Length());
-
-            StaticArray<u32> islandIDs(scratch.temp.arena, levelClusters.Length(),
-                                       levelClusters.Length());
-            BitVector visited(scratch.temp.arena, levelClusters.Length());
-            u32 numIslands = 0;
-
-            StaticArray<u32> stack(scratch.temp.arena, levelClusters.Length());
-            for (int clusterIndex = 0; clusterIndex < levelClusters.Length(); clusterIndex++)
-            {
-                stack.Empty();
-                u32 islandIndex = numIslands;
-                if (!visited.GetBit(clusterIndex))
-                {
-                    numIslands++;
-                    visited.SetBit(clusterIndex);
-                    stack.Push(clusterIndex);
-                }
-                while (stack.Length())
-                {
-                    u32 neighbor        = stack.Pop();
-                    islandIDs[neighbor] = islandIndex;
-                    ClusterData &data   = clusterDatas[neighbor];
-                    for (u32 neighborNeighbor : data.neighbors)
-                    {
-                        if (!visited.GetBit(neighborNeighbor))
-                        {
-                            visited.SetBit(neighborNeighbor);
-                            stack.Push(neighborNeighbor);
-                        }
-                    }
-                }
-            }
-
-            if (numIslands > 1)
-            {
-                Arena *arena = arenas[GetThreadIndex()];
-                StaticArray<Range> islandRanges(scratch.temp.arena, numClusters, numClusters);
-                u32 currentIsland    = islandIDs[handles[0].index];
-                int startHandleIndex = 0;
-                for (int handleIndex = 1; handleIndex < numClusters; handleIndex++)
-                {
-                    Handle handle    = handles[handleIndex];
-                    Cluster &cluster = levelClusters[handle.index];
-                    u32 islandID     = islandIDs[handle.index];
-
-                    if (islandID != currentIsland)
-                    {
-                        for (int i = startHandleIndex; i < handleIndex; i++)
-                        {
-                            Range range;
-                            range.begin     = startHandleIndex;
-                            range.end       = handleIndex;
-                            islandRanges[i] = range;
-                        }
-                        startHandleIndex = handleIndex;
-                        currentIsland    = islandID;
-                    }
-                }
-                for (int i = startHandleIndex; i < numClusters; i++)
-                {
-                    Range range;
-                    range.begin     = startHandleIndex;
-                    range.end       = numClusters;
-                    islandRanges[i] = range;
-                }
-
-                struct ClusterDistInfo
-                {
-                    FixedArray<u32, numSpatialLinks> neighbors;
-                    FixedArray<f32, numSpatialLinks> dists;
-                };
-
-                StaticArray<ClusterDistInfo> clusterDistInfos(scratch.temp.arena, numClusters);
-
-                for (int handleIndex = 0; handleIndex < numClusters; handleIndex++)
-                {
-                    Handle handle            = handles[handleIndex];
-                    Cluster &cluster         = levelClusters[handle.index];
-                    u32 baseIslandID         = islandIDs[handle.index];
-                    u32 currentIslandID      = islandIDs[handle.index];
-                    ClusterData &clusterData = clusterDatas[handle.index];
-
-                    if (islandRanges[handleIndex].end - islandRanges[handleIndex].begin >
-                        MAX_CLUSTER_TRIANGLES)
-                        continue;
-
-                    Vec3f center = ToVec3f(Bounds(cluster.record.geomBounds).Centroid());
-
-                    u32 neighbors[numSpatialLinks];
-                    f32 dists[numSpatialLinks];
-                    for (int i = 0; i < numSpatialLinks; i++)
-                    {
-                        neighbors[i] = ~0u;
-                        dists[i]     = pos_inf;
-                    }
-                    for (int direction = -1; direction <= 1; direction += 2)
-                    {
-                        int currentHandleIndex = handleIndex + direction;
-                        for (int i = 0; i < 16; i++)
-                        {
-                            if (currentHandleIndex > levelClusters.Length() - 1 ||
-                                currentHandleIndex < 0)
-                                break;
-
-                            Handle neighborHandle = handles[currentHandleIndex];
-
-                            u32 islandID = islandIDs[neighborHandle.index];
-
-                            if (islandID != baseIslandID)
-                            {
-                                Vec3f neighborCenter = ToVec3f(
-                                    Bounds(
-                                        levelClusters[neighborHandle.index].record.geomBounds)
-                                        .Centroid());
-
-                                f32 distSqr = LengthSquared(center - neighborCenter);
-                                u32 index   = neighborHandle.index;
-                                for (int i = 0; i < numSpatialLinks; i++)
-                                {
-                                    if (distSqr < dists[i])
-                                    {
-                                        Swap(distSqr, dists[i]);
-                                        Swap(index, neighbors[i]);
-                                    }
-                                }
-                                currentHandleIndex += direction;
-                            }
-                            else
-                            {
-                                currentHandleIndex =
-                                    direction == 1
-                                        ? islandRanges[currentHandleIndex].end
-                                        : islandRanges[currentHandleIndex].begin - 1;
-                            }
-                        }
-                    }
-
-                    for (int i = 0; i < numSpatialLinks; i++)
-                    {
-                        if (neighbors[i] != ~0u)
-                        {
-                            if (clusterData.neighbors.AddUnique(neighbors[i]))
-                            {
-                                clusterData.weights.Push(1);
-                            }
-
-                            ClusterData &neighbor = clusterDatas[neighbors[i]];
-                            if (neighbor.neighbors.AddUnique(handle.index))
-                            {
-                                neighbor.weights.Push(1);
-                            }
-                        }
-                    }
-                }
-            }
+            AddSpatialLinks(scratch.temp.arena, levelClusters.Length(), totalBounds,
+                            clusterCenters, clusterNeighbors, clusterEdgeWeights);
 
             GraphPartitionResult partitionResult;
             if (numClusters <= maxGroupSize)
             {
-                partitionResult.ranges = StaticArray<Range>(scratch.temp.arena, 1);
+                partitionResult.ranges = StaticArray<PartitionRange>(scratch.temp.arena, 1);
                 partitionResult.clusterIndices =
                     StaticArray<int>(scratch.temp.arena, numClusters);
-                partitionResult.ranges.Push(Range{0, numClusters});
+                partitionResult.ranges.Push(PartitionRange{0, numClusters});
 
                 for (int i = 0; i < numClusters; i++)
                 {
@@ -3221,8 +3229,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
                 for (int clusterIndex = 0; clusterIndex < numClusters; clusterIndex++)
                 {
-                    ClusterData &data             = clusterDatas[clusterIndex];
-                    u32 num                       = data.neighbors.Length();
+                    u32 num                       = clusterNeighbors[clusterIndex].Length();
                     clusterOffsets1[clusterIndex] = totalNumNeighbors;
                     totalNumNeighbors += num;
                 }
@@ -3235,23 +3242,27 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                     for (int clusterIndex = start; clusterIndex < start + count;
                          clusterIndex++)
                     {
-                        const ClusterData &cluster = clusterDatas[clusterIndex];
-                        i32 offset                 = clusterOffsets1[clusterIndex];
-                        Assert(cluster.neighbors.Length() == cluster.weights.Length());
-                        MemoryCopy(clusterData + offset, cluster.neighbors.data,
-                                   sizeof(int) * cluster.neighbors.Length());
-                        MemoryCopy(clusterWeights + offset, cluster.weights.data,
-                                   sizeof(int) * cluster.weights.Length());
+                        i32 offset = clusterOffsets1[clusterIndex];
 
-                        clusterOffsets1[clusterIndex] += cluster.neighbors.Length();
+                        u32 numNeighbors = clusterNeighbors[clusterIndex].Length();
+                        Assert(numNeighbors == clusterEdgeWeights[clusterIndex].Length());
+
+                        MemoryCopy(clusterData + offset, clusterNeighbors[clusterIndex].data,
+                                   sizeof(int) * numNeighbors);
+                        MemoryCopy(clusterWeights + offset,
+                                   clusterEdgeWeights[clusterIndex].data,
+                                   sizeof(int) * numNeighbors);
+
+                        clusterOffsets1[clusterIndex] += numNeighbors;
                     }
                 });
 
                 // Recursively partition the clusters into two groups until each group
                 // satisfies constraints
-                partitionResult =
-                    RecursivePartitionGraph(scratch.temp.arena, clusterOffsets, clusterData,
-                                            clusterWeights, numClusters, totalNumNeighbors);
+
+                partitionResult = RecursivePartitionGraph(
+                    scratch.temp.arena, clusterOffsets, clusterData, clusterWeights,
+                    numClusters, totalNumNeighbors, minGroupSize, maxGroupSize);
 
                 BitVector clusterOnce(scratch.temp.arena, numClusters);
                 for (int i = 0; i < numClusters; i++)
@@ -3268,7 +3279,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
             for (int groupIndex = 0; groupIndex < partitionResult.ranges.Length();
                  groupIndex++)
             {
-                Range &range = partitionResult.ranges[groupIndex];
+                PartitionRange &range = partitionResult.ranges[groupIndex];
                 for (int i = range.begin; i < range.end; i++)
                 {
                     clusterToGroupID[partitionResult.clusterIndices[i]] = groupIndex;
@@ -3295,7 +3306,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                     Arena *arena    = arenas[threadIndex];
                     ScratchArena scratch;
 
-                    Range range           = partitionResult.ranges[groupIndex];
+                    PartitionRange range  = partitionResult.ranges[groupIndex];
                     u32 groupNumTriangles = 0;
 
                     for (int clusterIndexIndex = range.begin; clusterIndexIndex < range.end;
@@ -3401,6 +3412,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                         }
                     }
                     Assert(triangleCount == groupNumTriangles);
+                    Assert(indexCount == groupNumTriangles * 3);
 
                     // Calculate the average surface area of all the triangles
                     f32 totalSurfaceArea = 0.f;
@@ -3424,7 +3436,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
                     for (u32 triangleIndex = 0; triangleIndex < triangleCount; triangleIndex++)
                     {
-                        FixedArray<u32, 128> stack;
+                        StaticArray<u32> stack(scratch.temp.arena, triangleCount);
                         u32 islandIndex = numIslands;
                         if (!visited.GetBit(triangleIndex))
                         {
@@ -3460,7 +3472,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
                     Mesh simplifiedMesh = {};
                     f32 simplifyError   = pos_inf;
-                    if (indexCount)
+                    if (indexCount && clusterTotalVoxelCount == 0)
                     {
                         // Normalize the positions
                         struct Float
@@ -3517,11 +3529,11 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                         {
                             int clusterIndex =
                                 partitionResult.clusterIndices[clusterIndexIndex];
-                            u32 groupID              = clusterToGroupID[clusterIndex];
-                            const Cluster &cluster   = levelClusters[clusterIndex];
-                            ClusterData &clusterData = clusterDatas[clusterIndex];
+                            u32 groupID            = clusterToGroupID[clusterIndex];
+                            const Cluster &cluster = levelClusters[clusterIndex];
+                            auto &externalEdges    = clusterExternalEdges[clusterIndex];
 
-                            for (int edgeIndex : clusterData.externalEdges)
+                            for (int edgeIndex : externalEdges)
                             {
                                 Edge &edge = edges[edgeIndex];
                                 if (clusterToGroupID[edge.clusterIndex] != groupID)
@@ -3561,20 +3573,22 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                         numIndices.fetch_add(simplifiedMesh.numIndices);
                     }
 
+                    // Persists to future clusters
+                    StaticArray<CompressedVoxel> compressedVoxels;
+
+                    // Temp
                     StaticArray<Voxel> voxels;
                     StaticArray<Vec3i> extraVoxels;
-                    StaticArray<CompressedVoxel> compressedVoxels;
                     Graph<Vec3i> groupExtraVoxels;
                     Mesh voxelMesh = {};
                     StaticArray<u32> voxelGeomIDs;
-                    f32 error = 0.f;
+                    f32 error    = 0.f;
+                    u32 numSlots = NextPowerOfTwo(groupNumTriangles + clusterTotalVoxelCount);
 
                     if (numIslands > 1 || hasVoxels)
                     {
                         u32 targetNumBricks =
                             (range.end - range.begin) * MAX_CLUSTER_TRIANGLES;
-                        u32 numSlots =
-                            NextPowerOfTwo(groupNumTriangles + clusterTotalVoxelCount);
                         Assert(numSlots);
 
                         while (voxelSize < simplifyError)
@@ -3584,8 +3598,9 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                             // Gather voxels
                             if (groupNumTriangles)
                             {
-                                VoxelizeTriangles(arena, voxelHashSet, groupVertices, indices,
-                                                  groupNumTriangles, numAttributes, voxelSize);
+                                VoxelizeTriangles(scratch.temp.arena, voxelHashSet,
+                                                  groupVertices, indices, groupNumTriangles,
+                                                  numAttributes, voxelSize);
                             }
 
                             for (int clusterIndexIndex = range.begin;
@@ -3662,13 +3677,14 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                                 }
                             }
 
-                            CheckVoxelOccupancy(arena, &scene, voxelHashSet, voxels,
-                                                extraVoxels, voxelSize);
+                            CheckVoxelOccupancy(scratch.temp.arena, &scene, voxelHashSet,
+                                                voxels, extraVoxels, voxelSize);
 
                             if (voxels.Length())
                             {
-                                voxelMesh = CompressVoxels(arena, voxels, voxelGeomIDs,
-                                                           compressedVoxels, voxelSize);
+                                voxelMesh =
+                                    CompressVoxels(scratch.temp.arena, voxels, voxelGeomIDs,
+                                                   compressedVoxels, voxelSize);
                                 // Print("num bricks: %u\n", compressedVoxels.Length());
                             }
 
@@ -3677,7 +3693,6 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                             {
                                 break;
                             }
-                            // Print("again\n");
                             voxelSize *= 1.1f;
                         }
                         if (voxelSize < simplifyError)
@@ -3690,8 +3705,84 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                             error = simplifyError;
                             compressedVoxels.Clear();
                             voxels.Clear();
+                            voxelMesh = {};
                         }
                     }
+
+                    if (compressedVoxels.Length())
+                    {
+                        StaticArray<CompressedVoxel> newCompressedVoxels(
+                            arena, compressedVoxels.Length());
+                        Copy(newCompressedVoxels, compressedVoxels);
+                        compressedVoxels = newCompressedVoxels;
+                    }
+
+#if 0
+                    if (voxelMesh.numFaces == 0)
+                    {
+                        SimpleHashSet<Vec3i> voxelHashSet(scratch.temp.arena, numSlots);
+
+                        if (depth == 0)
+                        {
+                            Assert(groupNumTriangles);
+                            VoxelizeTriangles(arena, voxelHashSet, groupVertices, indices,
+                                              groupNumTriangles, numAttributes, voxelSize);
+                        }
+                        f32 rcpVoxelSize = 1.f / voxelSize;
+
+                        for (int clusterIndexIndex = range.begin;
+                             clusterIndexIndex < range.end; clusterIndexIndex++)
+                        {
+                            int clusterIndex =
+                                partitionResult.clusterIndices[clusterIndexIndex];
+                            Cluster &cluster         = levelClusters[clusterIndex];
+                            ClusterGroup &childGroup = clusterGroups[cluster.childGroupIndex];
+
+                            if (!childGroup.extraVoxels.data) continue;
+                            u32 clusterLocalIndex = cluster.clusterInChildGroupIndex;
+                            for (u32 voxelIndex =
+                                     childGroup.extraVoxels.offsets[clusterLocalIndex];
+                                 voxelIndex <
+                                 childGroup.extraVoxels.offsets[clusterLocalIndex + 1];
+                                 voxelIndex++)
+
+                            {
+                                Vec3i voxel = childGroup.extraVoxels.data[voxelIndex];
+
+                                Vec3i minVoxel = Vec3i(
+                                    Floor(Vec3f(voxel) * cluster.lodError * rcpVoxelSize));
+                                Vec3i maxVoxel = Vec3i(
+                                    Floor(Vec3f(voxel + 1) * cluster.lodError * rcpVoxelSize));
+
+                                for (int x = minVoxel.x; x <= maxVoxel.x; x++)
+                                {
+                                    for (int y = minVoxel.y; y <= maxVoxel.y; y++)
+                                    {
+                                        for (int z = minVoxel.z; z <= maxVoxel.z; z++)
+                                        {
+                                            Vec3i p  = Vec3i(x, y, z);
+                                            int hash = Hash(p);
+                                            voxelHashSet.AddUnique(scratch.temp.arena, hash,
+                                                                   Vec3i(x, y, z));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        extraVoxels = StaticArray<Vec3i>(arena, voxelHashSet.totalCount);
+                        for (u32 slotIndex = 0; slotIndex < voxelHashSet.numSlots; slotIndex++)
+                        {
+                            auto *node = &voxelHashSet.nodes[slotIndex];
+                            while (node->next)
+                            {
+                                extraVoxels.Push(node->value);
+                                node = node->next;
+                            }
+                        }
+                        Print("works: %u %u\n", depth, extraVoxels.Length());
+                    }
+#endif
 
                     // Split the simplified meshes into clusters
                     u32 numFaces            = simplifiedMesh.numIndices / 3;
@@ -3710,6 +3801,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                                       record, voxelSize);
 
                     u32 totalNumPrimRefs = numFaces + compressedVoxels.Length();
+                    ErrorExit(totalNumPrimRefs > 0, "%f %f\n", simplifyError, voxelSize);
                     record.SetRange(0, totalNumPrimRefs);
 
                     for (int primRefIndex = 0; primRefIndex < numFaces; primRefIndex++)
@@ -3726,7 +3818,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                     u32 maxNumTriangles = MAX_CLUSTER_TRIANGLES;
 
                     ClusterBuilder clusterBuilder = GenerateValidClusters(
-                        arena, newPrimRefs, record, simplifiedMesh.indices, &compressedVoxels);
+                        arena, newPrimRefs, record, simplifiedMesh.indices,
+                        compressedVoxels.Length() ? &compressedVoxels : 0);
 
                     u32 numParentClusters = 0;
                     for (auto &list : clusterBuilder.threadClusters)
@@ -3878,7 +3971,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                 });
 
             // Write obj to disk
-#if 1
+#if 0
             u32 vertexCount = numVertices.load();
             u32 indexCount  = numIndices.load();
             u32 voxelCount  = numVoxels.load();
@@ -3920,7 +4013,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
             };
 
             // for (int clusterIndex = totalNumClusters;
-            //      clusterIndex < totalNumClusters + numLevelClusters.load(); clusterIndex++)
+            //      clusterIndex < totalNumClusters + numLevelClusters.load();
+            //      clusterIndex++)
             // {
             //     Cluster &cluster         = clusters[clusterIndex];
             //     RecordAOSSplits &record  = cluster.record;
@@ -3932,9 +4026,9 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
             //         {
             //             u32 index       = childGroup.indices[3 * i + vertIndex];
             //             f32 *data       = childGroup.vertexData + (3 + numAttributes) *
-            //             index; Vec3f p         = *(Vec3f *)data; int hash        = Hash(p);
-            //             int vertexIndex = -1;
-            //             for (int hashIndex = vertexHash.FirstInHash(hash); hashIndex != -1;
+            //             index; Vec3f p         = *(Vec3f *)data; int hash        =
+            //             Hash(p); int vertexIndex = -1; for (int hashIndex =
+            //             vertexHash.FirstInHash(hash); hashIndex != -1;
             //                  hashIndex     = vertexHash.NextInHash(hashIndex))
             //             {
             //                 if (levelMesh.p[hashIndex] == p)
@@ -4037,7 +4131,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
             for (int groupIndex = 0; groupIndex < partitionResult.ranges.Length();
                  groupIndex++)
             {
-                Range &range            = partitionResult.ranges[groupIndex];
+                PartitionRange &range   = partitionResult.ranges[groupIndex];
                 ClusterGroup &group     = clusterGroups[totalNumGroups + groupIndex];
                 group.clusterStartIndex = prevClusterArrayEnd + range.begin;
                 group.clusterCount      = range.end - range.begin;
@@ -4059,8 +4153,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
             for (int groupIndex = 0; groupIndex < partitionResult.ranges.Length();
                  groupIndex++)
             {
-                Range &range        = partitionResult.ranges[groupIndex];
-                ClusterGroup &group = clusterGroups[totalNumGroups + groupIndex];
+                PartitionRange &range = partitionResult.ranges[groupIndex];
+                ClusterGroup &group   = clusterGroups[totalNumGroups + groupIndex];
 
                 u32 newStartIndex = clusterOffset;
                 for (int parentIndex = group.parentStartIndex;
@@ -4819,6 +4913,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
     OS_UnmapFile(builder.ptr);
     OS_ResizeFile(builder.filename, builder.totalSize);
+
+    ReleaseArenaArray(arenas);
 }
 
 struct ClusterInfo

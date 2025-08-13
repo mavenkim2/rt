@@ -185,6 +185,8 @@ struct alignas(CACHE_LINE_SIZE) RecordAOSSplits
 
     RecordAOSSplits() {}
     RecordAOSSplits(NegInfTy) : geomBounds(neg_inf), centBounds(neg_inf) {}
+
+    RecordAOSSplits(const RecordAOSSplits& other) : geomBounds(other.geomBounds), centBounds(other.centBounds) {}
     __forceinline RecordAOSSplits &operator=(const RecordAOSSplits &other)
     {
         geomBounds = other.geomBounds;
@@ -488,9 +490,8 @@ struct QuantizedNode
         if constexpr (N == 4)
         {
             Lane8F32 lane1 = Abs(Lane8F32::LoadU(children));
-            Lane8F32 r1 = Shuffle<0, 2, 4, 6, 0, 0, 0, 0>(lane1 > compare);
+            Lane8F32 r1    = Shuffle<0, 2, 4, 6, 0, 0, 0, 0>(lane1 > compare);
             return Extract4<0>(r1);
-
         }
         else
         {
@@ -770,7 +771,8 @@ struct Triangle : LeafPrim<N>
         Mesh *meshes = (Mesh *)scene->primitives;
         for (u32 i = 0; i < N; i++)
         {
-            Assert(this->geomIDs[i] < scene->numPrimitives);
+            ErrorExit(this->geomIDs[i] < scene->numPrimitives, "%u %u\n", this->geomIDs[i],
+                      scene->numPrimitives);
             Mesh *mesh = meshes + this->geomIDs[i];
             u32 indices[3];
             if (mesh->indices)

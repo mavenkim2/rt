@@ -5,6 +5,7 @@
 #include "bvh/bvh_aos.h"
 #include "bvh/bvh_types.h"
 #include "math/math.h"
+#include "math/vec2.h"
 #include "shader_interop/dense_geometry_shaderinterop.h"
 #include "shader_interop/ray_shaderinterop.h"
 #include "parallel.h"
@@ -18,20 +19,8 @@
 namespace rt
 {
 
-ClusterBuilder::ClusterBuilder(Arena *arena, PrimRef *primRefs) : primRefs(primRefs)
+namespace ClusterBuilder
 {
-    typedef HeuristicObjectBinning<PrimRef> Heuristic;
-    u32 numProcessors = OS_NumProcessors();
-    arenas            = GetArenaArray(arena);
-    threadClusters =
-        StaticArray<ClusterList>(arenas[GetThreadIndex()], numProcessors, numProcessors);
-    for (u32 i = 0; i < numProcessors; i++)
-    {
-        threadClusters[i].l = ChunkedLinkedList<RecordAOSSplits>(arenas[i]);
-    }
-
-    h = PushStructConstruct(arena, Heuristic)(primRefs);
-}
 
 DenseGeometryBuildData::DenseGeometryBuildData()
 {
@@ -52,11 +41,11 @@ DenseGeometryBuildData::DenseGeometryBuildData()
     debugRestartHighBitPerDword = ChunkedLinkedList<u32>(arena);
 }
 
-void ClusterBuilder::BuildClusters(RecordAOSSplits &record, bool parallel, u32 maxTriangles)
+typedef HeuristicObjectBinning<PrimRef> Heuristic;
+static void BuildClusters(StaticArray<RecordAOSSplits> &records, RecordAOSSplits &record,
+                          Heuristic *heuristic, u32 maxTriangles)
 {
-    typedef HeuristicObjectBinning<PrimRef> Heuristic;
-    auto *heuristic = (Heuristic *)h;
-    const int N     = 4;
+    const int N = 4;
     Assert(record.count > 0);
 
     RecordAOSSplits childRecords[N];
@@ -66,8 +55,7 @@ void ClusterBuilder::BuildClusters(RecordAOSSplits &record, bool parallel, u32 m
 
     if (record.count <= maxTriangles)
     {
-        u32 threadIndex                         = GetThreadIndex();
-        threadClusters[threadIndex].l.AddBack() = record;
+        records.Push(record);
         heuristic->FlushState(split);
         return;
     }
@@ -100,155 +88,399 @@ void ClusterBuilder::BuildClusters(RecordAOSSplits &record, bool parallel, u32 m
         childRecords[bestChild] = out;
     }
 
-    if (parallel)
+    for (u32 i = 0; i < numChildren; i++)
     {
-        scheduler.ScheduleAndWait(numChildren, 1, [&](u32 jobID) {
-            bool childParallel = childRecords[jobID].count >= PARALLEL_THRESHOLD;
-            BuildClusters(childRecords[jobID], childParallel, maxTriangles);
-        });
+        BuildClusters(records, childRecords[i], heuristic, maxTriangles);
+    }
+
+    // if (parallel)
+    // {
+    //     scheduler.ScheduleAndWait(numChildren, 1, [&](u32 jobID) {
+    //         bool childParallel = childRecords[jobID].count >= PARALLEL_THRESHOLD;
+    //         BuildClusters(records, childRecords[jobID], heuristic, childParallel,
+    //         maxTriangles);
+    //     });
+    // }
+    // else
+    // {
+    // }
+}
+
+StaticArray<RecordAOSSplits> BuildClusters(Arena *arena, PrimRef *primRefs,
+                                           RecordAOSSplits &record, u32 maxTriangles,
+                                           u32 maxClusters)
+{
+    StaticArray<RecordAOSSplits> records(arena, maxClusters);
+    Heuristic *h = PushStructConstruct(arena, Heuristic)(primRefs);
+
+    BuildClusters(records, record, h, maxTriangles);
+    return records;
+}
+
+// ClusterIndices ClusterBuilder::GetClusterIndices(Arena *arena, RecordAOSSplits &record)
+// {
+//     u32 voxelRefCount = 0;
+//     for (int index = record.start; index < record.start + record.count; index++)
+//     {
+//         PrimRef &ref = primRefs[index];
+//         voxelRefCount += ref.primID >= 0x80000000u;
+//     }
+//     u32 triangleRefCount = record.count - voxelRefCount;
+//
+//     ClusterIndices indices = {};
+//     if (triangleRefCount)
+//     {
+//         indices.triangleIndices = StaticArray<Vec2u>(arena, triangleRefCount);
+//     }
+//     if (voxelRefCount)
+//     {
+//         indices.brickIndices = StaticArray<u32>(arena, voxelRefCount);
+//     }
+//
+//     u32 triangleRefOffset = 0;
+//     u32 voxelRefOffset    = triangleRefCount;
+//
+//     for (int index = record.start; index < record.start + record.count; index++)
+//     {
+//         PrimRef &ref = primRefs[index];
+//         bool isVoxel = ref.primID >= 0x80000000u;
+//         if (isVoxel)
+//         {
+//             Assert(ref.geomID == ~0u);
+//             indices.brickIndices.Push(ref.primID & 0x7fffffff);
+//         }
+//         else
+//         {
+//             Vec2u index;
+//             index.x = ref.primID;
+//             index.y = ref.geomID;
+//             indices.triangleIndices.Push(index);
+//         }
+//     }
+//     return indices;
+// }
+
+DGFTempResources::DGFTempResources()
+    : hasAnyNormals(false), vertexCount(0), minP(pos_inf), maxP(neg_inf), minOct(Vec2u(65536)),
+      maxOct(0), precision(6)
+{
+    Assert(precision > CLUSTER_MIN_PRECISION);
+    quantizeP = AsFloat((127 + precision) << 23);
+}
+
+void DGFTempResources::UpdatePosBounds(const Vec3f &pos)
+{
+    Vec3i p(Round(pos * quantizeP));
+    Assert(p.x != INT_MIN && p.y != INT_MIN && p.z != INT_MIN);
+
+    minP = Min(minP, p);
+    maxP = Max(maxP, p);
+}
+
+void DGFTempResources::UpdateNormalBounds(const Vec3f &normal)
+{
+    u32 octNormal = EncodeOctahedral(normal);
+    Vec2u n       = Vec2u(octNormal >> 16, octNormal & ((1 << 16) - 1));
+    minOct        = Min(minOct, n);
+    maxOct        = Max(maxOct, n);
+}
+
+void DenseGeometryBuildData::WriteVertexData(const Mesh &mesh,
+                                             const StaticArray<u32> &meshVertexIndices,
+                                             DGFTempResources &tempResources)
+{
+    Vec3u bitWidths;
+    bitWidths.x = tempResources.minP[0] == tempResources.maxP[0]
+                      ? 0
+                      : Log2Int(Max(tempResources.maxP[0] - tempResources.minP[0], 1)) + 1;
+    bitWidths.y = tempResources.minP[1] == tempResources.maxP[1]
+                      ? 0
+                      : Log2Int(Max(tempResources.maxP[1] - tempResources.minP[1], 1)) + 1;
+    bitWidths.z = tempResources.minP[2] == tempResources.maxP[2]
+                      ? 0
+                      : Log2Int(Max(tempResources.maxP[2] - tempResources.minP[2], 1)) + 1;
+
+    u32 numBits = tempResources.vertexCount * (bitWidths.x + bitWidths.y + bitWidths.z);
+    Assert(bitWidths.x < 32 && bitWidths.y < 32 && bitWidths.z < 32);
+
+    u32 vertexBitStreamSize                      = (numBits + 7) >> 3;
+    ChunkedLinkedList<u8>::ChunkNode *vertexNode = geoByteBuffer.AddNode(vertexBitStreamSize);
+
+    u32 numOctBitsX =
+        !tempResources.hasAnyNormals || tempResources.minOct[0] == tempResources.maxOct[0]
+            ? 0
+            : Log2Int(Max(tempResources.maxOct[0] - tempResources.minOct[0], 1u)) + 1;
+    u32 numOctBitsY =
+        !tempResources.hasAnyNormals || tempResources.minOct[1] == tempResources.maxOct[1]
+            ? 0
+            : Log2Int(Max(tempResources.maxOct[1] - tempResources.minOct[1], 1u)) + 1;
+
+    Assert(numOctBitsX <= 16 && numOctBitsY <= 16);
+
+    ErrorExit(
+        Abs(tempResources.minP[0]) < (1 << 23) && Abs(tempResources.minP[1]) < (1 << 23) &&
+            Abs(tempResources.minP[2]) < (1 << 23),
+        "%i %i %i\n", tempResources.minP[0], tempResources.minP[1], tempResources.minP[2]);
+
+    u32 vertexCount         = meshVertexIndices.Length();
+    u32 normalBitStreamSize = (vertexCount * (numOctBitsX + numOctBitsY) + 7) >> 3;
+    ChunkedLinkedList<u8>::ChunkNode *normalNode = 0;
+    if (normalBitStreamSize)
+    {
+        normalNode = shadingByteBuffer.AddNode(normalBitStreamSize);
+    }
+
+    Vec3f quantizeP     = tempResources.quantizeP;
+    u32 bitOffset       = 0;
+    u32 normalBitOffset = 0;
+
+    for (u32 index : meshVertexIndices)
+    {
+        Vec3i p = Vec3i(Round(mesh.p[index] * tempResources.quantizeP)) - tempResources.minP;
+        for (int axis = 0; axis < 3; axis++)
+        {
+            WriteBits((u32 *)vertexNode->values, bitOffset, p[axis], bitWidths[axis]);
+        }
+
+        if (mesh.n)
+        {
+            Vec3f &n    = mesh.n[index];
+            u32 normal  = EncodeOctahedral(n);
+            u32 normalX = (normal >> 16) - tempResources.minOct[0];
+            u32 normalY = (normal & ((1 << 16) - 1)) - tempResources.minOct[1];
+            WriteBits((u32 *)normalNode->values, normalBitOffset, normalX, numOctBitsX);
+            WriteBits((u32 *)normalNode->values, normalBitOffset, normalY, numOctBitsY);
+        }
+    }
+
+    Assert(bitOffset == numBits);
+    Assert(normalBitOffset == vertexCount * (numOctBitsX + numOctBitsY));
+
+    PackedDenseGeometryHeader &packed = tempResources.packed;
+
+    u32 headerOffset = 0;
+    packed.b = BitFieldPackI32(packed.b, tempResources.minP[0], headerOffset, ANCHOR_WIDTH);
+
+    headerOffset = 0;
+    packed.c = BitFieldPackI32(packed.c, tempResources.minP[1], headerOffset, ANCHOR_WIDTH);
+    packed.c = BitFieldPackU32(packed.c, bitWidths.x, headerOffset, 5);
+
+    headerOffset = 0;
+    packed.d = BitFieldPackI32(packed.d, tempResources.minP[2], headerOffset, ANCHOR_WIDTH);
+    packed.d = BitFieldPackU32(packed.d, tempResources.precision - CLUSTER_MIN_PRECISION,
+                               headerOffset, 8);
+
+    headerOffset = 0;
+    packed.e     = BitFieldPackU32(packed.e, vertexCount, headerOffset, 9);
+    headerOffset += 8;
+    packed.e = BitFieldPackU32(packed.e, bitWidths.y, headerOffset, 5);
+    packed.e = BitFieldPackU32(packed.e, bitWidths.z, headerOffset, 5);
+}
+
+void DenseGeometryBuildData::WriteMaterialIDs(const StaticArray<u32> &materialIndices,
+                                              DGFTempResources &tempResources)
+{
+    ScratchArena scratch;
+
+    bool constantMaterialID = true;
+    u32 materialStart       = materialIndices[0];
+
+    for (u32 materialIndex : materialIndices)
+    {
+        if (materialIndex != materialStart)
+        {
+            constantMaterialID = false;
+            break;
+        }
+    }
+
+    PackedDenseGeometryHeader &packed = tempResources.packed;
+
+    if (constantMaterialID)
+    {
+        u32 materialIndex = materialIndices[0];
+        materialIndex |= 0x80000000;
+        packed.j = materialIndex;
     }
     else
     {
-        for (u32 i = 0; i < numChildren; i++)
+        u32 commonMSBs        = 32;
+        u32 currentCommonMSBs = materialIndices[0];
+
+        u32 numUniqueMaterialIDs = 1;
+        StaticArray<u32> uniqueMaterialIDs(scratch.temp.arena, materialIndices.Length());
+        StaticArray<u32> entryIndex(scratch.temp.arena, materialIndices.Length(),
+                                    materialIndices.Length());
+
+        u32 materialIndex = materialIndices[0] & 0x7fffffff;
+        uniqueMaterialIDs.Push(materialIndex);
+        entryIndex[0] = 0;
+        for (int primIndex = 1; primIndex < materialIndices.Length(); primIndex++)
         {
-            BuildClusters(childRecords[i], false, maxTriangles);
-        }
-    }
-}
-
-ClusterIndices ClusterBuilder::GetClusterIndices(Arena *arena, RecordAOSSplits &record)
-{
-    u32 voxelRefCount = 0;
-    for (int index = record.start; index < record.start + record.count; index++)
-    {
-        PrimRef &ref = primRefs[index];
-        voxelRefCount += ref.primID >= 0x80000000u;
-    }
-    u32 triangleRefCount = record.count - voxelRefCount;
-
-    ClusterIndices indices = {};
-    if (triangleRefCount)
-    {
-        indices.triangleIndices = StaticArray<Vec2u>(arena, triangleRefCount);
-    }
-    if (voxelRefCount)
-    {
-        indices.brickIndices = StaticArray<u32>(arena, voxelRefCount);
-    }
-
-    u32 triangleRefOffset = 0;
-    u32 voxelRefOffset    = triangleRefCount;
-
-    for (int index = record.start; index < record.start + record.count; index++)
-    {
-        PrimRef &ref = primRefs[index];
-        bool isVoxel = ref.primID >= 0x80000000u;
-        if (isVoxel)
-        {
-            Assert(ref.geomID == ~0u);
-            indices.brickIndices.Push(ref.primID & 0x7fffffff);
-        }
-        else
-        {
-            Vec2u index;
-            index.x = ref.primID;
-            index.y = ref.geomID;
-            indices.triangleIndices.Push(index);
-        }
-    }
-    return indices;
-}
-
-void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
-                                DenseGeometryBuildData &buildData, Mesh &mesh,
-                                Bounds &sceneBounds, StaticArray<CompressedVoxel> *voxels,
-                                StaticArray<u32> *voxelGeomIDs)
-{
-#if 0
-    static const int b     = 24;
-    static const f32 scale = (1 << (b - 1)) - 1.f;
-    Vec3f sceneExtent      = ToVec3f(sceneBounds.maxP - sceneBounds.minP);
-
-    i32 eX = (i32)Ceil(Log2f(sceneExtent[0] / scale));
-    i32 eY = (i32)Ceil(Log2f(sceneExtent[1] / scale));
-    i32 eZ = (i32)Ceil(Log2f(sceneExtent[2] / scale));
-
-    f32 expX = AsFloat((eX + 127) << 23);
-    f32 expY = AsFloat((eY + 127) << 23);
-    f32 expZ = AsFloat((eZ + 127) << 23);
-
-    Vec3f quantize = 1.f / Vec3f(expX, expY, expZ);
-#endif
-
-    precision = 6;
-    Assert(precision > CLUSTER_MIN_PRECISION);
-    quantizeP = AsFloat((127 + precision) << 23);
-
-#if 0
-    f32 offsetMinX = maxClusterEdgeLength[0] - 16.f;
-    f32 offsetMinY = maxClusterEdgeLength[1] - 16.f;
-    f32 offsetMinZ = maxClusterEdgeLength[2] - 16.f;
-
-    static const int c = (1 << 23) - 1;
-    f32 constraintMinX = Max(-sceneBounds.minP[0], 0.f) / c;
-    f32 constraintMinY = Max(-sceneBounds.minP[1], 0.f) / c;
-    f32 constraintMinZ = Max(-sceneBounds.minP[2], 0.f) / c;
-    f32 constraintMaxX = Max(sceneBounds.maxP[0], 0.f) / (c + 1);
-    f32 constraintMaxY = Max(sceneBounds.maxP[1], 0.f) / (c + 1);
-    f32 constraintMaxZ = Max(sceneBounds.maxP[2], 0.f) / (c + 1);
-
-    eX = Max(constraintMinX, Max(constraintMaxX, Max(offsetMinX, eX)));
-    eY = Max(constraintMinY, Max(constraintMaxY, Max(offsetMinY, eY)));
-    eZ = Max(constraintMinZ, Max(constraintMaxY, Max(offsetMinZ, eZ)));
-#endif
-
-    ScratchArena meshScratch;
-
-    for (int threadIndex = 0; threadIndex < threadClusters.Length(); threadIndex++)
-    {
-        ClusterList &list = threadClusters[threadIndex];
-        for (auto *node = list.l.first; node != 0; node = node->next)
-        {
-            for (int clusterIndex = 0; clusterIndex < node->count; clusterIndex++)
+            u32 materialID = materialIndices[primIndex] & 0x7fffffff;
+            bool unique    = true;
+            for (int j = 0; j < uniqueMaterialIDs.Length(); j++)
             {
-                RecordAOSSplits &cluster = node->values[clusterIndex];
-
-                hasAnyNormals = false;
-                vertexCount   = 0;
-                minP          = pos_inf;
-                maxP          = neg_inf;
-                minOct        = Vec2u(65536);
-                maxOct        = 0;
-
-                ClusterIndices clusterIndices =
-                    GetClusterIndices(meshScratch.temp.arena, cluster);
-
-                DGFTempResources tempResources;
-                tempResources.materialIndices =
-                    Array<u32>(meshScratch.temp.arena, cluster.count);
-
-                if (clusterIndices.triangleIndices.Length())
+                if (uniqueMaterialIDs[j] == materialID)
                 {
-                    Triangles(meshScratch.temp.arena, mesh, clusterIndices.triangleIndices,
-                              materialIDs, tempResources);
-                    Assert(clusterIndices.triangleIndices.Length() ==
-                           tempResources.triangleStripTypes.Length() + 1);
+                    entryIndex[primIndex] = j;
+                    unique                = false;
+                    break;
                 }
-                if (clusterIndices.brickIndices.Length())
+            }
+            if (unique)
+            {
+                for (int bitIndex = commonMSBs; bitIndex >= 0; bitIndex--)
                 {
-                    Voxels(meshScratch.temp.arena, mesh, *voxels, clusterIndices.brickIndices,
-                           materialIDs, *voxelGeomIDs, tempResources);
+                    if ((materialID >> (32 - bitIndex)) == currentCommonMSBs)
+                    {
+                        break;
+                    }
+                    currentCommonMSBs >>= 1;
+                    commonMSBs--;
                 }
-                WriteData(mesh, tempResources, voxels, clusterIndices, buildData);
+                uniqueMaterialIDs.Push(materialID);
+                entryIndex[primIndex] = uniqueMaterialIDs.Length() - 1;
+            }
+        }
+
+        Assert(uniqueMaterialIDs.Length() > 1);
+        u32 entryBitLength = Log2Int(uniqueMaterialIDs.Length() - 1) + 1;
+
+        // Common MSBs + LSB entries + per triangle entries
+        u32 materialTableNumBits = commonMSBs +
+                                   (32 - commonMSBs) * uniqueMaterialIDs.Length() +
+                                   entryBitLength * materialIndices.Length();
+        u32 materialTableSize = (materialTableNumBits + 7) >> 3;
+        auto *table           = shadingByteBuffer.AddNode(materialTableSize);
+        u32 tableBitOffset    = 0;
+        WriteBits((u32 *)table->values, tableBitOffset, currentCommonMSBs, commonMSBs);
+        for (u32 materialID : uniqueMaterialIDs)
+        {
+            u32 lsbMaterialID = materialID & ((1 << (32 - commonMSBs)) - 1u);
+            WriteBits((u32 *)table->values, tableBitOffset, lsbMaterialID, (32 - commonMSBs));
+        }
+        for (u32 index : entryIndex)
+        {
+            WriteBits((u32 *)table->values, tableBitOffset, index, entryBitLength);
+        }
+        Assert(tableBitOffset == materialTableNumBits);
+
+        Assert(commonMSBs > 0);
+        u32 headerOffset = 0;
+
+        packed.j = BitFieldPackU32(packed.j, commonMSBs - 1, headerOffset, 5);
+        packed.j = BitFieldPackU32(packed.j, uniqueMaterialIDs.Length(), headerOffset, 5);
+        packed.j = BitFieldPackU32(packed.j, materialTableOffset, headerOffset, 22);
+    }
+}
+
+void DenseGeometryBuildData::WriteVoxelData(ArrayView<u32> &brickIndices,
+                                            StaticArray<CompressedVoxel> &voxels, Mesh &mesh,
+                                            const StaticArray<u32> &materialIDs,
+                                            StaticArray<u32> &voxelGeomIDs)
+{
+    ScratchArena scratch;
+    DGFTempResources tempResources;
+
+    tempResources.hasAnyNormals = (bool)mesh.n;
+
+    StaticArray<u32> materialIndices(scratch.temp.arena, voxelGeomIDs.Length());
+
+    u32 voxelTotal = 0;
+    for (u32 index = 0; index < brickIndices.Length(); index++)
+    {
+        u32 brickIndex         = brickIndices[index];
+        CompressedVoxel &voxel = voxels[brickIndex];
+
+        u64 bitMask      = voxel.bitMask;
+        u32 vertexOffset = voxel.vertexOffset;
+
+        u32 numVoxels = PopCount((u32)bitMask) + PopCount(bitMask >> 32u);
+
+        voxelTotal += numVoxels;
+
+        for (u32 voxelIndex = 0; voxelIndex < numVoxels; voxelIndex++)
+        {
+            u32 vertexIndex = vertexOffset + voxelIndex;
+            tempResources.UpdatePosBounds(mesh.p[vertexIndex]);
+
+            if (mesh.n)
+            {
+                Vec3f normal = mesh.n[vertexIndex];
+                tempResources.UpdateNormalBounds(normal);
             }
         }
     }
+
+    StaticArray<u32> voxelVertexIndices(scratch.temp.arena, voxelTotal);
+    StaticArray<u32> voxelClusterVertexIndices(scratch.temp.arena, voxels.Length());
+
+    voxelTotal = 0;
+    for (u32 brickIndexIndex = 0; brickIndexIndex < brickIndices.Length(); brickIndexIndex++)
+    {
+        u32 brickIndex         = brickIndices[brickIndexIndex];
+        CompressedVoxel &voxel = voxels[brickIndex];
+        u64 bitMask            = voxel.bitMask;
+
+        u32 numVoxels    = PopCount((u32)bitMask) + PopCount(bitMask >> 32u);
+        u32 vertexOffset = voxel.vertexOffset;
+
+        voxelClusterVertexIndices.Push(voxelTotal);
+        for (u32 voxelIndex = 0; voxelIndex < numVoxels; voxelIndex++)
+        {
+            u32 vertexIndex   = vertexOffset + voxelIndex;
+            u32 materialIndex = materialIDs[voxelGeomIDs[voxelTotal + voxelIndex]];
+            materialIndices.Push(materialIndex);
+            voxelVertexIndices.Push(vertexIndex);
+        }
+        voxelTotal += numVoxels;
+    }
+
+    u32 geoBaseAddress     = geoByteBuffer.Length();
+    u32 shadingBaseAddress = shadingByteBuffer.Length();
+
+    WriteVertexData(mesh, voxelVertexIndices, tempResources);
+
+    u32 brickBitOffset      = 0;
+    u32 brickOffset         = geoByteBuffer.Length();
+    u32 numCompressedVoxels = brickIndices.Length();
+
+    Assert(voxelClusterVertexIndices.Length() == numCompressedVoxels);
+    u32 brickBitStreamSize =
+        ((64 + MAX_CLUSTER_VERTICES_BIT) * numCompressedVoxels + 7u) >> 3u;
+    auto *brickNode = geoByteBuffer.AddNode(brickBitStreamSize);
+
+    for (u32 brickIndexIndex = 0; brickIndexIndex < numCompressedVoxels; brickIndexIndex++)
+    {
+        CompressedVoxel &brick = voxels[brickIndices[brickIndexIndex]];
+        WriteBits((u32 *)brickNode->values, brickBitOffset, (u32)brick.bitMask, 32);
+        WriteBits((u32 *)brickNode->values, brickBitOffset, brick.bitMask >> 32u, 32);
+        WriteBits((u32 *)brickNode->values, brickBitOffset,
+                  voxelClusterVertexIndices[brickIndexIndex], MAX_CLUSTER_VERTICES_BIT);
+    }
+
+    Assert(materialIndices.Length() == voxelVertexIndices.Length());
+    WriteMaterialIDs(materialIndices, tempResources);
+
+    PackedDenseGeometryHeader &packed = tempResources.packed;
+    packed.z                          = shadingBaseAddress;
+    packed.a                          = geoBaseAddress;
+
+    u32 headerOffset = 26;
+    packed.h         = BitFieldPackU32(packed.h, numCompressedVoxels, headerOffset, 6);
+
+    headers.AddBack() = packed;
 }
 
-void ClusterBuilder::Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &triangleIndices,
-                               const StaticArray<u32> &materialIndices,
-                               DGFTempResources &tempResources)
+void DenseGeometryBuildData::WriteTriangleData(ArrayView<Vec2u> &triangleIndices, Mesh &mesh,
+                                               StaticArray<u32> &materialIDs)
 {
+    ScratchArena scratch;
+    DGFTempResources tempResources;
+
+    StaticArray<u32> materialIndices(scratch.temp.arena, triangleIndices.Length());
+
     static const u32 LUT[] = {1, 2, 0};
     struct HashedIndex
     {
@@ -269,21 +501,18 @@ void ClusterBuilder::Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &tri
     u32 clusterNumTriangles = triangleIndices.Length();
     Assert(clusterNumTriangles <= MAX_CLUSTER_TRIANGLES);
 
-    ScratchArena clusterScratch(&arena, 1);
-
     // Maps mesh indices to cluster indices
-    HashMap<HashedIndex> vertexHashSet(clusterScratch.temp.arena,
+    HashMap<HashedIndex> vertexHashSet(scratch.temp.arena,
                                        NextPowerOfTwo(clusterNumTriangles * 3));
 
-    StaticArray<u32> vertexIndices(clusterScratch.temp.arena, clusterNumTriangles * 3,
+    StaticArray<u32> vertexIndices(scratch.temp.arena, clusterNumTriangles * 3,
                                    clusterNumTriangles * 3);
-    StaticArray<u32> geomIDs(clusterScratch.temp.arena, clusterNumTriangles);
-    tempResources.clusterVertexIndexToMeshVertexIndex =
-        StaticArray<u32>(arena, MAX_CLUSTER_VERTICES);
-    auto &clusterVertexIndexToMeshVertexIndex =
-        tempResources.clusterVertexIndexToMeshVertexIndex;
+    StaticArray<u32> geomIDs(scratch.temp.arena, clusterNumTriangles);
+    StaticArray<u32> clusterVertexIndexToMeshVertexIndex(scratch.temp.arena,
+                                                         MAX_CLUSTER_VERTICES);
 
-    u32 indexCount = 0;
+    u32 vertexCount = 0;
+    u32 indexCount  = 0;
 
     auto GetIndices = [&vertexIndices](u32 ind[3], u32 triangleIndex) {
         ind[0] = vertexIndices[3 * triangleIndex + 0];
@@ -294,12 +523,13 @@ void ClusterBuilder::Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &tri
     u32 minFaceID = pos_inf;
     u32 maxFaceID = 0;
     // bool hasFaceIDs    = false;
-    hasAnyNormals = (bool)mesh.n;
+    tempResources.hasAnyNormals = (bool)mesh.n;
 
-    for (Vec2u triangleIndex : triangleIndices)
+    for (u32 tri = 0; tri < triangleIndices.Length(); tri++)
     {
-        u32 primID = triangleIndex.x;
-        u32 geomID = triangleIndex.y;
+        Vec2u triangleIndex = triangleIndices[tri];
+        u32 primID          = triangleIndex.x;
+        u32 geomID          = triangleIndex.y;
 
         geomIDs.Push(geomID);
 
@@ -315,19 +545,12 @@ void ClusterBuilder::Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &tri
         for (int indexIndex = 0; indexIndex < 3; indexIndex++)
         {
             u32 vertexIndex = mesh.indices[3 * primID + indexIndex];
-            Vec3i p(Round(mesh.p[vertexIndex] * quantizeP));
-            Assert(p.x != INT_MIN && p.y != INT_MIN && p.z != INT_MIN);
-
-            minP = Min(minP, p);
-            maxP = Max(maxP, p);
+            tempResources.UpdatePosBounds(mesh.p[vertexIndex]);
 
             if (mesh.n)
             {
                 Vec3f &normal = mesh.n[vertexIndex];
-                u32 octNormal = EncodeOctahedral(normal);
-                Vec2u n       = Vec2u(octNormal >> 16, octNormal & ((1 << 16) - 1));
-                minOct        = Min(minOct, n);
-                maxOct        = Max(maxOct, n);
+                tempResources.UpdateNormalBounds(normal);
             }
 
             auto *hashedIndex  = vertexHashSet.Find({vertexIndex});
@@ -340,7 +563,7 @@ void ClusterBuilder::Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &tri
             }
             else
             {
-                vertexHashSet.Add(clusterScratch.temp.arena, {vertexIndex, vertexCount});
+                vertexHashSet.Add(scratch.temp.arena, {vertexIndex, vertexCount});
                 vertexIndices[indexCount++] = vertexCount;
                 clusterVertexIndexToMeshVertexIndex.Push(vertexIndex);
 
@@ -350,8 +573,8 @@ void ClusterBuilder::Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &tri
     }
 
     // Build adjacency data for triangles
-    u32 *counts  = PushArray(clusterScratch.temp.arena, u32, clusterNumTriangles);
-    u32 *offsets = PushArray(clusterScratch.temp.arena, u32, clusterNumTriangles);
+    u32 *counts  = PushArray(scratch.temp.arena, u32, clusterNumTriangles);
+    u32 *offsets = PushArray(scratch.temp.arena, u32, clusterNumTriangles);
 
     struct EdgeKeyValue
     {
@@ -366,9 +589,9 @@ void ClusterBuilder::Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &tri
 
         bool operator==(const EdgeKeyValue &other) const { return key == other.key; }
     };
-    HashIndex edgeIDMap(clusterScratch.temp.arena, NextPowerOfTwo(indexCount),
+    HashIndex edgeIDMap(scratch.temp.arena, NextPowerOfTwo(indexCount),
                         NextPowerOfTwo(indexCount));
-    StaticArray<EdgeKeyValue> edges(clusterScratch.temp.arena, indexCount);
+    StaticArray<EdgeKeyValue> edges(scratch.temp.arena, indexCount);
 
     // Find triangles with shared edge
     for (u32 triangleIndex = 0; triangleIndex < clusterNumTriangles; triangleIndex++)
@@ -439,7 +662,7 @@ void ClusterBuilder::Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &tri
         offset += counts[i];
     }
 
-    u32 *data = PushArray(clusterScratch.temp.arena, u32, offset);
+    u32 *data = PushArray(scratch.temp.arena, u32, offset);
 
     for (u32 triangleIndex = 0; triangleIndex < clusterNumTriangles; triangleIndex++)
     {
@@ -491,14 +714,9 @@ void ClusterBuilder::Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &tri
     u32 minValenceTriangle = FindMinValence();
 
     // NOTE: implicitly starts with "Restart"
-    tempResources.triangleStripTypes =
-        StaticArray<TriangleStripType>(arena, clusterNumTriangles);
-    auto &triangleStripTypes = tempResources.triangleStripTypes;
-
-    tempResources.newIndexOrder = StaticArray<u32>(arena, clusterNumTriangles * 3);
-    auto &newIndexOrder         = tempResources.newIndexOrder;
-
-    StaticArray<u32> triangleOrder(arena, clusterNumTriangles * 3);
+    StaticArray<TriangleStripType> triangleStripTypes(scratch.temp.arena, clusterNumTriangles);
+    StaticArray<u32> newIndexOrder(scratch.temp.arena, clusterNumTriangles * 3);
+    StaticArray<u32> triangleOrder(scratch.temp.arena, clusterNumTriangles * 3);
 
     u32 prevTriangle = minValenceTriangle;
 
@@ -684,8 +902,8 @@ void ClusterBuilder::Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &tri
 
     for (u32 tri : triangleOrder)
     {
-        u32 materialIndex = materialIndices[geomIDs[tri]];
-        tempResources.materialIndices.Push(materialIndex);
+        u32 materialIndex = materialIDs[geomIDs[tri]];
+        materialIndices.Push(materialIndex);
     }
 
 #if 0
@@ -718,183 +936,43 @@ void ClusterBuilder::Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &tri
         Assert(faceBitOffset == 32 + (numFaceBits + 3) * clusterNumTriangles);
     }
 #endif
-}
 
-void ClusterBuilder::Voxels(Arena *arena, Mesh &mesh, StaticArray<CompressedVoxel> &voxels,
-                            StaticArray<u32> &brickIndices,
-                            const StaticArray<u32> &materialIndices,
-                            StaticArray<u32> &voxelGeomIDs, DGFTempResources &tempResources)
-{
-    u32 voxelTotal = 0;
-    for (u32 brickIndex : brickIndices)
-    {
-        CompressedVoxel &voxel = voxels[brickIndex];
+    u32 geoBaseAddress     = geoByteBuffer.Length();
+    u32 shadingBaseAddress = shadingByteBuffer.Length();
 
-        u64 bitMask      = voxel.bitMask;
-        u32 vertexOffset = voxel.vertexOffset;
-
-        u32 numVoxels = PopCount((u32)bitMask) + PopCount(bitMask >> 32u);
-
-        voxelTotal += numVoxels;
-
-        for (u32 voxelIndex = 0; voxelIndex < numVoxels; voxelIndex++)
-        {
-            u32 vertexIndex = vertexOffset + voxelIndex;
-            Vec3i p         = Vec3i(Round(mesh.p[vertexIndex] * quantizeP));
-            Assert(p.x != INT_MIN && p.y != INT_MIN && p.z != INT_MIN);
-            minP = Min(minP, p);
-            maxP = Max(maxP, p);
-
-            if (mesh.n)
-            {
-                Vec3f normal  = mesh.n[vertexIndex];
-                u32 octNormal = EncodeOctahedral(normal);
-                Vec2u n       = Vec2u(octNormal >> 16, octNormal & ((1 << 16) - 1));
-                minOct        = Min(minOct, n);
-                maxOct        = Max(maxOct, n);
-            }
-        }
-    }
-
-    tempResources.voxelVertexIndices        = StaticArray<u32>(arena, voxelTotal);
-    tempResources.voxelClusterVertexIndices = StaticArray<u32>(arena, voxels.Length());
-    voxelTotal                              = 0;
-    for (u32 brickIndex : brickIndices)
-    {
-        CompressedVoxel &voxel = voxels[brickIndex];
-        u64 bitMask            = voxel.bitMask;
-
-        u32 numVoxels    = PopCount((u32)bitMask) + PopCount(bitMask >> 32u);
-        u32 vertexOffset = voxel.vertexOffset;
-
-        tempResources.voxelClusterVertexIndices.Push(vertexCount);
-        for (u32 voxelIndex = 0; voxelIndex < numVoxels; voxelIndex++)
-        {
-            u32 vertexIndex   = vertexOffset + voxelIndex;
-            u32 materialIndex = materialIndices[voxelGeomIDs[voxelTotal + voxelIndex]];
-            tempResources.materialIndices.Push(materialIndex);
-            tempResources.voxelVertexIndices.Push(vertexIndex);
-        }
-        vertexCount += numVoxels;
-        voxelTotal += numVoxels;
-    }
-}
-
-void ClusterBuilder::WriteData(Mesh &mesh, DGFTempResources &tempResources,
-                               StaticArray<CompressedVoxel> *compressedVoxels,
-                               ClusterIndices &clusterIndices,
-                               DenseGeometryBuildData &buildData)
-{
-    ScratchArena scratch;
-
-    u32 currentFirstUseBit = 0;
-
-    u32 numBitsX = minP[0] == maxP[0] ? 0 : Log2Int(Max(maxP[0] - minP[0], 1)) + 1;
-    u32 numBitsY = minP[1] == maxP[1] ? 0 : Log2Int(Max(maxP[1] - minP[1], 1)) + 1;
-    u32 numBitsZ = minP[2] == maxP[2] ? 0 : Log2Int(Max(maxP[2] - minP[2], 1)) + 1;
-
-    u32 numOctBitsX = !hasAnyNormals || minOct[0] == maxOct[0]
-                          ? 0
-                          : Log2Int(Max(maxOct[0] - minOct[0], 1u)) + 1;
-    u32 numOctBitsY = !hasAnyNormals || minOct[1] == maxOct[1]
-                          ? 0
-                          : Log2Int(Max(maxOct[1] - minOct[1], 1u)) + 1;
-
-    // u32 numFaceBits = hasFaceIDs ? Log2Int(Max(maxFaceID - minFaceID, 1u)) + 1 : 0;
-
-    Assert(numOctBitsX <= 16 && numOctBitsY <= 16);
-    Assert(numBitsX < 32 && numBitsY < 32 && numBitsZ < 32);
-    ErrorExit(Abs(minP[0]) < (1 << 23) && Abs(minP[1]) < (1 << 23) && Abs(minP[2]) < (1 << 23),
-              "%i %i %i\n", minP[0], minP[1], minP[2]);
-
-    u32 numBits = vertexCount * (numBitsX + numBitsY + numBitsZ);
-
-    Vec3u bitWidths(numBitsX, numBitsY, numBitsZ);
-    u32 vertexBitStreamSize = (numBits + 7) >> 3;
-    u32 maxReuseIndex       = 0;
-
-    u32 normalBitStreamSize = (vertexCount * (numOctBitsX + numOctBitsY) + 7) >> 3;
-    // u32 faceBitStreamSize   = 4 + (((numFaceBits + 3) * clusterNumTriangles + 7) >> 3);
-    u32 geoBaseAddress     = buildData.geoByteBuffer.Length();
-    u32 shadingBaseAddress = buildData.shadingByteBuffer.Length();
-
-    // Use the new index order to write compressed vertex buffer and reuse buffer
-    u32 clusterNumTriangles = tempResources.triangleStripTypes.Length() + 1;
-    u32 maxReuseBufferSize  = clusterNumTriangles * 3;
-
-    StaticArray<u32> reuseBuffer(scratch.temp.arena, maxReuseBufferSize);
+    StaticArray<u32> reuseBuffer(scratch.temp.arena, clusterNumTriangles * 3);
     BitVector firstUse(scratch.temp.arena, clusterNumTriangles * 3);
 
-    u32 bitOffset       = 0;
-    u32 normalBitOffset = 0;
-    u32 faceBitOffset   = 0;
+    u32 faceBitOffset = 0;
 
-    Assert(normalBitOffset == vertexCount * (numOctBitsX + numOctBitsY));
-
-    u32 totalSize = 0;
-    ChunkedLinkedList<u8>::ChunkNode *vertexNode =
-        buildData.geoByteBuffer.AddNode(vertexBitStreamSize);
-
-    ChunkedLinkedList<u8>::ChunkNode *normalNode = 0;
-    if (normalBitStreamSize)
-    {
-        totalSize += normalBitStreamSize;
-        normalNode = buildData.shadingByteBuffer.AddNode(normalBitStreamSize);
-    }
+    BitVector usedVertices(scratch.temp.arena, MAX_CLUSTER_VERTICES);
+    StaticArray<u32> mapOldIndexToDGFIndex(scratch.temp.arena, vertexCount, vertexCount);
+    u32 addedVertexCount   = 0;
+    u32 currentFirstUseBit = 0;
+    u32 maxReuseIndex      = 0;
 
     StaticArray<u32> meshVertexIndices(scratch.temp.arena, MAX_CLUSTER_VERTICES);
+    for (auto index : newIndexOrder)
     {
-        BitVector usedVertices(scratch.temp.arena, MAX_CLUSTER_VERTICES);
-        StaticArray<u32> mapOldIndexToDGFIndex(scratch.temp.arena, vertexCount, vertexCount);
-        u32 addedVertexCount = 0;
-
-        for (auto index : tempResources.newIndexOrder)
+        if (usedVertices.GetBit(index))
         {
-            if (usedVertices.GetBit(index))
-            {
-                currentFirstUseBit++;
-                reuseBuffer.Push(mapOldIndexToDGFIndex[index]);
-                maxReuseIndex = Max(mapOldIndexToDGFIndex[index], maxReuseIndex);
-            }
-            else
-            {
-                usedVertices.SetBit(index);
-                firstUse.SetBit(currentFirstUseBit);
-                currentFirstUseBit++;
-                mapOldIndexToDGFIndex[index] = addedVertexCount;
-                addedVertexCount++;
-
-                meshVertexIndices.Push(
-                    tempResources.clusterVertexIndexToMeshVertexIndex[index]);
-            }
+            currentFirstUseBit++;
+            reuseBuffer.Push(mapOldIndexToDGFIndex[index]);
+            maxReuseIndex = Max(mapOldIndexToDGFIndex[index], maxReuseIndex);
         }
-
-        for (u32 index : tempResources.voxelVertexIndices)
+        else
         {
-            meshVertexIndices.Push(index);
+            usedVertices.SetBit(index);
+            firstUse.SetBit(currentFirstUseBit);
+            currentFirstUseBit++;
+            mapOldIndexToDGFIndex[index] = addedVertexCount;
+            addedVertexCount++;
+
+            meshVertexIndices.Push(clusterVertexIndexToMeshVertexIndex[index]);
         }
     }
 
-    for (u32 index : meshVertexIndices)
-    {
-        Vec3i p = Vec3i(Round(mesh.p[index] * quantizeP)) - minP;
-        for (int axis = 0; axis < 3; axis++)
-        {
-            WriteBits((u32 *)vertexNode->values, bitOffset, p[axis], bitWidths[axis]);
-        }
-
-        if (mesh.n)
-        {
-            Vec3f &n    = mesh.n[index];
-            u32 normal  = EncodeOctahedral(n);
-            u32 normalX = (normal >> 16) - minOct[0];
-            u32 normalY = (normal & ((1 << 16) - 1)) - minOct[1];
-            WriteBits((u32 *)normalNode->values, normalBitOffset, normalX, numOctBitsX);
-            WriteBits((u32 *)normalNode->values, normalBitOffset, normalY, numOctBitsY);
-        }
-    }
-
-    Assert(bitOffset == numBits);
+    WriteVertexData(mesh, meshVertexIndices, tempResources);
 
     FixedArray<u32, 4> restartHighBitPerDword = {0, 0, 0, 0};
     FixedArray<u32, 4> restartCountPerDword   = {1, 0, 0, 0};
@@ -903,8 +981,6 @@ void ClusterBuilder::WriteData(Mesh &mesh, DGFTempResources &tempResources,
 
     u32 prevEdge1HighBitPerDword = 0;
     u32 prevEdge2HighBitPerDword = 0;
-
-    StaticArray<TriangleStripType> &triangleStripTypes = tempResources.triangleStripTypes;
 
     BitVector backtrack(scratch.temp.arena, clusterNumTriangles);
     BitVector restart(scratch.temp.arena, clusterNumTriangles);
@@ -976,7 +1052,7 @@ void ClusterBuilder::WriteData(Mesh &mesh, DGFTempResources &tempResources,
         ((numIndexBits * reuseBuffer.Length() + currentFirstUseBit + 7) >> 3) + ctrlBitSize;
     u32 numBitStreamBits =
         numIndexBits * reuseBuffer.Length() + (ctrlBitSize << 3) + currentFirstUseBit;
-    auto *node = buildData.geoByteBuffer.AddNode(bitStreamSize);
+    auto *node = geoByteBuffer.AddNode(bitStreamSize);
 
     // Write control bits
     int numRemainingTriangles = clusterNumTriangles;
@@ -1007,146 +1083,25 @@ void ClusterBuilder::WriteData(Mesh &mesh, DGFTempResources &tempResources,
 
     Assert(indexBitOffset == numBitStreamBits);
 
-    u32 brickBitOffset      = 0;
-    u32 brickOffset         = buildData.geoByteBuffer.Length();
-    u32 numCompressedVoxels = clusterIndices.brickIndices.Length();
+    WriteMaterialIDs(materialIndices, tempResources);
 
-    if (numCompressedVoxels)
-    {
-        Assert(tempResources.voxelClusterVertexIndices.Length() == numCompressedVoxels);
-        u32 brickBitStreamSize =
-            ((64 + MAX_CLUSTER_VERTICES_BIT) * numCompressedVoxels + 7u) >> 3u;
-        auto *brickNode = buildData.geoByteBuffer.AddNode(brickBitStreamSize);
-        for (u32 brickIndexIndex = 0; brickIndexIndex < numCompressedVoxels; brickIndexIndex++)
-        {
-            CompressedVoxel &brick =
-                (*compressedVoxels)[clusterIndices.brickIndices[brickIndexIndex]];
-            WriteBits((u32 *)brickNode->values, brickBitOffset, (u32)brick.bitMask, 32);
-            WriteBits((u32 *)brickNode->values, brickBitOffset, brick.bitMask >> 32u, 32);
-            WriteBits((u32 *)brickNode->values, brickBitOffset,
-                      tempResources.voxelClusterVertexIndices[brickIndexIndex],
-                      MAX_CLUSTER_VERTICES_BIT);
-        }
-    }
+    PackedDenseGeometryHeader &packed = tempResources.packed;
 
-    PackedDenseGeometryHeader packed = {};
-
-    Array<u32> &materialIndices = tempResources.materialIndices;
-    bool constantMaterialID     = true;
-    u32 materialStart           = materialIndices[0];
-
-    for (u32 materialIndex : materialIndices)
-    {
-        if (materialIndex != materialStart)
-        {
-            constantMaterialID = false;
-            break;
-        }
-    }
-
-    if (constantMaterialID)
-    {
-        u32 materialIndex = materialIndices[0];
-        materialIndex |= 0x80000000;
-        packed.j = materialIndex;
-    }
-    else
-    {
-        u32 commonMSBs        = 32;
-        u32 currentCommonMSBs = materialIndices[0];
-
-        u32 numUniqueMaterialIDs = 1;
-        StaticArray<u32> uniqueMaterialIDs(scratch.temp.arena, clusterNumTriangles);
-        StaticArray<u32> entryIndex(scratch.temp.arena, clusterNumTriangles,
-                                    clusterNumTriangles);
-
-        u32 materialIndex = materialIndices[0] & 0x7fffffff;
-        uniqueMaterialIDs.Push(materialIndex);
-        entryIndex[0] = 0;
-        for (int primIndex = 1; primIndex < materialIndices.Length(); primIndex++)
-        {
-            u32 materialID = materialIndices[primIndex] & 0x7fffffff;
-            bool unique    = true;
-            for (int j = 0; j < uniqueMaterialIDs.Length(); j++)
-            {
-                if (uniqueMaterialIDs[j] == materialID)
-                {
-                    entryIndex[primIndex] = j;
-                    unique                = false;
-                    break;
-                }
-            }
-            if (unique)
-            {
-                for (int bitIndex = commonMSBs; bitIndex >= 0; bitIndex--)
-                {
-                    if ((materialID >> (32 - bitIndex)) == currentCommonMSBs)
-                    {
-                        break;
-                    }
-                    currentCommonMSBs >>= 1;
-                    commonMSBs--;
-                }
-                uniqueMaterialIDs.Push(materialID);
-                entryIndex[primIndex] = uniqueMaterialIDs.Length() - 1;
-            }
-        }
-
-        Assert(uniqueMaterialIDs.Length() > 1);
-        u32 entryBitLength      = Log2Int(uniqueMaterialIDs.Length() - 1) + 1;
-        u32 materialTableOffset = totalSize;
-        Assert(materialTableOffset < 0x80000000);
-
-        // Common MSBs + LSB entries + per triangle entries
-        u32 materialTableNumBits = commonMSBs +
-                                   (32 - commonMSBs) * uniqueMaterialIDs.Length() +
-                                   entryBitLength * clusterNumTriangles;
-        u32 materialTableSize = (materialTableNumBits + 7) >> 3;
-        auto *table           = buildData.shadingByteBuffer.AddNode(materialTableSize);
-        u32 tableBitOffset    = 0;
-        WriteBits((u32 *)table->values, tableBitOffset, currentCommonMSBs, commonMSBs);
-        for (u32 materialID : uniqueMaterialIDs)
-        {
-            u32 lsbMaterialID = materialID & ((1 << (32 - commonMSBs)) - 1u);
-            WriteBits((u32 *)table->values, tableBitOffset, lsbMaterialID, (32 - commonMSBs));
-        }
-        for (u32 index : entryIndex)
-        {
-            WriteBits((u32 *)table->values, tableBitOffset, index, entryBitLength);
-        }
-        Assert(tableBitOffset == materialTableNumBits);
-
-        Assert(materialTableOffset < (1 << 22));
-        Assert(commonMSBs > 0);
-        u32 headerOffset = 0;
-
-        packed.j = BitFieldPackU32(packed.j, commonMSBs - 1, headerOffset, 5);
-        packed.j = BitFieldPackU32(packed.j, uniqueMaterialIDs.Length(), headerOffset, 5);
-        packed.j = BitFieldPackU32(packed.j, materialTableOffset, headerOffset, 22);
-    }
-
-    // Write header
     u32 headerOffset = 0;
     packed.z         = shadingBaseAddress;
     packed.a         = geoBaseAddress;
-    headerOffset += 32;
 
-    packed.b = BitFieldPackI32(packed.b, minP[0], headerOffset, ANCHOR_WIDTH);
-    packed.b = BitFieldPackU32(packed.b, clusterNumTriangles, headerOffset, 8);
+    headerOffset = ANCHOR_WIDTH;
+    packed.b     = BitFieldPackU32(packed.b, clusterNumTriangles, headerOffset, 8);
 
-    packed.c = BitFieldPackI32(packed.c, minP[1], headerOffset, ANCHOR_WIDTH);
-    packed.c = BitFieldPackU32(packed.c, numBitsX, headerOffset, 5);
-    packed.c = BitFieldPackU32(packed.c, numIndexBits - 1, headerOffset, 3);
+    headerOffset = ANCHOR_WIDTH + 5;
+    packed.c     = BitFieldPackU32(packed.c, numIndexBits - 1, headerOffset, 3);
 
-    packed.d = BitFieldPackI32(packed.d, minP[2], headerOffset, ANCHOR_WIDTH);
-    packed.d = BitFieldPackU32(packed.d, precision - CLUSTER_MIN_PRECISION, headerOffset, 8);
-
-    packed.e = BitFieldPackU32(packed.e, vertexCount, headerOffset, 9);
+    headerOffset = 0;
     Assert(reuseBuffer.Length() < (1 << 8));
     packed.e = BitFieldPackU32(packed.e, reuseBuffer.Length(), headerOffset, 8);
-    packed.e = BitFieldPackU32(packed.e, numBitsY, headerOffset, 5);
-    packed.e = BitFieldPackU32(packed.e, numBitsZ, headerOffset, 5);
-    packed.e = BitFieldPackU32(packed.e, numOctBitsX, headerOffset, 5);
+
+    headerOffset = 0;
 
     packed.f = BitFieldPackU32(packed.f, restartHighBitPerDword[1], headerOffset, 6);
     packed.f = BitFieldPackU32(packed.f, restartHighBitPerDword[2], headerOffset, 7);
@@ -1159,58 +1114,15 @@ void ClusterBuilder::WriteData(Mesh &mesh, DGFTempResources &tempResources,
     packed.g = BitFieldPackI32(packed.g, edge2HighBitPerDword[1], headerOffset, 7);
     packed.g = BitFieldPackI32(packed.g, edge2HighBitPerDword[2], headerOffset, 8);
 
-    headerOffset = 0;
-    packed.h     = BitFieldPackU32(packed.h, numOctBitsY, headerOffset, 5);
+    headerOffset = 5;
     packed.h     = BitFieldPackU32(packed.h, restartCountPerDword[0], headerOffset, 6);
     packed.h     = BitFieldPackU32(packed.h, restartCountPerDword[1], headerOffset, 7);
     packed.h     = BitFieldPackU32(packed.h, restartCountPerDword[2], headerOffset, 8);
-
     // packed.h     = BitFieldPackU32(packed.h, numFaceBits, headerOffset, 6);
-    packed.h = BitFieldPackU32(packed.h, numCompressedVoxels, headerOffset, 6);
 
-    headerOffset = 0;
-    packed.i     = BitFieldPackU32(packed.i, minOct[0], headerOffset, 16);
-    packed.i     = BitFieldPackU32(packed.i, minOct[1], headerOffset, 16);
-
-    buildData.headers.AddBack() = packed;
-
-    // Reorder refs
-#if 0
-    PrimRef *tempRefs =
-        PushArrayNoZero(clusterScratch.temp.arena, PrimRef, clusterNumTriangles);
-    MemoryCopy(tempRefs, primRefs + start, clusterNumTriangles * sizeof(PrimRef));
-
-    for (int i = 0; i < clusterNumTriangles; i++)
-    {
-        primRefs[start + i] = tempRefs[triangleOrder[i]];
-    }
-#endif
-
-    // Debug
-    auto *typesNode = buildData.types.AddNode(triangleStripTypes.Length());
-    MemoryCopy(typesNode->values, triangleStripTypes.data,
-               sizeof(TriangleStripType) * triangleStripTypes.Length());
-
-    // auto *debugFaceIDNode = buildData.debugFaceIDs.AddNode(faceIDs.Length());
-    // MemoryCopy(debugFaceIDNode->values, faceIDs.data, sizeof(u32) * faceIDs.Length());
-#if 0
-    u32 numu32s        = (currentFirstUseBit + 31) >> 5;
-    auto *firstUseNode = buildData.firstUse.AddNode(numu32s);
-    MemoryCopy(firstUseNode->values, firstUse.bits, (currentFirstUseBit + 7) >> 3);
-
-    auto *reuseNode = buildData.reuse.AddNode(reuseBuffer.Length());
-    MemoryCopy(reuseNode->values, reuseBuffer.data, reuseBuffer.Length() * sizeof(u32));
-#endif
-
-    u32 bitSize      = ((clusterNumTriangles + 31) >> 5) * sizeof(u32);
-    auto *debug0Node = buildData.debugRestartCountPerDword.AddNode(vertexCount);
-    // MemoryCopy(debug0Node->values, newNormals.data, vertexCount * sizeof(u32));
-    auto *debug1Node = buildData.debugRestartHighBitPerDword.AddNode(4);
-    MemoryCopy(debug1Node->values, backtrack.bits, bitSize);
-
-    // auto *debugIndexNode = buildData.debugIndices.AddNode(oldIndexOrder.Length());
-    // MemoryCopy(debugIndexNode->values, oldIndexOrder.data,
-    //            oldIndexOrder.Length() * sizeof(u32));
+    headers.AddBack() = packed;
 }
+
+} // namespace ClusterBuilder
 
 } // namespace rt

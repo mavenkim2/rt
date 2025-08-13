@@ -23,14 +23,45 @@ enum class TriangleStripType
     Backtrack,
 };
 
-struct alignas(CACHE_LINE_SIZE) ClusterList
+struct CompressedVoxel
 {
-    ChunkedLinkedList<RecordAOSSplits> l;
+    u64 bitMask;
+    u32 vertexOffset;
 };
 
-struct alignas(CACHE_LINE_SIZE) ClusterExtents
+// struct ClusterBuilder
+// {
+//     Arena **arenas;
+//     StaticArray<RecordAOSSplits> records;
+//
+//     PrimRef *primRefs;
+//     void *h;
+//
+//     ClusterIndices GetClusterIndices(Arena *arena, RecordAOSSplits &record);
+// };
+
+namespace ClusterBuilder
 {
-    Vec3f extent;
+
+struct DGFTempResources
+{
+    // Serialization
+    Vec3f quantizeP;
+    int precision;
+    bool hasAnyNormals;
+    u32 vertexCount;
+
+    Vec3i minP;
+    Vec3i maxP;
+
+    Vec2u minOct;
+    Vec2u maxOct;
+
+    PackedDenseGeometryHeader packed = {};
+
+    DGFTempResources();
+    void UpdatePosBounds(const Vec3f &p);
+    void UpdateNormalBounds(const Vec3f &normal);
 };
 
 struct alignas(CACHE_LINE_SIZE) DenseGeometryBuildData
@@ -53,70 +84,23 @@ struct alignas(CACHE_LINE_SIZE) DenseGeometryBuildData
     ChunkedLinkedList<u32> debugRestartHighBitPerDword;
 
     DenseGeometryBuildData();
+
+    void WriteVertexData(const Mesh &mesh, const StaticArray<u32> &meshVertexIndices,
+                         DGFTempResources &tempResources);
+    void WriteMaterialIDs(const StaticArray<u32> &materialIndices,
+                          DGFTempResources &tempResources);
+    void WriteVoxelData(ArrayView<u32> &brickIndices, StaticArray<CompressedVoxel> &voxels,
+                        Mesh &mesh, const StaticArray<u32> &materialIDs,
+                        StaticArray<u32> &voxelGeomIDs);
+    void WriteTriangleData(ArrayView<Vec2u> &triangleIndices, Mesh &mesh,
+                           StaticArray<u32> &materialIDs);
 };
 
-struct DGFTempResources
-{
-    StaticArray<TriangleStripType> triangleStripTypes;
-    StaticArray<u32> clusterVertexIndexToMeshVertexIndex;
-    StaticArray<u32> newIndexOrder;
+StaticArray<RecordAOSSplits> BuildClusters(Arena *arena, PrimRef *primRefs,
+                                           RecordAOSSplits &record, u32 maxTriangles,
+                                           u32 maxClusters);
 
-    StaticArray<u32> voxelVertexIndices;
-    StaticArray<u32> voxelClusterVertexIndices;
-
-    Array<u32> materialIndices;
-};
-
-struct ClusterIndices
-{
-    StaticArray<Vec2u> triangleIndices;
-    StaticArray<u32> brickIndices;
-};
-
-struct CompressedVoxel
-{
-    u64 bitMask;
-    u32 vertexOffset;
-};
-
-struct ClusterBuilder
-{
-    Arena **arenas;
-    StaticArray<ClusterList> threadClusters;
-    PrimRef *primRefs;
-    void *h;
-
-    Vec3f quantizeP;
-    int precision;
-    bool hasAnyNormals;
-    u32 vertexCount;
-
-    Vec3i minP;
-    Vec3i maxP;
-
-    Vec2u minOct;
-    Vec2u maxOct;
-
-    ClusterBuilder() {}
-    ClusterBuilder(Arena *arena, PrimRef *primRefs);
-    void BuildClusters(RecordAOSSplits &record, bool parallel,
-                       u32 maxTriangles = MAX_CLUSTER_TRIANGLES);
-
-    ClusterIndices GetClusterIndices(Arena *arena, RecordAOSSplits &record);
-    void Triangles(Arena *arena, Mesh &mesh, StaticArray<Vec2u> &triangleIndices,
-                   const StaticArray<u32> &materialIndices, DGFTempResources &tempResources);
-    void Voxels(Arena *arena, Mesh &mesh, StaticArray<CompressedVoxel> &voxels,
-                StaticArray<u32> &brickIndices, const StaticArray<u32> &materialIndices,
-                StaticArray<u32> &voxelGeomIDs, DGFTempResources &tempResources);
-    void WriteData(Mesh &mesh, DGFTempResources &tempResources,
-                   StaticArray<CompressedVoxel> *compressedVoxels,
-                   ClusterIndices &clusterIndices, DenseGeometryBuildData &buildData);
-    void CreateDGFs(const StaticArray<u32> &materialIDs, DenseGeometryBuildData &buildData,
-                    Mesh &mesh, Bounds &sceneBounds, StaticArray<CompressedVoxel> *voxels = 0,
-                    StaticArray<u32> *voxelGeomIDs = 0);
-};
-
-void WriteBits(u32 *data, u32 &position, u32 value, u32 numBits);
+}; // namespace ClusterBuilder
 
 } // namespace rt
 #endif

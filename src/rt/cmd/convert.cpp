@@ -2321,13 +2321,14 @@ int main(int argc, char **argv)
     Vulkan *v           = PushStructConstruct(arena, Vulkan)(mode);
     device              = v;
 
-#if 0
+#if 1
     LoadPBRT(arena, filename);
-#endif
+#else
     int numMeshes, actualNumMeshes;
     string testFilename = "../../data/island/pbrt-v4/obj/isMountainB/archives/"
-                          "xgFoliageA_treeMadronaBaked_canopyOnly_lo.obj";
-    Mesh *meshes        = LoadObj(arena, testFilename, numMeshes, actualNumMeshes);
+                          "xgFern_fern0011_mod.obj";
+
+    Mesh *meshes = LoadObj(arena, testFilename, numMeshes, actualNumMeshes);
 
     meshes[0].numFaces = meshes[0].numIndices / 4;
     Mesh mesh          = ConvertQuadToTriangleMesh(arena, meshes[0]);
@@ -2339,6 +2340,7 @@ int main(int argc, char **argv)
 
     f32 t = OS_GetMilliseconds(counter);
     Print("%f\n", t);
+#endif
 
     u64 count        = 0;
     f64 time         = 0;

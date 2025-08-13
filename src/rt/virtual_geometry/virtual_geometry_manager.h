@@ -2,17 +2,11 @@
 #define VIRTUAL_GEOMETRY_MANAGER_H_
 
 #include "../base.h"
+#include "../bvh/bvh_types.h"
 #include "../graphics/vulkan.h"
 
 namespace rt
 {
-
-template <typename T>
-struct Graph
-{
-    u32 *offsets;
-    T *data;
-};
 
 struct VirtualPageHandle
 {
