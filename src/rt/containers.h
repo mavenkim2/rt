@@ -16,24 +16,15 @@ namespace rt
 template <typename ElementType>
 struct CheckedIterator
 {
-    CheckedIterator(ElementType *inPtr, i32 &inNum)
-        : ptr(inPtr), initialNum(inNum), currentNum(inNum)
-    {
-    }
+    CheckedIterator(ElementType *inPtr) : ptr(inPtr) {}
     __forceinline ElementType &operator*() const { return *ptr; }
     __forceinline CheckedIterator &operator++()
     {
         ++ptr;
         return *this;
     }
-    __forceinline bool operator!=(const CheckedIterator &rhs) const
-    {
-        Assert(initialNum == currentNum);
-        return rhs.ptr != ptr;
-    }
+    __forceinline bool operator!=(const CheckedIterator &rhs) const { return rhs.ptr != ptr; }
 
-    i32 initialNum;
-    i32 &currentNum;
     ElementType *ptr;
 };
 
@@ -80,7 +71,7 @@ struct StaticArray
         data = (T *)PushArrayNoZero(arena, u8, sizeof(T) * size_);
         MemoryCopy(data, vector.data(), sizeof(T) * size_);
     }
-    StaticArray(T *buffer, u32 size) : data(buffer), capacity(size), size(size) {}
+    StaticArray(T *buffer, u32 size) : data(buffer), capacity(size), size_(size) {}
 
     __forceinline void Init(Arena *arena, i32 inCap)
     {
@@ -140,10 +131,10 @@ struct StaticArray
         return data[index];
     }
 
-    CheckedIterator<T> begin() { return CheckedIterator<T>(data, size_); }
-    CheckedIterator<T> begin() const { return CheckedIterator<const T>(data, size_); }
-    CheckedIterator<T> end() { return CheckedIterator<T>(data + size_, size_); }
-    CheckedIterator<T> end() const { return CheckedIterator<const T>(data + size_, size_); }
+    CheckedIterator<T> begin() { return CheckedIterator<T>(data); }
+    CheckedIterator<const T> begin() const { return CheckedIterator<const T>(data); }
+    CheckedIterator<T> end() { return CheckedIterator<T>(data + size_); }
+    CheckedIterator<const T> end() const { return CheckedIterator<const T>(data + size_); }
     ReversedCheckedIterator<T> rbegin()
     {
         return ReversedCheckedIterator<T>(data + size_, size_);
@@ -247,10 +238,10 @@ struct FixedArray
         return data[index];
     }
 
-    CheckedIterator<T> begin() { return CheckedIterator<T>(data, size); }
-    CheckedIterator<T> begin() const { return CheckedIterator<const T>(data, size); }
-    CheckedIterator<T> end() { return CheckedIterator<T>(data + size, size); }
-    CheckedIterator<T> end() const { return CheckedIterator<const T>(data + size, size); }
+    CheckedIterator<T> begin() { return CheckedIterator<T>(data); }
+    CheckedIterator<T> begin() const { return CheckedIterator<const T>(data); }
+    CheckedIterator<T> end() { return CheckedIterator<T>(data + size); }
+    CheckedIterator<T> end() const { return CheckedIterator<const T>(data + size); }
     ReversedCheckedIterator<T> rbegin()
     {
         return ReversedCheckedIterator<T>(data + size, size);
@@ -427,10 +418,8 @@ struct Array
 
     void Clear() { size = 0; }
 
-    CheckedIterator<T> begin() { return CheckedIterator<T>(data, size); }
-    CheckedIterator<T> end() { return CheckedIterator<T>(data + size, size); }
-    CheckedIterator<T> rbegin() { return CheckedIterator<T, true>(data + size, size); }
-    CheckedIterator<T> rend() { return CheckedIterator<T, true>(data, size); }
+    CheckedIterator<T> begin() { return CheckedIterator<T>(data); }
+    CheckedIterator<T> end() { return CheckedIterator<T>(data + size); }
 
 private:
     inline void AddOrGrow(i32 num)
@@ -1161,6 +1150,7 @@ struct ArrayView
     T *data;
     u32 num;
 
+    ArrayView() : data(0), num(0) {}
     ArrayView(Array<T> &array, u32 offset, u32 num) : num(num)
     {
         Assert(offset + num <= array.Length());
@@ -1197,6 +1187,11 @@ struct ArrayView
         MemoryCopy(array.data, data, sizeof(T) * num);
         array.size() = num;
     }
+
+    CheckedIterator<T> begin() { return CheckedIterator<T>(data); }
+    CheckedIterator<T> begin() const { return CheckedIterator<const T>(data); }
+    CheckedIterator<T> end() { return CheckedIterator<T>(data + num); }
+    CheckedIterator<T> end() const { return CheckedIterator<const T>(data + num); }
 };
 
 } // namespace rt

@@ -40,9 +40,6 @@ struct CompressedVoxel
 //     ClusterIndices GetClusterIndices(Arena *arena, RecordAOSSplits &record);
 // };
 
-namespace ClusterBuilder
-{
-
 struct DGFTempResources
 {
     // Serialization
@@ -89,12 +86,14 @@ struct alignas(CACHE_LINE_SIZE) DenseGeometryBuildData
                          DGFTempResources &tempResources);
     void WriteMaterialIDs(const StaticArray<u32> &materialIndices,
                           DGFTempResources &tempResources);
-    void WriteVoxelData(ArrayView<u32> &brickIndices, StaticArray<CompressedVoxel> &voxels,
-                        Mesh &mesh, const StaticArray<u32> &materialIDs,
-                        StaticArray<u32> &voxelGeomIDs);
-    void WriteTriangleData(ArrayView<Vec2u> &triangleIndices, Mesh &mesh,
-                           StaticArray<u32> &materialIDs);
+    void WriteVoxelData(StaticArray<CompressedVoxel> &voxels, Mesh &mesh,
+                        const StaticArray<u32> &materialIDs, StaticArray<u32> &voxelGeomIDs);
+    void WriteTriangleData(StaticArray<int> &triangleIndices, StaticArray<u32> &geomIDs,
+                           Mesh &mesh, StaticArray<u32> &materialIDs);
 };
+
+namespace ClusterBuilder
+{
 
 StaticArray<RecordAOSSplits> BuildClusters(Arena *arena, PrimRef *primRefs,
                                            RecordAOSSplits &record, u32 maxTriangles,

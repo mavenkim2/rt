@@ -22,25 +22,6 @@ namespace rt
 namespace ClusterBuilder
 {
 
-DenseGeometryBuildData::DenseGeometryBuildData()
-{
-    arena             = ArenaAlloc();
-    geoByteBuffer     = ChunkedLinkedList<u8>(arena, 1024);
-    shadingByteBuffer = ChunkedLinkedList<u8>(arena, 1024);
-    headers           = ChunkedLinkedList<PackedDenseGeometryHeader>(arena);
-
-    // Debug
-#if 0
-    firstUse     = ChunkedLinkedList<u32>(arena);
-    reuse        = ChunkedLinkedList<u32>(arena);
-#endif
-    types                       = ChunkedLinkedList<TriangleStripType>(arena);
-    debugFaceIDs                = ChunkedLinkedList<u32>(arena);
-    debugIndices                = ChunkedLinkedList<u32>(arena);
-    debugRestartCountPerDword   = ChunkedLinkedList<u32>(arena);
-    debugRestartHighBitPerDword = ChunkedLinkedList<u32>(arena);
-}
-
 typedef HeuristicObjectBinning<PrimRef> Heuristic;
 static void BuildClusters(StaticArray<RecordAOSSplits> &records, RecordAOSSplits &record,
                           Heuristic *heuristic, u32 maxTriangles)
@@ -159,6 +140,27 @@ StaticArray<RecordAOSSplits> BuildClusters(Arena *arena, PrimRef *primRefs,
 //     }
 //     return indices;
 // }
+
+} // namespace ClusterBuilder
+
+DenseGeometryBuildData::DenseGeometryBuildData()
+{
+    arena             = ArenaAlloc();
+    geoByteBuffer     = ChunkedLinkedList<u8>(arena, 1024);
+    shadingByteBuffer = ChunkedLinkedList<u8>(arena, 1024);
+    headers           = ChunkedLinkedList<PackedDenseGeometryHeader>(arena);
+
+    // Debug
+#if 0
+    firstUse     = ChunkedLinkedList<u32>(arena);
+    reuse        = ChunkedLinkedList<u32>(arena);
+#endif
+    types                       = ChunkedLinkedList<TriangleStripType>(arena);
+    debugFaceIDs                = ChunkedLinkedList<u32>(arena);
+    debugIndices                = ChunkedLinkedList<u32>(arena);
+    debugRestartCountPerDword   = ChunkedLinkedList<u32>(arena);
+    debugRestartHighBitPerDword = ChunkedLinkedList<u32>(arena);
+}
 
 DGFTempResources::DGFTempResources()
     : hasAnyNormals(false), vertexCount(0), minP(pos_inf), maxP(neg_inf), minOct(Vec2u(65536)),
@@ -371,12 +373,11 @@ void DenseGeometryBuildData::WriteMaterialIDs(const StaticArray<u32> &materialIn
 
         packed.j = BitFieldPackU32(packed.j, commonMSBs - 1, headerOffset, 5);
         packed.j = BitFieldPackU32(packed.j, uniqueMaterialIDs.Length(), headerOffset, 5);
-        packed.j = BitFieldPackU32(packed.j, materialTableOffset, headerOffset, 22);
+        // packed.j = BitFieldPackU32(packed.j, materialTableOffset, headerOffset, 22);
     }
 }
 
-void DenseGeometryBuildData::WriteVoxelData(ArrayView<u32> &brickIndices,
-                                            StaticArray<CompressedVoxel> &voxels, Mesh &mesh,
+void DenseGeometryBuildData::WriteVoxelData(StaticArray<CompressedVoxel> &voxels, Mesh &mesh,
                                             const StaticArray<u32> &materialIDs,
                                             StaticArray<u32> &voxelGeomIDs)
 {
@@ -388,11 +389,8 @@ void DenseGeometryBuildData::WriteVoxelData(ArrayView<u32> &brickIndices,
     StaticArray<u32> materialIndices(scratch.temp.arena, voxelGeomIDs.Length());
 
     u32 voxelTotal = 0;
-    for (u32 index = 0; index < brickIndices.Length(); index++)
+    for (CompressedVoxel &voxel : voxels)
     {
-        u32 brickIndex         = brickIndices[index];
-        CompressedVoxel &voxel = voxels[brickIndex];
-
         u64 bitMask      = voxel.bitMask;
         u32 vertexOffset = voxel.vertexOffset;
 
@@ -417,11 +415,9 @@ void DenseGeometryBuildData::WriteVoxelData(ArrayView<u32> &brickIndices,
     StaticArray<u32> voxelClusterVertexIndices(scratch.temp.arena, voxels.Length());
 
     voxelTotal = 0;
-    for (u32 brickIndexIndex = 0; brickIndexIndex < brickIndices.Length(); brickIndexIndex++)
+    for (CompressedVoxel &voxel : voxels)
     {
-        u32 brickIndex         = brickIndices[brickIndexIndex];
-        CompressedVoxel &voxel = voxels[brickIndex];
-        u64 bitMask            = voxel.bitMask;
+        u64 bitMask = voxel.bitMask;
 
         u32 numVoxels    = PopCount((u32)bitMask) + PopCount(bitMask >> 32u);
         u32 vertexOffset = voxel.vertexOffset;
@@ -444,20 +440,20 @@ void DenseGeometryBuildData::WriteVoxelData(ArrayView<u32> &brickIndices,
 
     u32 brickBitOffset      = 0;
     u32 brickOffset         = geoByteBuffer.Length();
-    u32 numCompressedVoxels = brickIndices.Length();
+    u32 numCompressedVoxels = voxels.Length();
 
     Assert(voxelClusterVertexIndices.Length() == numCompressedVoxels);
     u32 brickBitStreamSize =
         ((64 + MAX_CLUSTER_VERTICES_BIT) * numCompressedVoxels + 7u) >> 3u;
     auto *brickNode = geoByteBuffer.AddNode(brickBitStreamSize);
 
-    for (u32 brickIndexIndex = 0; brickIndexIndex < numCompressedVoxels; brickIndexIndex++)
+    for (u32 brickIndex = 0; brickIndex < numCompressedVoxels; brickIndex++)
     {
-        CompressedVoxel &brick = voxels[brickIndices[brickIndexIndex]];
+        CompressedVoxel &brick = voxels[brickIndex];
         WriteBits((u32 *)brickNode->values, brickBitOffset, (u32)brick.bitMask, 32);
         WriteBits((u32 *)brickNode->values, brickBitOffset, brick.bitMask >> 32u, 32);
         WriteBits((u32 *)brickNode->values, brickBitOffset,
-                  voxelClusterVertexIndices[brickIndexIndex], MAX_CLUSTER_VERTICES_BIT);
+                  voxelClusterVertexIndices[brickIndex], MAX_CLUSTER_VERTICES_BIT);
     }
 
     Assert(materialIndices.Length() == voxelVertexIndices.Length());
@@ -473,7 +469,8 @@ void DenseGeometryBuildData::WriteVoxelData(ArrayView<u32> &brickIndices,
     headers.AddBack() = packed;
 }
 
-void DenseGeometryBuildData::WriteTriangleData(ArrayView<Vec2u> &triangleIndices, Mesh &mesh,
+void DenseGeometryBuildData::WriteTriangleData(StaticArray<int> &triangleIndices,
+                                               StaticArray<u32> &triangleGeomIDs, Mesh &mesh,
                                                StaticArray<u32> &materialIDs)
 {
     ScratchArena scratch;
@@ -525,11 +522,11 @@ void DenseGeometryBuildData::WriteTriangleData(ArrayView<Vec2u> &triangleIndices
     // bool hasFaceIDs    = false;
     tempResources.hasAnyNormals = (bool)mesh.n;
 
+    Assert(triangleIndices.Length() == triangleGeomIDs.Length());
     for (u32 tri = 0; tri < triangleIndices.Length(); tri++)
     {
-        Vec2u triangleIndex = triangleIndices[tri];
-        u32 primID          = triangleIndex.x;
-        u32 geomID          = triangleIndex.y;
+        int primID = triangleIndices[tri];
+        u32 geomID = triangleGeomIDs[tri];
 
         geomIDs.Push(geomID);
 
@@ -1122,7 +1119,5 @@ void DenseGeometryBuildData::WriteTriangleData(ArrayView<Vec2u> &triangleIndices
 
     headers.AddBack() = packed;
 }
-
-} // namespace ClusterBuilder
 
 } // namespace rt

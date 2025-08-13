@@ -2321,12 +2321,12 @@ int main(int argc, char **argv)
     Vulkan *v           = PushStructConstruct(arena, Vulkan)(mode);
     device              = v;
 
-#if 1
+#if 0
     LoadPBRT(arena, filename);
 #else
     int numMeshes, actualNumMeshes;
     string testFilename = "../../data/island/pbrt-v4/obj/isMountainB/archives/"
-                          "xgFern_fern0011_mod.obj";
+                          "xgFoliageA_treeMadronaBaked_canopyOnly_lo.obj";
 
     Mesh *meshes = LoadObj(arena, testFilename, numMeshes, actualNumMeshes);
 
