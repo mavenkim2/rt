@@ -402,9 +402,8 @@ void DenseGeometryBuildData::WriteVoxelData(StaticArray<CompressedVoxel> &voxels
     u32 numCompressedVoxels = voxels.Length();
 
     Assert(voxelClusterVertexIndices.Length() == numCompressedVoxels);
-    u32 brickBitStreamSize =
-        ((64 + MAX_CLUSTER_VERTICES_BIT) * numCompressedVoxels + 7u) >> 3u;
-    auto *brickNode = geoByteBuffer.AddNode(brickBitStreamSize);
+    u32 brickBitStreamSize = ((64 + 14) * numCompressedVoxels + 7u) >> 3u;
+    auto *brickNode        = geoByteBuffer.AddNode(brickBitStreamSize);
 
     for (u32 brickIndex = 0; brickIndex < numCompressedVoxels; brickIndex++)
     {

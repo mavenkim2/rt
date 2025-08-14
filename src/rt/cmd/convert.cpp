@@ -2327,8 +2327,10 @@ int main(int argc, char **argv)
     int numMeshes, actualNumMeshes;
     string testFilename = "../../data/island/pbrt-v4/obj/isMountainB/archives/"
                           "xgFoliageA_treeMadronaBaked_canopyOnly_lo.obj";
+    // string testFilename = "../../data/island/pbrt-v4/obj/osOcean/osOcean.obj";
 
     Mesh *meshes = LoadObj(arena, testFilename, numMeshes, actualNumMeshes);
+    // Mesh *meshes = LoadObjWithWedges(arena, testFilename, numMeshes); //, actualNumMeshes);
 
     meshes[0].numFaces = meshes[0].numIndices / 4;
     Mesh mesh          = ConvertQuadToTriangleMesh(arena, meshes[0]);
