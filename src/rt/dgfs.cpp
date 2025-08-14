@@ -98,49 +98,6 @@ StaticArray<RecordAOSSplits> BuildClusters(Arena *arena, PrimRef *primRefs,
     return records;
 }
 
-// ClusterIndices ClusterBuilder::GetClusterIndices(Arena *arena, RecordAOSSplits &record)
-// {
-//     u32 voxelRefCount = 0;
-//     for (int index = record.start; index < record.start + record.count; index++)
-//     {
-//         PrimRef &ref = primRefs[index];
-//         voxelRefCount += ref.primID >= 0x80000000u;
-//     }
-//     u32 triangleRefCount = record.count - voxelRefCount;
-//
-//     ClusterIndices indices = {};
-//     if (triangleRefCount)
-//     {
-//         indices.triangleIndices = StaticArray<Vec2u>(arena, triangleRefCount);
-//     }
-//     if (voxelRefCount)
-//     {
-//         indices.brickIndices = StaticArray<u32>(arena, voxelRefCount);
-//     }
-//
-//     u32 triangleRefOffset = 0;
-//     u32 voxelRefOffset    = triangleRefCount;
-//
-//     for (int index = record.start; index < record.start + record.count; index++)
-//     {
-//         PrimRef &ref = primRefs[index];
-//         bool isVoxel = ref.primID >= 0x80000000u;
-//         if (isVoxel)
-//         {
-//             Assert(ref.geomID == ~0u);
-//             indices.brickIndices.Push(ref.primID & 0x7fffffff);
-//         }
-//         else
-//         {
-//             Vec2u index;
-//             index.x = ref.primID;
-//             index.y = ref.geomID;
-//             indices.triangleIndices.Push(index);
-//         }
-//     }
-//     return indices;
-// }
-
 } // namespace ClusterBuilder
 
 DenseGeometryBuildData::DenseGeometryBuildData()
@@ -433,6 +390,8 @@ void DenseGeometryBuildData::WriteVoxelData(StaticArray<CompressedVoxel> &voxels
         voxelTotal += numVoxels;
     }
 
+    tempResources.vertexCount = voxelTotal;
+
     u32 geoBaseAddress     = geoByteBuffer.Length();
     u32 shadingBaseAddress = shadingByteBuffer.Length();
 
@@ -453,7 +412,7 @@ void DenseGeometryBuildData::WriteVoxelData(StaticArray<CompressedVoxel> &voxels
         WriteBits((u32 *)brickNode->values, brickBitOffset, (u32)brick.bitMask, 32);
         WriteBits((u32 *)brickNode->values, brickBitOffset, brick.bitMask >> 32u, 32);
         WriteBits((u32 *)brickNode->values, brickBitOffset,
-                  voxelClusterVertexIndices[brickIndex], MAX_CLUSTER_VERTICES_BIT);
+                  voxelClusterVertexIndices[brickIndex], 14); // MAX_CLUSTER_VERTICES_BIT);
     }
 
     Assert(materialIndices.Length() == voxelVertexIndices.Length());
@@ -969,6 +928,8 @@ void DenseGeometryBuildData::WriteTriangleData(StaticArray<int> &triangleIndices
         }
     }
 
+    Assert(addedVertexCount == vertexCount);
+    tempResources.vertexCount = addedVertexCount;
     WriteVertexData(mesh, meshVertexIndices, tempResources);
 
     FixedArray<u32, 4> restartHighBitPerDword = {0, 0, 0, 0};
