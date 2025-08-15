@@ -296,11 +296,16 @@ struct VirtualGeometryManager
     GPUBuffer ptlasUpdateInfosBuffer;
     GPUBuffer ptlasInstanceBitVectorBuffer;
 
-    GPUBuffer templateIndexBuffer;
-    GPUBuffer templateInfosBuffer;
-    GPUBuffer templateImplicitDataBuffer;
-    GPUBuffer templateScratchDataBuffer;
-    GPUBuffer templateAddressesBuffer;
+    // GPUBuffer templateIndexBuffer;
+    // GPUBuffer templateInfosBuffer;
+    // GPUBuffer templateImplicitDataBuffer;
+    // GPUBuffer templateScratchDataBuffer;
+    // GPUBuffer templateAddressesBuffer;
+
+    GPUBuffer voxelAABBBuffer;
+    GPUBuffer voxelBlasBuffer;
+    u64 voxelBlasBufferDeviceAddress;
+    u32 uploadAABBOffset;
 
     // u32 requestBatchWriteIndex;
     // RingBuffer<StreamingRequestBatch> streamingRequestBatches;

@@ -32,6 +32,19 @@ struct Mesh;
 
 static const int numActiveFrames = 1;
 
+struct BuildRangeInfo
+{
+    uint32_t primitiveCount;
+    uint32_t primitiveOffset;
+    uint32_t firstVertex;
+    uint32_t transformOffset;
+};
+
+struct VulkanAccelerationStructure
+{
+    VkAccelerationStructureKHR accel;
+};
+
 inline u32 GetFormatSize(VkFormat format)
 {
     switch (format)
@@ -308,6 +321,23 @@ struct GPUBuffer
     size_t size;
     VkPipelineStageFlags2 lastStage;
     VkAccessFlags2 lastAccess;
+};
+
+struct BLASBuildInfo
+{
+    GPUBuffer *buffer;
+    VkAccelerationStructureKHR as;
+    uint64_t scratchDataDeviceAddress;
+
+    uint64_t asDeviceAddress;
+
+    uint32_t accelSize;
+    uint32_t scratchSize;
+
+    uint32_t bufferOffset;
+
+    uint32_t rangeStart;
+    uint32_t rangeCount;
 };
 
 enum class RTBindings
@@ -774,6 +804,8 @@ struct CommandBuffer
                                          GPUBuffer *instanceData, GPUBuffer *buildRangeBuffer,
                                          u32 maxInstances);
     GPUAccelerationStructurePayload BuildCustomBLAS(GPUBuffer *aabbsBuffer, u32 numAabbs);
+    void BuildCustomBLAS(StaticArray<BLASBuildInfo> &blasBuildInfos,
+                         StaticArray<BuildRangeInfo> &rangeInfos);
     void ClearBuffer(GPUBuffer *b, u32 val = 0);
     void ClearImage(GPUImage *image, u32 value, u32 baseMip = 0,
                     u32 numMips = VK_REMAINING_MIP_LEVELS, u32 baseLayer = 0,
@@ -1019,6 +1051,7 @@ struct Vulkan
                                              int numGroups, PushConstant *pc,
                                              DescriptorSetLayout *layout, u32 maxDepth,
                                              bool useClusters = false);
+    void CreateAccelerationStructures(StaticArray<BLASBuildInfo> &blasBuildInfos);
     void GetClusterBuildSizes(CLASOpInput opInput, CLASOpMode opMode, CLASOpType opType,
                               u32 &scratchSize, u32 &updateScratchSize,
                               u32 &accelerationStructureSize);
@@ -1042,6 +1075,8 @@ struct Vulkan
                             u32 partitionCount, u32 maxInstanceInGlobalPartitionCount,
                             u32 &scratchSize, u32 &accelSize);
     VkAccelerationStructureKHR CreatePTLAS(GPUBuffer *tlasData);
+    void GetBuildSizes(StaticArray<BLASBuildInfo> &blasBuildInfos,
+                       StaticArray<BuildRangeInfo> &buildRangeInfos);
     void GetBuildSizes(VkAccelerationStructureTypeKHR accelType,
                        VkAccelerationStructureGeometryKHR *geometries, int count,
                        VkAccelerationStructureBuildRangeInfoKHR *buildRanges,

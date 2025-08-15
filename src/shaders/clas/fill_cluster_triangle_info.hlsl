@@ -1,4 +1,5 @@
 #include "../../rt/shader_interop/as_shaderinterop.h"
+#include "../../rt/shader_interop/dense_geometry_shaderinterop.h"
 #include "../../rt/shader_interop/hierarchy_traversal_shaderinterop.h"
 #include "../wave_intrinsics.hlsli"
 #include "../dense_geometry.hlsli"
@@ -8,9 +9,6 @@ RWStructuredBuffer<BUILD_CLUSTERS_TRIANGLE_INFO> buildClusterTriangleInfos : reg
 RWStructuredBuffer<DecodeClusterData> decodeClusterDatas : register(u2);
 RWStructuredBuffer<uint> globals : register(u3);
 RWStructuredBuffer<CLASPageInfo> clasPageInfos : register(u4);
-
-StructuredBuffer<uint64_t> clasTemplateAddresses : register(t5);
-RWStructuredBuffer<INSTANTIATE_CLUSTER_TEMPLATE_INFO> instantiateClusterTriangleInfos : register(u6);
 
 [[vk::push_constant]] FillClusterTriangleInfoPushConstant pc;
 
@@ -35,13 +33,12 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
         CLASPageInfo pageInfo;
         pageInfo.addressStartIndex = pc.clusterOffset + clusterStartIndex;
         pageInfo.decodeStartIndex = clusterStartIndex;
+        pageInfo.clasSize = 0;
         clasPageInfos[pageIndex] = pageInfo;
     }
     GroupMemoryBarrierWithGroupSync();
 
     if (groupIndex >= numClusters) return;
-
-    uint descriptorIndex = clusterStartIndex + groupIndex;
 
     uint64_t indexBufferBaseAddress = ((uint64_t(pc.indexBufferBaseAddressHighBits) << 32) | (pc.indexBufferBaseAddressLowBits));
     uint64_t vertexBufferBaseAddress = ((uint64_t(pc.vertexBufferBaseAddressHighBits) << 32) | (pc.vertexBufferBaseAddressLowBits));
@@ -49,31 +46,14 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
     uint clusterID = groupIndex;
 
     DenseGeometry header = GetDenseGeometryHeader(basePageAddress, numClusters, clusterID);
-    header.baseAddress = groupIndex;
 
-    uint vertexBufferOffset = 0;
-    uint indexBufferOffset = 0;
-    uint addressIndex = 0;
-
-    if (header.numBricks)
+    if (header.numTriangles)
     {
-        uint templateDescriptorIndex;
-        InterlockedAdd(globals[GLOBALS_CLAS_TEMPLATE_COUNT], 1, templateDescriptorIndex);
-        InterlockedAdd(globals[GLOBALS_VERTEX_BUFFER_OFFSET_INDEX], 8 * header.numBricks, vertexBufferOffset);
+        uint vertexBufferOffset = 0;
+        uint indexBufferOffset = 0;
+        uint descriptorIndex;
 
-        INSTANTIATE_CLUSTER_TEMPLATE_INFO desc = (INSTANTIATE_CLUSTER_TEMPLATE_INFO)0;
-        desc.clusterIdOffset = pageIndex * MAX_CLUSTERS_PER_PAGE + clusterID;
-        desc.clusterTemplateAddress = clasTemplateAddresses[header.numBricks - 1];
-        desc.vertexBuffer.startAddress = vertexBufferBaseAddress + vertexBufferOffset * 12;
-        desc.vertexBuffer.strideInBytes = 12;
-
-        instantiateClusterTriangleInfos[templateDescriptorIndex] = desc; 
-        addressIndex = (1u << 31u) | templateDescriptorIndex;
-    }
-    else 
-    {
-        uint buildDescriptorIndex;
-        InterlockedAdd(globals[GLOBALS_CLAS_BUILD_COUNT], 1, buildDescriptorIndex);
+        InterlockedAdd(globals[GLOBALS_CLAS_TRIANGLE_CLUSTER_COUNT], 1, descriptorIndex);
         InterlockedAdd(globals[GLOBALS_VERTEX_BUFFER_OFFSET_INDEX], header.numVertices, vertexBufferOffset);
         InterlockedAdd(globals[GLOBALS_INDEX_BUFFER_OFFSET_INDEX], header.numTriangles * 3, indexBufferOffset);
 
@@ -96,16 +76,17 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
         desc.opacityMicromapArray = 0;
         desc.opacityMicromapIndexBuffer = 0;
 
-        buildClusterTriangleInfos[buildDescriptorIndex] = desc;
-        addressIndex = buildDescriptorIndex;
+        buildClusterTriangleInfos[descriptorIndex] = desc;
+        uint addressIndex = descriptorIndex;
     }
 
-    DecodeClusterData clusterData;
-    clusterData.pageIndex = pageIndex;
-    clusterData.clusterIndex = clusterID;
-    clusterData.indexBufferOffset = indexBufferOffset;
-    clusterData.vertexBufferOffset = vertexBufferOffset;
-    clusterData.addressIndex = addressIndex;
+        DecodeClusterData clusterData;
+        clusterData.pageIndex = pageIndex;
+        clusterData.clusterIndex = clusterID;
+        clusterData.indexBufferOffset = indexBufferOffset;
+        clusterData.vertexBufferOffset = vertexBufferOffset;
+        clusterData.addressIndex = addressIndex;
 
-    decodeClusterDatas[descriptorIndex] = clusterData;
+        decodeClusterDatas[descriptorIndex] = clusterData;
+    }
 }

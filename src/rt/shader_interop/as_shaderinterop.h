@@ -57,6 +57,14 @@ struct DecodeClusterData
     uint32_t addressIndex;
 };
 
+struct VoxelClusterData
+{
+    uint32_t pageIndex;
+    uint32_t clusterIndex;
+    uint32_t aabbOffset;
+    uint32_t buildSize;
+};
+
 struct BLASData
 {
     uint instanceRefIndex;
@@ -297,8 +305,8 @@ struct Brick
 #define GLOBALS_PTLAS_UPDATE_INSTANCE_INDEX 22
 #define GLOBALS_DEBUG                       23
 
-#define GLOBALS_CLAS_TEMPLATE_COUNT 24
-#define GLOBALS_CLAS_BUILD_COUNT    25
+#define GLOBALS_CLAS_VOXEL_CLUSTER_COUNT    24
+#define GLOBALS_CLAS_TRIANGLE_CLUSTER_COUNT 25
 
 #define GLOBALS_SIZE 26
 

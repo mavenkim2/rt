@@ -3922,10 +3922,9 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                             record.SetRange(0, compressedVoxels.Length());
 
                             StaticArray<RecordAOSSplits> records =
-                                ClusterBuilder::BuildClusters(
-                                    scratch.temp.arena, newPrimRefs, record,
-                                    MAX_CLUSTER_TRIANGLES, // MAX_CLUSTER_BRICKS,
-                                    range.end - range.begin);
+                                ClusterBuilder::BuildClusters(scratch.temp.arena, newPrimRefs,
+                                                              record, MAX_CLUSTER_TRIANGLES,
+                                                              range.end - range.begin);
 
                             if (records.Length() > range.end - range.begin)
                             {
@@ -4125,7 +4124,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                 });
 
             // Write obj to disk
-#if 0
+#if 1
             u32 vertexCount = numVertices.load();
             u32 indexCount  = numIndices.load();
             u32 voxelCount  = numVoxels.load();
@@ -5420,14 +5419,9 @@ static void CheckVoxelOccupancy(Arena *arena, ScenePrimitives *scene,
             nzz += n.z * n.z;
         }
 
-        // 2. incorporate voxelization into main simplification code
-        // 3. runtime sggx importance sampling and evaluation
-        // 4. runtime acceleration structure builds
-        // 5. data format, writing to disk
-        // 6. offline verification of voxels
+        // 1. runtime sggx importance sampling and evaluation
+        // 2. runtime acceleration structure builds
 
-        // packing to bricks
-        // writing to disk
         // removing extra coverage
 
         // void Fit()

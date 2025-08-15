@@ -5,27 +5,40 @@
 StructuredBuffer<uint> pageIndices : register(t0);
 RWStructuredBuffer<uint64_t> clasBuildAddresses : register(u1);
 StructuredBuffer<uint> clasBuildSizes : register(t2);
-RWStructuredBuffer<uint64_t> clasTemplateAddresses : register(u3);
-StructuredBuffer<uint> clasTemplateSizes : register(t4);
+
+StructuredBuffer<uint> clasBuildSizes : register(t3);
+StructuredBuffer<uint> clasBuildSizes : register(t4);
+
 RWStructuredBuffer<uint> globals : register(u5);
 RWStructuredBuffer<CLASPageInfo> clasPageInfos : register(u6);
 StructuredBuffer<DecodeClusterData> decodeClusterDatas : register(t7);
 
+#if 0
 groupshared uint pageClusterAccelSize;
 groupshared uint pageClusterAccelOffset;
 groupshared uint descriptorStartIndex;
+#endif
 
 [[vk::push_constant]] AddressPushConstant pc;
 
 [numthreads(MAX_CLUSTERS_PER_PAGE, 1, 1)]
-void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
+void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex, uint3 dtID : SV_DispatchThreadID)
 {
+
+#if 0
     if (groupIndex == 0)
     {
         pageClusterAccelSize = 0;
     }
     GroupMemoryBarrierWithGroupSync();
+#endif
+    
+    uint pageIndex = decodeClusterData.pageIndex;
 
+    //uint64_t address = clasBuildAddresses[decodeClusterData.addressIndex];
+    InterlockedAdd(clasPageInfos[pageIndex].clasSize, clasBuildSizes[decodeClusterData.addressIndex]);
+
+#if 0
     uint pageIndex = pageIndices[groupID.x];
     uint basePageAddress = GetClusterPageBaseAddress(pageIndex);
     uint numClusters = GetNumClustersInPage(basePageAddress);
@@ -34,6 +47,7 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
 
     uint decodeDataIndex = clasPageInfos[pageIndex].decodeStartIndex + groupIndex;
     DecodeClusterData decodeClusterData = decodeClusterDatas[decodeDataIndex];
+#endif
 
     uint addressIndex = decodeClusterData.addressIndex;
     uint clasSize = 0;
@@ -65,14 +79,7 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
     uint64_t clusterBaseAddress = ((uint64_t)pc.addressHighBits << 32u) | (uint64_t)pc.addressLowBits;
     uint64_t clasAddress = clusterBaseAddress + clasOldPageDataByteOffset + pageClusterAccelOffset + clusterInPageOffset;
 
-    if (addressIndex >> 31u)
-    {
-        clasTemplateAddresses[addressIndex] = clasAddress;
-    }
-    else 
-    {
-        clasBuildAddresses[addressIndex] = clasAddress;
-    }
+    clasBuildAddresses[addressIndex] = clasAddress;
 
     if (groupIndex == 0)
     {

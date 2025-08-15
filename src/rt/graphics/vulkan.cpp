@@ -2910,6 +2910,65 @@ GPUAccelerationStructurePayload CommandBuffer::BuildCustomBLAS(GPUBuffer *aabbsB
                    &numAabbs);
 }
 
+void CommandBuffer::BuildCustomBLAS(StaticArray<BLASBuildInfo> &blasBuildInfos,
+                                    StaticArray<BuildRangeInfo> &rangeInfos)
+{
+    ScratchArena scratch;
+
+    StaticArray<VkAccelerationStructureBuildGeometryInfoKHR> buildInfos(
+        scratch.temp.arena, blasBuildInfos.Length());
+    VkAccelerationStructureBuildRangeInfoKHR **buildRangeInfos = PushArrayNoZero(
+        scratch.temp.arena, VkAccelerationStructureBuildRangeInfoKHR *, rangeInfos.Length());
+    Array<VkAccelerationStructureGeometryKHR> geometryDatas(scratch.temp.arena,
+                                                            blasBuildInfos.Length());
+
+    for (int blasBuildInfoIndex = 0; blasBuildInfoIndex < blasBuildInfos.Length();
+         blasBuildInfoIndex++)
+    {
+        BLASBuildInfo &blasBuildInfo = blasBuildInfos[blasBuildInfoIndex];
+        buildRangeInfos[blasBuildInfoIndex] =
+            PushArrayNoZero(scratch.temp.arena, VkAccelerationStructureBuildRangeInfoKHR,
+                            blasBuildInfo.rangeCount);
+        for (int rangeIndex = 0; rangeIndex < blasBuildInfo.rangeCount; rangeIndex++)
+        {
+            BuildRangeInfo &info = rangeInfos[blasBuildInfo.rangeStart + rangeIndex];
+            buildRangeInfos[blasBuildInfoIndex][rangeIndex].primitiveCount =
+                info.primitiveCount;
+            buildRangeInfos[blasBuildInfoIndex][rangeIndex].primitiveOffset =
+                info.primitiveOffset;
+            buildRangeInfos[blasBuildInfoIndex][rangeIndex].firstVertex = info.firstVertex;
+            buildRangeInfos[blasBuildInfoIndex][rangeIndex].transformOffset =
+                info.transformOffset;
+        }
+
+        VkAccelerationStructureGeometryKHR geometry = {
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+        geometry.geometryType = VK_GEOMETRY_TYPE_AABBS_KHR;
+
+        auto &aabbs = geometry.geometry.aabbs;
+        aabbs.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_AABBS_DATA_KHR;
+        aabbs.data.deviceAddress = device->GetDeviceAddress(blasBuildInfo.buffer->buffer);
+        aabbs.stride             = sizeof(VkAabbPositionsKHR);
+
+        geometryDatas.Push(geometry);
+
+        VkAccelerationStructureBuildGeometryInfoKHR buildInfo = {
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+        buildInfo.type  = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+        buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                          VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR;
+        buildInfo.pGeometries               = &geometryDatas[geometryDatas.Length() - 1];
+        buildInfo.geometryCount             = 1;
+        buildInfo.scratchData.deviceAddress = blasBuildInfo.scratchDataDeviceAddress;
+        buildInfo.dstAccelerationStructure  = blasBuildInfo.as;
+
+        buildInfos.Push(buildInfo);
+    }
+
+    vkCmdBuildAccelerationStructuresKHR(buffer, blasBuildInfos.Length(), buildInfos.data,
+                                        buildRangeInfos);
+}
+
 void Vulkan::ConvertCLASIndirectInfo(CLASOpInput opInput, CLASOpType opType,
                                      VkClusterAccelerationStructureInputInfoNV &inputInfo,
                                      VkOpInput &vkOpInput, VkDeviceSize &srcInfosArrayStride)
@@ -3312,6 +3371,34 @@ VkAccelerationStructureKHR CommandBuffer::BuildTLAS(GPUBuffer *accelBuffer,
     return as;
 }
 
+void Vulkan::CreateAccelerationStructures(StaticArray<BLASBuildInfo> &blasBuildInfos)
+{
+    for (int i = 0; i < blasBuildInfos.Length(); i++)
+    {
+        BLASBuildInfo &buildInfo = blasBuildInfos[i];
+        ErrorExit((buildInfo.bufferOffset & 255) == 0,
+                  "BLAS buffer offset must be a multiple of 256.\n");
+
+        VkAccelerationStructureCreateInfoKHR accelCreateInfo = {
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
+
+        accelCreateInfo.buffer = buildInfo.buffer->buffer;
+        accelCreateInfo.offset = buildInfo.bufferOffset;
+        accelCreateInfo.size   = buildInfo.accelSize;
+        accelCreateInfo.type   = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+
+        VulkanAccelerationStructure *as = PushStruct(arena, VulkanAccelerationStructure);
+        vkCreateAccelerationStructureKHR(device, &accelCreateInfo, 0, &buildInfo.as);
+
+        VkAccelerationStructureDeviceAddressInfoKHR deviceAddressInfo = {
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
+        deviceAddressInfo.accelerationStructure = buildInfo.as;
+
+        buildInfo.asDeviceAddress =
+            vkGetAccelerationStructureDeviceAddressKHR(device, &deviceAddressInfo);
+    }
+}
+
 void Vulkan::GetClusterBuildSizes(CLASOpInput opInput, CLASOpMode opMode, CLASOpType opType,
                                   u32 &scratchSize, u32 &updateScratchSize,
                                   u32 &accelerationStructureSize)
@@ -3458,6 +3545,43 @@ VkAccelerationStructureKHR Vulkan::CreatePTLAS(GPUBuffer *tlasBuffer)
     VkAccelerationStructureKHR accel;
     vkCreateAccelerationStructureKHR(device, &createInfo, 0, &accel);
     return accel;
+}
+
+void Vulkan::GetBuildSizes(StaticArray<BLASBuildInfo> &blasBuildInfos,
+                           StaticArray<BuildRangeInfo> &buildRangeInfos)
+{
+    for (BLASBuildInfo &blasBuildInfo : blasBuildInfos)
+    {
+        VkAccelerationStructureGeometryKHR geometry = {
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+        geometry.geometryType = VK_GEOMETRY_TYPE_AABBS_KHR;
+
+        auto &aabbs  = geometry.geometry.aabbs;
+        aabbs.sType  = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_AABBS_DATA_KHR;
+        aabbs.stride = sizeof(VkAabbPositionsKHR);
+
+        VkAccelerationStructureBuildGeometryInfoKHR buildInfo = {
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+        buildInfo.type  = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+        buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                          VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR;
+        buildInfo.pGeometries   = &geometry;
+        buildInfo.geometryCount = 1;
+
+        // TODO: support different geo types in same BLAS?
+        Assert(blasBuildInfo.rangeCount == 1);
+        u32 maxPrimitiveCount = buildRangeInfos[blasBuildInfo.rangeStart].primitiveCount;
+
+        VkAccelerationStructureBuildSizesInfoKHR sizeInfo = {
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+
+        vkGetAccelerationStructureBuildSizesKHR(
+            device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo,
+            &maxPrimitiveCount, &sizeInfo);
+
+        blasBuildInfo.scratchSize = sizeInfo.buildScratchSize;
+        blasBuildInfo.accelSize   = sizeInfo.accelerationStructureSize;
+    }
 }
 
 void Vulkan::GetBuildSizes(VkAccelerationStructureTypeKHR accelType,
