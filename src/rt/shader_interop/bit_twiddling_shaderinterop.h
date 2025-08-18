@@ -15,6 +15,15 @@ inline uint BitFieldExtractU32(uint data, uint size, uint offset)
     return (data >> offset) & ((1u << size) - 1u);
 }
 
+inline int BitFieldExtractI32(int data, uint size, uint offset)
+{
+	size &= 31u;
+	offset &= 31u;
+	const uint shift = (32u - size) & 31u;
+	const int value = (data >> offset) & int((1u << size) - 1u);
+	return (value << shift) >> shift;
+}
+
 #ifdef __cplusplus
 inline u32 BitFieldPackU32(u32 val, u32 data, u32 &offset, u32 size)
 {

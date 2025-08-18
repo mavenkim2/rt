@@ -157,11 +157,19 @@ struct VirtualGeometryManager
         int pageIndex;
     };
 
+    enum class VoxelStatus
+    {
+        None,
+        Built,
+        Compacted,
+    };
+
     struct Page
     {
         u32 numClusters;
 
         VirtualPageHandle handle;
+
         u32 numDependents;
 
         int virtualIndex;
@@ -304,8 +312,11 @@ struct VirtualGeometryManager
 
     GPUBuffer voxelAABBBuffer;
     GPUBuffer voxelBlasBuffer;
+    GPUBuffer voxelCompactedBlasBuffer;
+
     u64 voxelBlasBufferDeviceAddress;
     u32 uploadAABBOffset;
+    u32 currentVoxelBLASSize;
 
     // u32 requestBatchWriteIndex;
     // RingBuffer<StreamingRequestBatch> streamingRequestBatches;

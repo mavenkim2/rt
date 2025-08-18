@@ -12,15 +12,6 @@ uint BitAlignU32(uint high, uint low, uint shift)
 	return result;
 }
 
-int BitFieldExtractI32(int data, uint size, uint offset)
-{
-	size &= 31u;
-	offset &= 31u;
-	const uint shift = (32u - size) & 31u;
-	const int value = (data >> offset) & int((1u << size) - 1u);
-	return (value << shift) >> shift;
-}
-
 template <uint pow2>
 uint AlignDownPow2(uint val)
 {

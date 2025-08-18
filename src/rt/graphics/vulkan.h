@@ -340,6 +340,19 @@ struct BLASBuildInfo
     uint32_t rangeCount;
 };
 
+enum class AccelerationStructureCopyMode
+{
+    Copy,
+    Compact,
+};
+
+struct CopyAccelerationStructure
+{
+    AccelerationStructureCopyMode mode;
+    VkAccelerationStructureKHR src;
+    VkAccelerationStructureKHR dst;
+};
+
 enum class RTBindings
 {
     Accel,
@@ -1029,6 +1042,7 @@ struct Vulkan
     void DestroyBuffer(GPUBuffer *buffer);
     void DestroyImage(GPUImage *image);
     void DestroyAccelerationStructure(GPUAccelerationStructure *as);
+    void DestroyAccelerationStructure(VkAccelerationStructureKHR as);
     void DestroyPool(VkDescriptorPool pool);
     int BindlessIndex(GPUImage *image);
     int BindlessStorageIndex(GPUImage *image, int subresourceIndex = -1);

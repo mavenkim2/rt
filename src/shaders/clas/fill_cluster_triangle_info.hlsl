@@ -47,10 +47,12 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
 
     DenseGeometry header = GetDenseGeometryHeader(basePageAddress, numClusters, clusterID);
 
+    uint vertexBufferOffset = 0;
+    uint indexBufferOffset = 0;
+    uint addressIndex = 0;
+    uint descriptorIndex = 0;
     if (header.numTriangles)
     {
-        uint vertexBufferOffset = 0;
-        uint indexBufferOffset = 0;
         uint descriptorIndex;
 
         InterlockedAdd(globals[GLOBALS_CLAS_TRIANGLE_CLUSTER_COUNT], 1, descriptorIndex);
@@ -88,5 +90,4 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
         clusterData.addressIndex = addressIndex;
 
         decodeClusterDatas[descriptorIndex] = clusterData;
-    }
 }

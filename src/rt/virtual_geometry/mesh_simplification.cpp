@@ -2007,17 +2007,15 @@ void RecursivePartitionGraph(ArrayView<int> clusterIndices, ArrayView<idx_t> clu
     // TODO: for whatever reason multithreading METIS causes inscrutable errors. fix this if
     // speedup needed
 
-    if (numClusters > 256)
-    {
-        scheduler.ScheduleAndWait(2, 1, Recurse);
-    }
-    else
+    // if (numClusters > 256)
+    // {
+    //     scheduler.ScheduleAndWait(2, 1, Recurse);
+    // }
+    // else
     {
         Recurse(0);
         Recurse(1);
     }
-    // Recurse(0);
-    // Recurse(1);
 }
 
 struct GraphPartitionResult
@@ -3183,7 +3181,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     StaticArray<DenseGeometryBuildData> buildDatas(scratch.temp.arena, OS_NumProcessors());
     for (int i = 0; i < buildDatas.capacity; i++)
     {
-        buildDatas.Push(DenseGeometryBuildData());
+        buildDatas.Push(DenseGeometryBuildData(arenas[i]));
     }
 
     Bounds bounds;
@@ -3193,7 +3191,9 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                                         materialIndices);
     }
 
-    u32 depth = 0;
+    u32 depth                = 0;
+    u32 firstLevelNumGroups  = 0;
+    u32 secondLevelNumGroups = 0;
     {
         // 1. Split triangles into clusters (mesh remains)
 
@@ -4124,7 +4124,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                 });
 
             // Write obj to disk
-#if 1
+#if 0
             u32 vertexCount = numVertices.load();
             u32 indexCount  = numIndices.load();
             u32 voxelCount  = numVoxels.load();
@@ -4237,6 +4237,15 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
             WriteTriOBJ(levelMesh, PushStr8F(scratch.temp.arena, "%S_test_%u.obj",
                                              RemoveFileExtension(filename), depth));
 #endif
+
+            if (depth == 0)
+            {
+                firstLevelNumGroups = partitionResult.ranges.Length();
+            }
+            if (depth == 1)
+            {
+                secondLevelNumGroups = partitionResult.ranges.Length();
+            }
 
             u32 numNextLevelClusters = numLevelClusters.load();
 
@@ -4363,7 +4372,11 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
     GroupHandle *groupHandles =
         PushArrayNoZero(scratch.temp.arena, GroupHandle, clusterGroups.Length());
-    for (int groupIndex = 0; groupIndex < clusterGroups.Length(); groupIndex++)
+    // for (int groupIndex = 0; groupIndex < clusterGroups.Length(); groupIndex++)
+
+    u32 handleCount = 0;
+    for (int groupIndex = firstLevelNumGroups + 1;
+         groupIndex < firstLevelNumGroups + secondLevelNumGroups + 1; groupIndex++)
     {
         ClusterGroup &group = clusterGroups[groupIndex];
 
@@ -4379,12 +4392,16 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
         }
 
         GroupHandle handle;
-        handle.sortKey           = ((u64)group.mipLevel << 32u) | key;
-        handle.index             = groupIndex;
-        groupHandles[groupIndex] = handle;
+        handle.sortKey = ((u64)group.mipLevel << 32u) | key;
+        handle.index   = groupIndex;
+
+        Assert(group.mipLevel == 1);
+        // groupHandles[groupIndex] = handle;
+        groupHandles[handleCount++] = handle;
     }
 
-    SortHandles(groupHandles, clusterGroups.Length());
+    // SortHandles(groupHandles, clusterGroups.Length());
+    SortHandles(groupHandles, handleCount);
 
     string outFilename =
         PushStr8F(scratch.temp.arena, "%S.geo", RemoveFileExtension(filename));
@@ -4426,7 +4443,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                headers[headerIndex].z;
     };
 
-    for (int handleIndex = 0; handleIndex < clusterGroups.Length(); handleIndex++)
+    // for (int handleIndex = 0; handleIndex < clusterGroups.Length(); handleIndex++)
+    for (int handleIndex = 0; handleIndex < handleCount; handleIndex++)
     {
         GroupHandle handle  = groupHandles[handleIndex];
         u32 groupIndex      = handle.index;
@@ -4511,6 +4529,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     finalPageInfo.numClusters    = numClustersInPage;
     pageInfos.Push(finalPageInfo);
 
+#if 0
     Graph<ClusterFixup> pageToParentClusterGraph;
     u32 numParentPages = pageToParentClusterGraph.InitializeStatic(
         scratch.temp.arena, pageInfos.Length(),
@@ -4585,6 +4604,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
             }
             return num;
         });
+#endif
 
     // Write the data to the pages
     for (auto &pageInfo : pageInfos)
@@ -4635,8 +4655,9 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                  clusterGroupIndex < part.clusterStartIndex + part.clusterCount;
                  clusterGroupIndex++)
             {
-                int clusterIndex         = group.clusterStartIndex + clusterGroupIndex;
-                Cluster &cluster         = clusters[clusterIndex];
+                int clusterIndex = group.clusterStartIndex + clusterGroupIndex;
+                Cluster &cluster = clusters[clusterIndex];
+                Assert(cluster.mipLevel == 1);
                 ClusterGroup &childGroup = clusterGroups[cluster.childGroupIndex];
                 int headerIndex          = cluster.headerIndex;
                 int buildDataIndex       = childGroup.buildDataIndex;
@@ -4725,6 +4746,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
             }
         }
     }
+
+#if 0
 
     // Build hierarchies over cluster groups
     PrimRef *hierarchyPrimRefs = PushArrayNoZero(scratch.temp.arena, PrimRef, parts.Length());
@@ -5001,41 +5024,42 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     Print("num nodes: %u\nnum parts: %u %u, num leaves: %u %u\n", numNodes, parts.Length(),
           numParts, numLeaves, numLeafParts);
     Assert(hierarchy.Length() == numNodes);
+#endif
 
     ClusterFileHeader *fileHeader =
         (ClusterFileHeader *)GetMappedPtr(&builder, fileHeaderOffset);
     fileHeader->magic    = CLUSTER_FILE_MAGIC;
     fileHeader->numPages = pageInfos.Length();
-    fileHeader->numNodes = numNodes;
+    // fileHeader->numNodes = numNodes;
 
     // Write hierarchy to disk
-    u64 hierarchyOffset = AllocateSpace(&builder, sizeof(PackedHierarchyNode) * numNodes);
-    u8 *ptr             = (u8 *)GetMappedPtr(&builder, hierarchyOffset);
-    MemoryCopy(ptr, hierarchy.data, sizeof(PackedHierarchyNode) * numNodes);
+    // u64 hierarchyOffset = AllocateSpace(&builder, sizeof(PackedHierarchyNode) * numNodes);
+    // u8 *ptr             = (u8 *)GetMappedPtr(&builder, hierarchyOffset);
+    // MemoryCopy(ptr, hierarchy.data, sizeof(PackedHierarchyNode) * numNodes);
 
     // partial rebraiding
-    // FixedArray<u32, 128> stack;
-    u32 numRebraid    = rebraidIndices.Length();
-    u64 rebraidOffset = AllocateSpace(&builder, sizeof(u32) + sizeof(u32) * numRebraid);
-    ptr               = (u8 *)GetMappedPtr(&builder, rebraidOffset);
-    MemoryCopy(ptr, &numRebraid, sizeof(u32));
-    MemoryCopy(ptr + sizeof(u32), rebraidIndices.data, sizeof(u32) * numRebraid);
+    // u32 numRebraid    = rebraidIndices.Length();
+    // u64 rebraidOffset = AllocateSpace(&builder, sizeof(u32) + sizeof(u32) * numRebraid);
+    // ptr               = (u8 *)GetMappedPtr(&builder, rebraidOffset);
+    // MemoryCopy(ptr, &numRebraid, sizeof(u32));
+    // MemoryCopy(ptr + sizeof(u32), rebraidIndices.data, sizeof(u32) * numRebraid);
 
     // Graphs
-    u32 offsetsSize = sizeof(u32) * (pageInfos.Length() + 1);
-    u64 pageToParentPageOffset =
-        AllocateSpace(&builder, offsetsSize + sizeof(u32) * numParentPages);
-    ptr = (u8 *)GetMappedPtr(&builder, pageToParentPageOffset);
-    MemoryCopy(ptr, pageToParentPageGraph.offsets, offsetsSize);
-    ptr += offsetsSize;
-    MemoryCopy(ptr, pageToParentPageGraph.data, sizeof(u32) * numParentPages);
-
-    u64 pageToParentClusterOffset =
-        AllocateSpace(&builder, offsetsSize + sizeof(ClusterFixup) * numParentClusters);
-    ptr = (u8 *)GetMappedPtr(&builder, pageToParentClusterOffset);
-    MemoryCopy(ptr, pageToParentClusterGraph.offsets, offsetsSize);
-    ptr += offsetsSize;
-    MemoryCopy(ptr, pageToParentClusterGraph.data, sizeof(ClusterFixup) * numParentClusters);
+    // u32 offsetsSize = sizeof(u32) * (pageInfos.Length() + 1);
+    // u64 pageToParentPageOffset =
+    //     AllocateSpace(&builder, offsetsSize + sizeof(u32) * numParentPages);
+    // u8 *ptr = (u8 *)GetMappedPtr(&builder, pageToParentPageOffset);
+    // MemoryCopy(ptr, pageToParentPageGraph.offsets, offsetsSize);
+    // ptr += offsetsSize;
+    // MemoryCopy(ptr, pageToParentPageGraph.data, sizeof(u32) * numParentPages);
+    //
+    // u64 pageToParentClusterOffset =
+    //     AllocateSpace(&builder, offsetsSize + sizeof(ClusterFixup) * numParentClusters);
+    // ptr = (u8 *)GetMappedPtr(&builder, pageToParentClusterOffset);
+    // MemoryCopy(ptr, pageToParentClusterGraph.offsets, offsetsSize);
+    // ptr += offsetsSize;
+    // MemoryCopy(ptr, pageToParentClusterGraph.data, sizeof(ClusterFixup) *
+    // numParentClusters);
 
     // Print("len: %u\n", rebraidIndices.Length());
     // for (u32 index : rebraidIndices)

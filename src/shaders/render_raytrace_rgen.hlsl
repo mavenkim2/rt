@@ -32,7 +32,6 @@ StructuredBuffer<GPUMaterial> materials : register(t4);
 ConstantBuffer<ShaderDebugInfo> debugInfo: register(b7);
 
 RWStructuredBuffer<uint> feedbackBuffer : register(u12);
-RWStructuredBuffer<uint> test : register(u13);
 
 [[vk::push_constant]] RayPushConstant push;
 
@@ -83,11 +82,52 @@ void main()
         desc.TMin = 0;
         desc.TMax = FLT_MAX;
         
-        RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_FORCE_OPAQUE> query;
+        RayQuery<RAY_FLAG_NONE | RAY_FLAG_FORCE_OPAQUE> query;
         query.TraceRayInline(accel, RAY_FLAG_NONE, 0xff, desc);
-        query.Proceed();
 
-        if (query.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
+        uint hitKind = 0;
+        while (query.Proceed())
+        {
+            if (query.CandidateType() == CANDIDATE_PROCEDURAL_PRIMITIVE)
+            {
+                uint clusterID;
+                uint brickIndex = query.CandidatePrimitiveIndex();
+                uint pageIndex = GetPageIndexFromClusterID(clusterID); 
+                uint clusterIndex = GetClusterIndexFromClusterID(clusterID);
+
+                uint basePageAddress = GetClusterPageBaseAddress(pageIndex);
+                uint numClusters = GetNumClustersInPage(basePageAddress);
+                DenseGeometry dg = GetDenseGeometryHeader(basePageAddress, numClusters, clusterIndex);
+
+                Brick brick = dg.DecodeBrick(brickIndex);
+                float3 pos = DecodePosition(brick.vertexOffset);
+
+                uint3 maxP;
+                GetBrickMax(brick.bitMask, maxP);
+                float voxelSize = dg.lodError;
+
+                uint3 voxel = ;
+
+                // DDA
+                for (;;)
+                {
+                    uint bit = voxel.x + (voxel.y + voxel.z * 4) * 4;
+
+                    if (brick.bitMask & (1u << bit))
+                    {
+                        float tHit;
+                        query.CommitProceduralPrimitiveHit(tHit);
+                        break;
+                    }
+                }
+
+                // i mean you can make the instance id the cluster index / page 
+                // but then how do you store the actual instance id? do you just not care?
+                // in the hit kind you can also store the bit you got from the dda
+            }
+        }
+
+        if (query.CommittedStatus() == COMMITTED_NOTHING)
         {
             float3 d = normalize(mul(scene.lightFromRender, float4(dir, 0)).xyz);
 
@@ -149,11 +189,6 @@ void main()
         if (depth++ >= maxDepth)
         {
             break;
-        }
-
-        if (depth > 0) 
-        {
-            InterlockedAdd(test[23], 1);
         }
 
         if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT)

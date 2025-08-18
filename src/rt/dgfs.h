@@ -80,7 +80,7 @@ struct alignas(CACHE_LINE_SIZE) DenseGeometryBuildData
     ChunkedLinkedList<u32> debugRestartCountPerDword;
     ChunkedLinkedList<u32> debugRestartHighBitPerDword;
 
-    DenseGeometryBuildData();
+    DenseGeometryBuildData(Arena *arena);
 
     void WriteVertexData(const Mesh &mesh, const StaticArray<u32> &meshVertexIndices,
                          DGFTempResources &tempResources);

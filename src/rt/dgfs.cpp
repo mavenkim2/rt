@@ -100,9 +100,8 @@ StaticArray<RecordAOSSplits> BuildClusters(Arena *arena, PrimRef *primRefs,
 
 } // namespace ClusterBuilder
 
-DenseGeometryBuildData::DenseGeometryBuildData()
+DenseGeometryBuildData::DenseGeometryBuildData(Arena *arena) : arena(arena)
 {
-    arena             = ArenaAlloc();
     geoByteBuffer     = ChunkedLinkedList<u8>(arena, 1024);
     shadingByteBuffer = ChunkedLinkedList<u8>(arena, 1024);
     headers           = ChunkedLinkedList<PackedDenseGeometryHeader>(arena);
@@ -230,10 +229,18 @@ void DenseGeometryBuildData::WriteVertexData(const Mesh &mesh,
                                headerOffset, 8);
 
     headerOffset = 0;
-    packed.e     = BitFieldPackU32(packed.e, vertexCount, headerOffset, 9);
+    packed.e     = BitFieldPackU32(packed.e, vertexCount, headerOffset, 14);
     headerOffset += 8;
     packed.e = BitFieldPackU32(packed.e, bitWidths.y, headerOffset, 5);
     packed.e = BitFieldPackU32(packed.e, bitWidths.z, headerOffset, 5);
+
+    headerOffset = 0;
+    packed.h     = BitFieldPackU32(packed.h, numOctBitsX, headerOffset, 5);
+    packed.h     = BitFieldPackU32(packed.h, numOctBitsY, headerOffset, 5);
+
+    headerOffset = 0;
+    packed.i     = BitFieldPackU32(packed.h, tempResources.minOct.x, headerOffset, 16);
+    packed.i     = BitFieldPackU32(packed.h, tempResources.minOct.y, headerOffset, 16);
 }
 
 void DenseGeometryBuildData::WriteMaterialIDs(const StaticArray<u32> &materialIndices,
@@ -421,8 +428,8 @@ void DenseGeometryBuildData::WriteVoxelData(StaticArray<CompressedVoxel> &voxels
     packed.z                          = shadingBaseAddress;
     packed.a                          = geoBaseAddress;
 
-    u32 headerOffset = 26;
-    packed.h         = BitFieldPackU32(packed.h, numCompressedVoxels, headerOffset, 6);
+    Assert(numCompressedVoxels < (1u << 14u));
+    packed.g = numCompressedVoxels | (1u << 31u);
 
     headers.AddBack() = packed;
 }

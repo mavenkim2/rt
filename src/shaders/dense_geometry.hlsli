@@ -50,7 +50,7 @@ struct DenseGeometry
 
     Brick DecodeBrick(uint brickIndex) 
     {
-        uint2 offsets = GetAlignedAddressAndBitOffset(brickOffset, brickIndex * (64 + MAX_CLUSTER_VERTICES_BIT));
+        uint2 offsets = GetAlignedAddressAndBitOffset(baseAddress + geoBaseAddress + brickOffset, brickIndex * (64 + MAX_CLUSTER_VERTICES_BIT));
         uint3 data = clusterPageData.Load3(offsets.x);
 
         uint3 packed = uint3(BitAlignU32(data.y, data.x, offsets.y),
@@ -59,7 +59,7 @@ struct DenseGeometry
 
         Brick brick;
         brick.bitMask = packed.x;
-        brick.bitMask |= (packed.y << 32u);
+        brick.bitMask |= ((uint64_t)packed.y << 32u);
         brick.vertexOffset = BitFieldExtractU32(packed.z, MAX_CLUSTER_VERTICES_BIT, 0);
 
         return brick;
@@ -351,11 +351,10 @@ DenseGeometry GetDenseGeometryHeader(uint4 packed[NUM_CLUSTER_HEADER_FLOAT4S], u
     result.anchor[2] = BitFieldExtractI32((int)packed[2].x, ANCHOR_WIDTH, 0);
     result.posPrecision = (int)BitFieldExtractU32(packed[2].x, 8, ANCHOR_WIDTH) + CLUSTER_MIN_PRECISION;
     
-    result.numVertices     = BitFieldExtractU32(packed[2].y, 9, 0);
-    uint reuseBufferLength = BitFieldExtractU32(packed[2].y, 8, 9);
-    result.posBitWidths[1] = BitFieldExtractU32(packed[2].y, 5, 17);
-    result.posBitWidths[2] = BitFieldExtractU32(packed[2].y, 5, 22);
-    result.octBitWidths[0] = BitFieldExtractU32(packed[2].y, 5, 27);
+    result.numVertices     = BitFieldExtractU32(packed[2].y, 14, 0);
+    uint reuseBufferLength = BitFieldExtractU32(packed[2].y, 8, 14);
+    result.posBitWidths[1] = BitFieldExtractU32(packed[2].y, 5, 22);
+    result.posBitWidths[2] = BitFieldExtractU32(packed[2].y, 5, 27);
 
     result.prevHighRestartBeforeDwords[1] = BitFieldExtractU32(packed[2].z, 6, 0);
     result.prevHighRestartBeforeDwords[2] = BitFieldExtractU32(packed[2].z, 7, 6);
@@ -363,18 +362,27 @@ DenseGeometry GetDenseGeometryHeader(uint4 packed[NUM_CLUSTER_HEADER_FLOAT4S], u
     result.prevHighEdge1BeforeDwords[1] = BitFieldExtractI32(packed[2].z, 7, 19);
     result.prevHighEdge2BeforeDwords[0] = BitFieldExtractI32(packed[2].z, 6, 26);
 
-    result.prevHighRestartBeforeDwords[0] = BitFieldExtractU32(packed[2].w, 5, 0);
-    result.prevHighEdge1BeforeDwords[2] = BitFieldExtractI32(packed[2].w, 8, 5);
-    result.prevHighEdge2BeforeDwords[1] = BitFieldExtractI32(packed[2].w, 7, 13);
-    result.prevHighEdge2BeforeDwords[2] = BitFieldExtractI32(packed[2].w, 8, 20);
+    uint isVoxel = BitFieldExtractU32(packed[2].w, 1, 31);
 
-    result.octBitWidths[1]                = BitFieldExtractU32(packed[3].x, 5, 0);
-    result.numPrevRestartsBeforeDwords[0] = BitFieldExtractU32(packed[3].x, 6, 5);
-    result.numPrevRestartsBeforeDwords[1] = BitFieldExtractU32(packed[3].x, 7, 11);
-    result.numPrevRestartsBeforeDwords[2] = BitFieldExtractU32(packed[3].x, 8, 18);
+    if (!isVoxel)
+    {
+        result.prevHighRestartBeforeDwords[0] = BitFieldExtractU32(packed[2].w, 5, 0);
+        result.prevHighEdge1BeforeDwords[2] = BitFieldExtractI32(packed[2].w, 8, 5);
+        result.prevHighEdge2BeforeDwords[1] = BitFieldExtractI32(packed[2].w, 7, 13);
+        result.prevHighEdge2BeforeDwords[2] = BitFieldExtractI32(packed[2].w, 8, 20);
+    }
+    else 
+    {
+        result.numBricks = BitFieldExtractU32(packed[2].w, 14, 0);
+    }
+
+    result.octBitWidths[0]                = BitFieldExtractU32(packed[3].x, 5, 0);
+    result.octBitWidths[1]                = BitFieldExtractU32(packed[3].x, 5, 5);
+    result.numPrevRestartsBeforeDwords[0] = BitFieldExtractU32(packed[3].x, 6, 10);
+    result.numPrevRestartsBeforeDwords[1] = BitFieldExtractU32(packed[3].x, 7, 16);
+    result.numPrevRestartsBeforeDwords[2] = BitFieldExtractU32(packed[3].x, 8, 23);
 
     result.numFaceIDBits = 0;
-    result.numBricks = BitFieldExtractU32(packed[3].x, 6, 26); 
     //result.numFaceIDBits = BitFieldExtractU32(packed[3].x, 6, 26); 
 
     result.octBase[0] = BitFieldExtractU32(packed[3].y, 16, 0);
@@ -394,6 +402,8 @@ DenseGeometry GetDenseGeometryHeader(uint4 packed[NUM_CLUSTER_HEADER_FLOAT4S], u
     result.faceIDOffset = result.normalOffset + ((result.numVertices * octBitWidth + 7) >> 3);
 
     result.ctrlOffset = (result.numVertices * vertexBitWidth + 7) >> 3;
+    result.brickOffset = result.ctrlOffset;
+
     result.indexOffset = result.ctrlOffset + 12 * ((result.numTriangles + 31u) >> 5u);
     result.firstBitOffset = (result.indexOffset << 3) + reuseBufferLength * result.indexBitWidth;
 

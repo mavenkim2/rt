@@ -1826,6 +1826,11 @@ void Vulkan::DestroyAccelerationStructure(GPUAccelerationStructure *as)
     DestroyBuffer(&as->buffer);
 }
 
+void Vulkan::DestroyAccelerationStructure(VkAccelerationStructureKHR as)
+{
+    vkDestroyAccelerationStructureKHR(device, as, 0);
+}
+
 void Vulkan::DestroyPool(VkDescriptorPool pool) { vkDestroyDescriptorPool(device, pool, 0); }
 
 int Vulkan::BindlessIndex(GPUImage *image)
@@ -3387,7 +3392,6 @@ void Vulkan::CreateAccelerationStructures(StaticArray<BLASBuildInfo> &blasBuildI
         accelCreateInfo.size   = buildInfo.accelSize;
         accelCreateInfo.type   = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
 
-        VulkanAccelerationStructure *as = PushStruct(arena, VulkanAccelerationStructure);
         vkCreateAccelerationStructureKHR(device, &accelCreateInfo, 0, &buildInfo.as);
 
         VkAccelerationStructureDeviceAddressInfoKHR deviceAddressInfo = {
@@ -3709,6 +3713,35 @@ GPUAccelerationStructure CommandBuffer::CompactAS(QueryPool &pool,
         vkGetAccelerationStructureDeviceAddressKHR(device->device, &accelDeviceAddressInfo);
     return result;
 }
+
+// void CommandBuffer::CopyAccelerationStructures(
+//     StaticArray<CopyAccelerationStructure> &commands)
+// {
+//     for (u32 i = 0; i < commands.Length(); i++)
+//     {
+//         CopyAccelerationStructure &copy = commands[i];
+//
+//         VkCopyAccelerationStructureModeKHR mode;
+//         switch (copy.mode)
+//         {
+//             case AccelerationStructureCopyMode::Copy:
+//                 mode = VK_COPY_ACCELERATION_STRUCTURE_MODE_CLONE_KHR;
+//                 break;
+//             case AccelerationStructureCopyMode::Compact:
+//                 mode = VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR;
+//                 break;
+//             default: Assert(0);
+//         }
+//
+//         VkCopyAccelerationStructureInfoKHR copyInfo = {
+//             VK_STRUCTURE_TYPE_COPY_ACCELERATION_STRUCTURE_INFO_KHR};
+//         copyInfo.src  = copy.src;
+//         copyInfo.dst  = copy.dst;
+//         copyInfo.mode = mode;
+//
+//         vkCmdCopyAccelerationStructureKHR(buffer, &copyInfo);
+//     }
+// }
 
 void CommandBuffer::ClearBuffer(GPUBuffer *b, u32 val)
 {
