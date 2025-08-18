@@ -690,6 +690,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             u32 numClusters            = *(u32 *)src;
             u32 clusterHeaderSOAStride = numClusters * 16;
 
+            u32 pageNumBricks = 0;
             for (u32 clusterIndex = 0; clusterIndex < numClusters; clusterIndex++)
             {
                 u32 clusterHeaderSOAStride = numClusters * 16;
@@ -747,7 +748,23 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
                         aabbs.Push(aabb);
                     }
+                    for (u32 extra = 0; extra < MAX_CLUSTER_TRIANGLES - numBricks; extra++)
+                    {
+                        AABB aabb = {};
+                        aabb.minX = float(NaN);
+
+                        aabbs.Push(aabb);
+                    }
+                    pageNumBricks += MAX_CLUSTER_TRIANGLES;
                 }
+            }
+            u32 limit = MAX_CLUSTERS_PER_PAGE * MAX_CLUSTER_TRIANGLES;
+            for (u32 extra = pageNumBricks; extra < limit; extra++)
+            {
+                AABB aabb = {};
+                aabb.minX = float(NaN);
+
+                aabbs.Push(aabb);
             }
         }
 
@@ -815,18 +832,18 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             &instance, VK_BUFFER_USAGE_2_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
             sizeof(VkAccelerationStructureInstanceKHR));
 
-        dgfTransferCmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                                VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                                VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                                VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
-        dgfTransferCmd->FlushBarriers();
+        allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                  VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                  VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                  VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+        allCommandBuffer->FlushBarriers();
 
-        tlas = dgfTransferCmd->BuildTLAS(&instanceBuffer.buffer, 1).as;
-        dgfTransferCmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                                VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                                VK_ACCESS_2_SHADER_READ_BIT);
-        dgfTransferCmd->FlushBarriers();
+        tlas = allCommandBuffer->BuildTLAS(&instanceBuffer.buffer, 1).as;
+        allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                  VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                                  VK_ACCESS_2_SHADER_READ_BIT);
+        allCommandBuffer->FlushBarriers();
     }
 
     // Build the TLAS over BLAS
@@ -903,9 +920,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     // virtualGeometryManager.Test(tlasScenes[0]);
 
-    TransferBuffer gpuInstancesBuffer =
-        allCommandBuffer->SubmitBuffer(gpuInstances.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                       sizeof(GPUInstance) * gpuInstances.Length());
+    // TransferBuffer gpuInstancesBuffer =
+    //     allCommandBuffer->SubmitBuffer(gpuInstances.data,
+    //     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+    //                                    sizeof(GPUInstance) * gpuInstances.Length());
 
     // allCommandBuffer->SubmitBuffer(
     //     &virtualGeometryManager.instanceRefBuffer,

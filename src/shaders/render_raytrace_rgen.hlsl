@@ -7,6 +7,7 @@
 [[vk::ext_extension("SPV_NV_cluster_acceleration_structure")]]
 
 #include "common.hlsli"
+#include "hit.hlsli"
 #include "bsdf/bxdf.hlsli"
 #include "bsdf/bsdf.hlsli"
 #include "rt.hlsli"
@@ -86,12 +87,16 @@ void main()
         query.TraceRayInline(accel, RAY_FLAG_NONE, 0xff, desc);
 
         uint hitKind = 0;
+        uint hitAxis = 0;
+        float3 hitP;
         while (query.Proceed())
         {
             if (query.CandidateType() == CANDIDATE_PROCEDURAL_PRIMITIVE)
             {
-                uint clusterID;
-                uint brickIndex = query.CandidatePrimitiveIndex();
+                uint primitiveIndex = query.CandidatePrimitiveIndex();
+                uint brickIndex = primitiveIndex & (MAX_CLUSTER_TRIANGLES - 1u);
+                uint clusterID = primitiveIndex >> MAX_CLUSTER_TRIANGLES_BIT;
+
                 uint pageIndex = GetPageIndexFromClusterID(clusterID); 
                 uint clusterIndex = GetClusterIndexFromClusterID(clusterID);
 
@@ -100,30 +105,70 @@ void main()
                 DenseGeometry dg = GetDenseGeometryHeader(basePageAddress, numClusters, clusterIndex);
 
                 Brick brick = dg.DecodeBrick(brickIndex);
-                float3 pos = DecodePosition(brick.vertexOffset);
-
-                uint3 maxP;
-                GetBrickMax(brick.bitMask, maxP);
+                float3 pos = dg.DecodePosition(brick.vertexOffset);
                 float voxelSize = dg.lodError;
+                float rcpVoxelSize = rcp(voxelSize);
 
-                uint3 voxel = ;
+                uint3 voxelMax;
+                GetBrickMax(brick.bitMask, voxelMax);
+                float3 boundsMin = pos; 
+                float3 boundsMax = pos + float3(voxelMax) * voxelSize; 
 
-                // DDA
-                for (;;)
+                float3 objectRayOrigin = query.CandidateObjectRayOrigin();
+                float3 objectRayDir = query.CandidateObjectRayDirection();
+                float3 invDir = rcp(objectRayDir);
+
+                float3 tIntersectMin = (boundsMin - objectRayOrigin) * invDir;
+                float3 tIntersectMax = (boundsMax - objectRayOrigin) * invDir;
+
+                float3 tMin = min(tIntersectMin, tIntersectMax);
+                float3 tMax = max(tIntersectMin, tIntersectMax);
+
+                float tEntry = max(tMin.x, max(tMin.y, tMin.z));
+                float tLeave = min(tMax.x, min(tMax.y, tMax.z));
+
+                if (tEntry <= tLeave)
                 {
-                    uint bit = voxel.x + (voxel.y + voxel.z * 4) * 4;
+                    uint axis = tEntry == tMin.x ? 0 : (tEntry == tMin.y ? 1 : 2);
 
-                    if (brick.bitMask & (1u << bit))
+                    float tHit = tEntry;
+                    float maxT = tLeave;
+
+                    int3 step = int3(objectRayDir.x >= 0 ? 1 : -1, objectRayDir.y >= 0 ? 1 : -1, 
+                                     objectRayDir.z >= 0 ? 1 : -1);
+                    int3 add = int3(objectRayDir.x >= 0 ? 1 : 0, objectRayDir.y >= 0 ? 1 : 0,
+                                    objectRayDir.z >= 0 ? 1 : 0);
+
+                    float3 stepT = abs(invDir) * voxelSize; 
+
+                    float3 intersectP = objectRayOrigin + objectRayDir * tHit - boundsMin;
+                    int3 voxel = clamp((int3)floor(intersectP * rcpVoxelSize), 0, 3);
+
+                    float3 nextTime = tHit + ((voxel + add) * voxelSize - intersectP) * invDir;
+
+                    // DDA
+                    for (;;)
                     {
-                        float tHit;
-                        query.CommitProceduralPrimitiveHit(tHit);
-                        break;
+                        if (tHit >= maxT || any(and(objectRayDir < 0, voxel < 0)) || any(and(objectRayDir >= 0, voxel >= voxelMax))) break;
+
+                        uint bit = voxel.x + voxel.y * 4 + voxel.z * 16;
+                        if (brick.bitMask & (1u << bit))
+                        {
+                            hitKind = bit;
+
+                            hitAxis = 2 * axis + (objectRayDir[axis] >= 0 ? 0 : 1);
+                            query.CommitProceduralPrimitiveHit(tHit);
+                            break;
+                        }
+
+                        float nextT = min(nextTime.x, min(nextTime.y, nextTime.z));
+                        axis = nextT == nextTime.x ? 0 : (nextT == nextTime.y ? 1 : 2);
+
+                        voxel[axis] += step[axis];
+                        nextTime[axis] += stepT[axis];
+                        tHit = nextT;
                     }
                 }
-
-                // i mean you can make the instance id the cluster index / page 
-                // but then how do you store the actual instance id? do you just not care?
-                // in the hit kind you can also store the bit you got from the dda
             }
         }
 
@@ -191,6 +236,13 @@ void main()
             break;
         }
 
+        uint materialID = 0;
+        HitInfo hitInfo = (HitInfo)0;
+        float3 objectRayDir = query.CommittedObjectRayDirection();
+        uint instanceID = query.CommittedInstanceID();
+        float3x4 objectToWorld = query.CommittedObjectToWorld3x4();
+        float rayT = query.CommittedRayT();
+
         if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
         {
             uint clusterID = GetClusterIDNV(query, RayQueryCommittedIntersectionKHR);
@@ -199,11 +251,6 @@ void main()
 
             uint triangleIndex = query.CommittedPrimitiveIndex();
             float2 bary = query.CommittedTriangleBarycentrics();
-
-            uint instanceID = query.CommittedInstanceID();
-            float3x4 objectToWorld = query.CommittedObjectToWorld3x4();
-            float rayT = query.CommittedRayT();
-            float3 objectRayDir = query.CommittedObjectRayDirection();
 #if 0
         if (IsHitNV(hitObject))
         {
@@ -222,9 +269,10 @@ void main()
             DenseGeometry dg = GetDenseGeometryHeader(basePageAddress, numClusters, clusterIndex);
 
             uint materialID = dg.DecodeMaterialID(triangleIndex);
-            uint2 pageInformation = dg.DecodeFaceIDAndRotateInfo(triangleIndex);
             uint3 vids = dg.DecodeTriangle(triangleIndex);
 
+#if 0
+            uint2 pageInformation = dg.DecodeFaceIDAndRotateInfo(triangleIndex);
             uint faceID = pageInformation.x;
             // Rotate to original order
             uint rotate = BitFieldExtractU32(pageInformation.y, 2, 0);
@@ -235,6 +283,7 @@ void main()
             float2 oldBary = bary;
             bary.x = (rotate == 1 ? 1 - oldBary.x - oldBary.y : (rotate == 2 ? oldBary.y : oldBary.x));
             bary.y = (rotate == 1 ? oldBary.x : (rotate == 2 ? 1 - oldBary.x - oldBary.y : oldBary.y));
+#endif
 
             float3 p0 = dg.DecodePosition(vids[0]);
             float3 p1 = dg.DecodePosition(vids[1]);
@@ -260,124 +309,109 @@ void main()
             // p0 + dpdu * u + dpdv * v = p1
 
             float2 uv0 = float2(0, 0);
-            float2 uv1 = isSecondFace ? float2(1, 1) : float2(1, 0);
-            float2 uv2 = isSecondFace ? float2(0, 1) : float2(1, 1);
+            float2 uv1 = float2(0, 1);//isSecondFace ? float2(1, 1) : float2(1, 0);
+            float2 uv2 = float2(1, 1);//isSecondFace ? float2(0, 1) : float2(1, 1);
 
-            float2 duv10 = uv1 - uv0;
-            float2 duv20 = uv2 - uv0;
-            float det = mad(duv10.x, duv20.y, -duv10.y * duv20.x);
+            hitInfo = CalculateTriangleHitInfo(p0, p1, p2, n0, n1, n2, uv0, uv1, uv2, bary);
 
-            float3 dpdu, dpdv, dndu, dndv = 0;
-            float3 dp10 = p1 - p0;
-            float3 dp20 = p2 - p0;
-            float3 dn10 = n1 - n0;
-            float3 dn20 = n2 - n0;
-
-            if (abs(det) < 1e-9f)
-            {
-                float2x3 tb = BuildOrthonormalBasis(gn);
-                dpdu = tb[0];
-                dpdv = tb[1];
-            }
-            else 
-            {
-                float invDet = rcp(det);
-
-                dpdu = mad(duv20.y, dp10, -duv10.y * dp20) * invDet;
-                dpdv = mad(-duv20.x, dp10, duv10.x * dp20) * invDet;
-                
-                dndu = mad(duv20.y, dn10, -duv10.y * dn20) * invDet;
-                dndv = mad(-duv20.x, dn10, duv10.x * dn20) * invDet;
-            }
-
-            float3 n = normalize(n0 + dn10 * bary[0] + dn20 * bary[1]);
-
-            float3 ss = dpdu;
-            float3 ts = cross(n, ss);
-            if (dot(ts, ts) > 0)
-            {
-                ss = cross(ts, n);
-            }
-            else
-            {
-                float2x3 tb = BuildOrthonormalBasis(n);
-                ss = tb[0];
-                ts = tb[1];
-            }
-
-            ss = normalize(ss);
-            ts = cross(n, ss);
-
-            // Get material
-            GPUMaterial material = materials[NonUniformResourceIndex(materialID)];
-
-            float3 origin = p0 + dp10 * bary.x + dp20 * bary.y;
-            float2 uv = uv0 + duv10 * bary.x + duv20 * bary.y;
-
-            float3 wo = normalize(float3(dot(ss, -objectRayDir), dot(ts, -objectRayDir), dot(n, -objectRayDir)));
-
-            float2 sample = rng.Uniform2D();
-
-            float surfaceSpreadAngle = depth == 1 ? rayCone.CalculatePrimaryHitUnifiedSurfaceSpreadAngle(dir, n, p0, p1, p2, n0, n1, n2) 
-                                                  : rayCone.CalculateSecondaryHitSurfaceSpreadAngle(dir, n, p0, p1, p2, n0, n1, n2);
-
-            float filterU = rng.Uniform();
-
-            uint2 virtualPage = ~0u;
-            switch (material.type) 
-            {
-                case GPUMaterialType::Dielectric:
-#if 1
-                {
-                    dir = SampleDielectric(wo, material.eta, sample, throughput, printDebug);
-                }
-                break;
-#endif
-                case GPUMaterialType::Diffuse: 
-                {
-                    // Get base face data
+            // Ray cone
 #if 0
-                    Ptex::FaceData faceData = Ptex::GetFaceData(material, faceID);
-                    int2 dim = int2(1u << faceData.log2Dim.x, 1u << faceData.log2Dim.y);
+            Ptex::FaceData faceData = Ptex::GetFaceData(material, faceID);
+            int2 dim = int2(1u << faceData.log2Dim.x, 1u << faceData.log2Dim.y);
 
-                    rayCone.Propagate(surfaceSpreadAngle, rayT);
-                    float lambda = rayCone.ComputeTextureLOD(p0, p1, p2, uv0, uv1, uv2, dir, n, dim, printDebug);
-                    uint mipLevel = (uint)lambda;
-
-                    float4 reflectance = SampleStochasticCatmullRomBorderless(faceData, material, faceID, uv, mipLevel, filterU, printDebug);
+            float4 reflectance = SampleStochasticCatmullRomBorderless(faceData, material, faceID, uv, mipLevel, filterU, printDebug);
+            float surfaceSpreadAngle = depth == 1 ? rayCone.CalculatePrimaryHitUnifiedSurfaceSpreadAngle(dir, hitInfo.n, p0, p1, p2, n0, n1, n2) 
+                                                  : rayCone.CalculateSecondaryHitSurfaceSpreadAngle(dir, hitInfo.n, p0, p1, p2, n0, n1, n2);
+            rayCone.Propagate(surfaceSpreadAngle, rayT);
+            float lambda = rayCone.ComputeTextureLOD(p0, p1, p2, uv0, uv1, uv2, dir, hitInfo.n, dim, printDebug);
+            uint mipLevel = (uint)lambda;
 #endif
-
-                    // Debug
-                    uint hash = Hash(instanceID);
-                    float4 reflectance;
-                    reflectance.x = max(.2f, ((hash >> 0) & 0xff) / 255.f);
-                    reflectance.y = max(.2f, ((hash >> 8) & 0xff) / 255.f);
-                    reflectance.z = max(.2f, ((hash >> 16) & 0xff) / 255.f);
-                    reflectance.w = 1.f;
-
-                    //float4 reflectance = float4(0.f, 1.f, 0.f, 1.f);
-                    dir = SampleDiffuse(reflectance.xyz, wo, sample, throughput, printDebug);
-
-#if 0
-                    if (depth == 1)
-                    {
-                        float2 newUv = faceData.rotate ? float2(1 - uv.y, uv.x) : uv;
-                        uint2 virtualPage = VirtualTexture::CalculateVirtualPage(faceData.faceOffset, newUv, dim, mipLevel);
-                        const uint feedbackMipLevel = VirtualTexture::ClampMipLevel(dim, mipLevel);
-                        feedbackRequest = PackFeedbackEntry(virtualPage.x, virtualPage.y, material.textureIndex, feedbackMipLevel);
-                    }
-#endif
-                }
-                break;
-            }
-
-
-            if (dir.z == 0) break;
-            origin = TransformP(objectToWorld, origin);
-            dir = ss * dir.x + ts * dir.y + n * dir.z;
-            dir = normalize(TransformV(objectToWorld, dir));
-            pos = OffsetRayOrigin(origin, gn, printDebug);
         }
+        else if (query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
+        {
+            uint primitiveIndex = query.CommittedPrimitiveIndex();
+            uint brickIndex = primitiveIndex & (MAX_CLUSTER_TRIANGLES - 1u);
+            uint clusterID = primitiveIndex >> MAX_CLUSTER_TRIANGLES_BIT;
+
+            uint pageIndex = GetPageIndexFromClusterID(clusterID); 
+            uint clusterIndex = GetClusterIndexFromClusterID(clusterID);
+
+            uint basePageAddress = GetClusterPageBaseAddress(pageIndex);
+            uint numClusters = GetNumClustersInPage(basePageAddress);
+            DenseGeometry dg = GetDenseGeometryHeader(basePageAddress, numClusters, clusterIndex);
+
+            materialID = dg.DecodeMaterialID(brickIndex);
+            Brick brick = dg.DecodeBrick(brickIndex);
+
+            uint64_t mask = brick.bitMask & ((1ull << hitKind) - 1ull);
+            uint vertexOffset = brick.vertexOffset + countbits(uint(mask)) + countbits(uint(mask >> 32u));
+
+            // TODO: get shading normal
+            hitInfo.hitP = pos + dir * rayT;
+            //hitInfo.ss = float3(1, 0, 0);
+            //hitInfo.ts = float3(0, 1, 0);
+
+            hitInfo.n[hitAxis >> 1] = (hitAxis & 1) ? -1 : 1;
+            float2x3 tb = BuildOrthonormalBasis(hitInfo.n);
+            hitInfo.ss = tb[0];
+            hitInfo.ts = tb[1];
+
+        }
+
+        // Get material
+        GPUMaterial material = materials[NonUniformResourceIndex(materialID)];
+
+        float3 wo = normalize(float3(dot(hitInfo.ss, -objectRayDir), dot(hitInfo.ts, -objectRayDir),
+                              dot(hitInfo.n, -objectRayDir)));
+
+        float2 sample = rng.Uniform2D();
+
+        float filterU = rng.Uniform();
+
+        uint2 virtualPage = ~0u;
+        switch (material.type) 
+        {
+            case GPUMaterialType::Dielectric:
+            {
+                dir = SampleDielectric(wo, material.eta, sample, throughput, printDebug);
+            }
+            break;
+            case GPUMaterialType::Diffuse: 
+            {
+                // Get base face data
+
+                // Debug
+#if 0
+                uint hash = Hash(instanceID);
+                float4 reflectance;
+                reflectance.x = max(.2f, ((hash >> 0) & 0xff) / 255.f);
+                reflectance.y = max(.2f, ((hash >> 8) & 0xff) / 255.f);
+                reflectance.z = max(.2f, ((hash >> 16) & 0xff) / 255.f);
+                reflectance.w = 1.f;
+#endif
+
+                float4 reflectance = float4(0.f, 1.f, 0.f, 1.f);
+                dir = SampleDiffuse(reflectance.xyz, wo, sample, throughput, printDebug);
+
+#if 0
+                if (depth == 1)
+                {
+                    float2 newUv = faceData.rotate ? float2(1 - uv.y, uv.x) : uv;
+                    uint2 virtualPage = VirtualTexture::CalculateVirtualPage(faceData.faceOffset, newUv, dim, mipLevel);
+                    const uint feedbackMipLevel = VirtualTexture::ClampMipLevel(dim, mipLevel);
+                    feedbackRequest = PackFeedbackEntry(virtualPage.x, virtualPage.y, material.textureIndex, feedbackMipLevel);
+                }
+#endif
+            }
+            break;
+        }
+
+
+        if (dir.z == 0) break;
+        float3 origin = TransformP(objectToWorld, hitInfo.hitP);
+        dir = hitInfo.ss * dir.x + hitInfo.ts * dir.y + hitInfo.n * dir.z;
+        dir = normalize(TransformV(objectToWorld, dir));
+        pos = OffsetRayOrigin(origin, hitInfo.gn, printDebug);
 
 #if 1
         // Warp based russian roulette
