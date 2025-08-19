@@ -3022,7 +3022,7 @@ void Vulkan::ConvertCLASIndirectInfo(CLASOpInput opInput, CLASOpType opType,
         vkOpInput.triangleClusters.maxGeometryIndexValue         = 1;
         vkOpInput.triangleClusters.maxClusterUniqueGeometryCount = 1;
         vkOpInput.triangleClusters.maxClusterTriangleCount       = MAX_CLUSTER_TRIANGLES;
-        vkOpInput.triangleClusters.maxClusterVertexCount         = MAX_CLUSTER_VERTICES;
+        vkOpInput.triangleClusters.maxClusterVertexCount = MAX_CLUSTER_TRIANGLE_VERTICES;
         vkOpInput.triangleClusters.maxTotalTriangleCount =
             opInput.triangleClusters.maxNumTriangles;
         vkOpInput.triangleClusters.maxTotalVertexCount =

@@ -2641,7 +2641,7 @@ static bool GenerateValidTriClusters(Arena *arena, Mesh &mesh, u32 maxNumTriangl
             }
         }
 
-        if (vertexCount > MAX_CLUSTER_VERTICES)
+        if (vertexCount > MAX_CLUSTER_TRIANGLE_VERTICES)
         {
             Print("too many verts\n");
             return false;
@@ -2651,99 +2651,6 @@ static bool GenerateValidTriClusters(Arena *arena, Mesh &mesh, u32 maxNumTriangl
     out = result;
     return true;
 }
-
-// static ClusterBuilder GenerateValidClusters(Arena *arena, PrimRef *newPrimRefs,
-//                                             RecordAOSSplits &r, u32 *indices,
-//                                             StaticArray<CompressedVoxel> *bricks = 0)
-// {
-//     u32 maxNumPrimitives = bricks ? MAX_CLUSTER_BRICKS : MAX_CLUSTER_TRIANGLES;
-//     ClusterBuilder clusterBuilder;
-//     ScratchArena scratch;
-//     u32 iters = 0;
-//     for (;;)
-//     {
-//         Assert(maxNumPrimitives);
-//         struct HashedIndex
-//         {
-//             u32 geomID;
-//             u32 index;
-//             u32 Hash() const { return MixBits(((u64)geomID << 32) | index); }
-//             bool operator==(const HashedIndex &other) const
-//             {
-//                 return index == other.index && geomID == other.geomID;
-//             }
-//         };
-//         clusterBuilder = ClusterBuilder(arena, newPrimRefs);
-//
-//         // TODO: use graph partitioning with triangles edges to cluster instead
-//         clusterBuilder.BuildClusters(r, false, maxNumPrimitives);
-//
-//         bool valid = true;
-//         for (auto &list : clusterBuilder.threadClusters)
-//         {
-//             for (auto *node = list.l.first; node != 0; node = node->next)
-//             {
-//                 for (int i = 0; i < node->count; i++)
-//                 {
-//                     RecordAOSSplits &record = node->values[i];
-//                     Assert(record.count <= maxNumPrimitives);
-//                     u32 clusterNumTriangles = record.count;
-//                     HashMap<HashedIndex> vertexHashSet(
-//                         scratch.temp.arena, NextPowerOfTwo(clusterNumTriangles * 3));
-//
-//                     u32 clusterStart = record.start;
-//
-//                     u32 primCount   = 0;
-//                     u32 vertexCount = 0;
-//                     u32 numBricks   = 0;
-//                     for (int i = clusterStart; i < clusterStart + clusterNumTriangles; i++)
-//                     {
-//                         PrimRef &ref = newPrimRefs[i];
-//                         if (ref.primID >= 0x80000000u)
-//                         {
-//                             u32 brickID            = ref.primID & 0x7fffffffu;
-//                             CompressedVoxel &voxel = (*bricks)[brickID];
-//                             u32 numVertices =
-//                                 PopCount(voxel.bitMask) + PopCount(voxel.bitMask >> 32u);
-//                             vertexCount += numVertices;
-//                             numBricks++;
-//                         }
-//                         else
-//                         {
-//                             Assert(!bricks);
-//                             for (int vertexIndex = 0; vertexIndex < 3; vertexIndex++)
-//                             {
-//                                 u32 index         = indices[3 * ref.primID + vertexIndex];
-//                                 auto *hashedIndex = vertexHashSet.Find({ref.geomID, index});
-//                                 if (!hashedIndex)
-//                                 {
-//                                     vertexHashSet.Add(scratch.temp.arena, {ref.geomID,
-//                                     index}); vertexCount++;
-//                                 }
-//                             }
-//                             primCount++;
-//                         }
-//                     }
-//                     if (vertexCount > MAX_CLUSTER_VERTICES ||
-//                         primCount > MAX_CLUSTER_TRIANGLES || numBricks > MAX_CLUSTER_BRICKS)
-//                     {
-//                         valid = false;
-//                         break;
-//                     }
-//                 }
-//                 if (!valid) break;
-//             }
-//             if (!valid) break;
-//         }
-//
-//         if (valid) break;
-//
-//         iters++;
-//         maxNumPrimitives -= 2;
-//         ReleaseArenaArray(clusterBuilder.arenas);
-//     }
-//     return clusterBuilder;
-// }
 
 struct ClusterData
 {
@@ -4512,7 +4419,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     pageInfos.Push(finalPageInfo);
 
     Graph<ClusterFixup> pageToParentClusterGraph;
-    u32 numParentPages = pageToParentClusterGraph.InitializeStatic(
+    u32 numParentClusters = pageToParentClusterGraph.InitializeStatic(
         scratch.temp.arena, pageInfos.Length(),
         [&](u32 pageIndex, u32 *offsets, ClusterFixup *data = 0) {
             PageInfo &pageInfo = pageInfos[pageIndex];
@@ -4552,7 +4459,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
         });
 
     Graph<u32> pageToParentPageGraph;
-    u32 numParentClusters = pageToParentPageGraph.InitializeStatic(
+    u32 numParentPages = pageToParentPageGraph.InitializeStatic(
         scratch.temp.arena, pageInfos.Length(),
         [&](u32 pageIndex, u32 *offsets, u32 *data = 0) {
             u32 num = 0;
@@ -4635,8 +4542,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                  clusterGroupIndex < part.clusterStartIndex + part.clusterCount;
                  clusterGroupIndex++)
             {
-                int clusterIndex = group.clusterStartIndex + clusterGroupIndex;
-                Cluster &cluster = clusters[clusterIndex];
+                int clusterIndex         = group.clusterStartIndex + clusterGroupIndex;
+                Cluster &cluster         = clusters[clusterIndex];
                 ClusterGroup &childGroup = clusterGroups[cluster.childGroupIndex];
                 int headerIndex          = cluster.headerIndex;
                 int buildDataIndex       = childGroup.buildDataIndex;
@@ -4857,7 +4764,6 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
         u32 parentIndex;
         u32 childIndex;
-        bool parentClusterTotalUnderThreshold;
     };
 
     const u32 maxClustersPerSubtree = MAX_CLUSTERS_PER_BLAS;
@@ -4867,10 +4773,9 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     u32 writeOffset = 0;
 
     StackEntry root;
-    root.node                             = rootNode;
-    root.parentIndex                      = ~0u;
-    root.childIndex                       = ~0u;
-    root.parentClusterTotalUnderThreshold = false;
+    root.node        = rootNode;
+    root.parentIndex = ~0u;
+    root.childIndex  = ~0u;
 
     queue[writeOffset++] = root;
 
@@ -4949,8 +4854,6 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                 newEntry.node        = child.children[i];
                 newEntry.parentIndex = childOffset;
                 newEntry.childIndex  = i;
-                newEntry.parentClusterTotalUnderThreshold =
-                    clusterTotal < maxClustersPerSubtree;
 
                 u32 writeIndex    = writeOffset++;
                 queue[writeIndex] = newEntry;

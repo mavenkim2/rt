@@ -318,7 +318,7 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
     device->GetCLASBuildSizes(CLASOpMode::ExplicitDestinations,
                               maxPages * MAX_CLUSTERS_PER_PAGE,
                               maxPages * MAX_CLUSTERS_PER_PAGE * MAX_CLUSTER_TRIANGLES,
-                              maxPages * MAX_CLUSTERS_PER_PAGE * MAX_CLUSTER_VERTICES,
+                              maxPages * MAX_CLUSTERS_PER_PAGE * MAX_CLUSTER_TRIANGLE_VERTICES,
                               clasScratchSize, clasAccelerationStructureSize);
 
     Assert(clasAccelerationStructureSize <= expectedSize);
@@ -1487,34 +1487,6 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         device->EndEvent(cmd);
     }
 
-    // if (device->frameCount > 10)
-    // {
-    //     GPUBuffer readback =
-    //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-    //         templateInfosBuffer.size,
-    //                              MemoryUsage::GPU_TO_CPU);
-    //
-    //     // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-    //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-    //     //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-    //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-    //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-    //     VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-    //                  VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-    //     cmd->FlushBarriers();
-    //     cmd->CopyBuffer(&readback, &templateInfosBuffer);
-    //     Semaphore testSemaphore   = device->CreateSemaphore();
-    //     testSemaphore.signalValue = 1;
-    //     cmd->SignalOutsideFrame(testSemaphore);
-    //     device->SubmitCommandBuffer(cmd);
-    //     device->Wait(testSemaphore);
-    //
-    //     INSTANTIATE_CLUSTER_TEMPLATE_INFO *data =
-    //         (INSTANTIATE_CLUSTER_TEMPLATE_INFO *)readback.mappedPtr;
-    //
-    //     int stop = 5;
-    // }
-
     // Decode the clusters
     {
         device->BeginEvent(cmd, "Decode Installed Pages");
@@ -1623,6 +1595,35 @@ void VirtualGeometryManager::HierarchyTraversal(CommandBuffer *cmd, GPUBuffer *q
     cmd->FlushBarriers();
 
     device->EndEvent(cmd);
+
+    // if (device->frameCount > 10)
+    // {
+    //     GPUBuffer readback =
+    //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT, workItemQueueBuffer->size,
+    //                              MemoryUsage::GPU_TO_CPU);
+    //
+    //     // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+    //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+    //     //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+    //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
+    //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+    //                  VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+    //     cmd->FlushBarriers();
+    //     cmd->CopyBuffer(&readback, workItemQueueBuffer);
+    //     Semaphore testSemaphore   = device->CreateSemaphore();
+    //     testSemaphore.signalValue = 1;
+    //     cmd->SignalOutsideFrame(testSemaphore);
+    //     device->SubmitCommandBuffer(cmd);
+    //     device->Wait(testSemaphore);
+    //
+    //     Vec4u *data = (Vec4u *)readback.mappedPtr;
+    //
+    //     // i don't understand what's happening
+    //     //     isn't everything literally right?
+    //     //     it's just that the calculation error is too high?
+    //     //     the voxel size equals the lod error right? so what am i supposed to do?
+    //     int stop = 5;
+    // }
 }
 
 void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd,

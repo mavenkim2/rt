@@ -178,19 +178,19 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     instanceCullingPush.offset       = 0;
 
     DescriptorSetLayout instanceCullingLayout = {};
-    for (int i = 0; i <= 5; i++)
+    for (int i = 0; i <= 4; i++)
     {
         instanceCullingLayout.AddBinding(i, DescriptorType::StorageBuffer,
                                          VK_SHADER_STAGE_COMPUTE_BIT);
     }
-    instanceCullingLayout.AddBinding(6, DescriptorType::UniformBuffer,
+    instanceCullingLayout.AddBinding(5, DescriptorType::UniformBuffer,
                                      VK_SHADER_STAGE_COMPUTE_BIT);
-    instanceCullingLayout.AddBinding(7, DescriptorType::StorageBuffer,
-                                     VK_SHADER_STAGE_COMPUTE_BIT);
-    instanceCullingLayout.AddBinding(8, DescriptorType::StorageBuffer,
-                                     VK_SHADER_STAGE_COMPUTE_BIT);
-    instanceCullingLayout.AddBinding(9, DescriptorType::StorageBuffer,
-                                     VK_SHADER_STAGE_COMPUTE_BIT);
+    // instanceCullingLayout.AddBinding(7, DescriptorType::StorageBuffer,
+    //                                  VK_SHADER_STAGE_COMPUTE_BIT);
+    // instanceCullingLayout.AddBinding(8, DescriptorType::StorageBuffer,
+    //                                  VK_SHADER_STAGE_COMPUTE_BIT);
+    // instanceCullingLayout.AddBinding(9, DescriptorType::StorageBuffer,
+    //                                  VK_SHADER_STAGE_COMPUTE_BIT);
 
     VkPipeline instanceCullingPipeline =
         device->CreateComputePipeline(&instanceCullingShader, &instanceCullingLayout,
@@ -941,11 +941,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     .Bind(&workItemQueueBuffer, 0, sizeof(Vec4u) * MAX_CANDIDATE_NODES)
                     .Bind(&queueBuffer)
                     .Bind(&virtualGeometryManager.blasDataBuffer)
-                    .Bind(&virtualGeometryManager.instanceRefBuffer)
                     .Bind(&sceneTransferBuffers[currentBuffer].buffer)
-                    .Bind(&virtualGeometryManager.ptlasIndirectCommandBuffer)
-                    .Bind(&virtualGeometryManager.ptlasUpdateInfosBuffer)
-                    .Bind(&virtualGeometryManager.ptlasInstanceBitVectorBuffer)
+                    // .Bind(&virtualGeometryManager.ptlasIndirectCommandBuffer)
+                    // .Bind(&virtualGeometryManager.ptlasUpdateInfosBuffer)
+                    // .Bind(&virtualGeometryManager.ptlasInstanceBitVectorBuffer)
                     .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
                     .End();
 
@@ -1038,11 +1037,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     .Bind(&workItemQueueBuffer, 0, sizeof(Vec4u) * MAX_CANDIDATE_NODES)
                     .Bind(&queueBuffer)
                     .Bind(&virtualGeometryManager.blasDataBuffer)
-                    .Bind(&virtualGeometryManager.instanceRefBuffer)
+                    // .Bind(&virtualGeometryManager.instanceRefBuffer)
                     .Bind(&sceneTransferBuffers[currentBuffer].buffer)
-                    .Bind(&virtualGeometryManager.ptlasIndirectCommandBuffer)
-                    .Bind(&virtualGeometryManager.ptlasUpdateInfosBuffer)
-                    .Bind(&virtualGeometryManager.ptlasInstanceBitVectorBuffer)
+                    // .Bind(&virtualGeometryManager.ptlasIndirectCommandBuffer)
+                    // .Bind(&virtualGeometryManager.ptlasUpdateInfosBuffer)
+                    // .Bind(&virtualGeometryManager.ptlasInstanceBitVectorBuffer)
                     .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
                     .End();
 
@@ -1215,8 +1214,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         transferCmd->CopyBuffer(
             &virtualTextureManager.feedbackBuffers[currentBuffer].stagingBuffer,
             &virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
-        // transferCmd->CopyBuffer(&virtualGeometryManager.readbackBuffer,
-        //                         &virtualGeometryManager.streamingRequestsBuffer);
+        transferCmd->CopyBuffer(&virtualGeometryManager.readbackBuffer,
+                                &virtualGeometryManager.streamingRequestsBuffer);
         device->SubmitCommandBuffer(transferCmd, true);
 
         debugState.EndFrame(cmd);

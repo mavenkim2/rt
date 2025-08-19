@@ -409,8 +409,9 @@ void DenseGeometryBuildData::WriteVoxelData(StaticArray<CompressedVoxel> &voxels
     u32 numCompressedVoxels = voxels.Length();
 
     Assert(voxelClusterVertexIndices.Length() == numCompressedVoxels);
-    u32 brickBitStreamSize = ((64 + 14) * numCompressedVoxels + 7u) >> 3u;
-    auto *brickNode        = geoByteBuffer.AddNode(brickBitStreamSize);
+    u32 brickBitStreamSize =
+        ((64 + MAX_CLUSTER_VERTICES_BIT) * numCompressedVoxels + 7u) >> 3u;
+    auto *brickNode = geoByteBuffer.AddNode(brickBitStreamSize);
 
     for (u32 brickIndex = 0; brickIndex < numCompressedVoxels; brickIndex++)
     {
@@ -418,7 +419,7 @@ void DenseGeometryBuildData::WriteVoxelData(StaticArray<CompressedVoxel> &voxels
         WriteBits((u32 *)brickNode->values, brickBitOffset, (u32)brick.bitMask, 32);
         WriteBits((u32 *)brickNode->values, brickBitOffset, brick.bitMask >> 32u, 32);
         WriteBits((u32 *)brickNode->values, brickBitOffset,
-                  voxelClusterVertexIndices[brickIndex], 14); // MAX_CLUSTER_VERTICES_BIT);
+                  voxelClusterVertexIndices[brickIndex], MAX_CLUSTER_VERTICES_BIT);
     }
 
     Assert(materialIndices.Length() == voxelVertexIndices.Length());
@@ -471,7 +472,7 @@ void DenseGeometryBuildData::WriteTriangleData(StaticArray<int> &triangleIndices
                                    clusterNumTriangles * 3);
     StaticArray<u32> geomIDs(scratch.temp.arena, clusterNumTriangles);
     StaticArray<u32> clusterVertexIndexToMeshVertexIndex(scratch.temp.arena,
-                                                         MAX_CLUSTER_VERTICES);
+                                                         MAX_CLUSTER_TRIANGLE_VERTICES);
 
     u32 vertexCount = 0;
     u32 indexCount  = 0;
@@ -907,13 +908,13 @@ void DenseGeometryBuildData::WriteTriangleData(StaticArray<int> &triangleIndices
 
     u32 faceBitOffset = 0;
 
-    BitVector usedVertices(scratch.temp.arena, MAX_CLUSTER_VERTICES);
+    BitVector usedVertices(scratch.temp.arena, MAX_CLUSTER_TRIANGLE_VERTICES);
     StaticArray<u32> mapOldIndexToDGFIndex(scratch.temp.arena, vertexCount, vertexCount);
     u32 addedVertexCount   = 0;
     u32 currentFirstUseBit = 0;
     u32 maxReuseIndex      = 0;
 
-    StaticArray<u32> meshVertexIndices(scratch.temp.arena, MAX_CLUSTER_VERTICES);
+    StaticArray<u32> meshVertexIndices(scratch.temp.arena, MAX_CLUSTER_TRIANGLE_VERTICES);
     for (auto index : newIndexOrder)
     {
         if (usedVertices.GetBit(index))

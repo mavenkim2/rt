@@ -39,7 +39,7 @@ float2 TestNode(float3x4 renderFromObject, float3x4 cameraFromRender, float4 lod
     float cosSub = (z * distTangent + x * radius) * invDistSqr;
     float cosAdd = (z * distTangent - x * radius) * invDistSqr;
 
-    test = z;
+    test = z - radius;
 
     // Clipping
     float depth = z - zNear;
@@ -127,6 +127,7 @@ struct ClusterCull
         float minScale = 0.f;
         float test = 0.f;
         float priority = 0.f;
+
         if (isValid || isLeaf)
         {
             float4 lodBounds = node.lodBounds[childIndex];
@@ -142,6 +143,8 @@ struct ClusterCull
 
             edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, maxScale, test);
 
+            printf("%f %f\n", edgeScales.x, test);
+
             float threshold = maxParentError * minScale;
             isVisible = edgeScales.x <= threshold;
             isValid &= isVisible;
@@ -149,6 +152,7 @@ struct ClusterCull
             priority = threshold == 0.f ? 0.f : threshold / edgeScales.x;
         }
 
+#if 0
         if (isVisible)
         {
             float3 minP = node.center[childIndex] - node.extents[childIndex];
@@ -158,6 +162,7 @@ struct ClusterCull
                 minP, maxP, gpuScene.p22, gpuScene.p23);
             isVisible &= !cull;
         }
+#endif
 
         bool isNodeValid = isValid && isVisible && !isLeaf;
         uint nodeWriteOffset;

@@ -129,7 +129,7 @@ struct VirtualGeometryManager
     const u32 maxNumTriangles =
         maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE * MAX_CLUSTER_TRIANGLES;
     const u32 maxNumVertices =
-        maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE * MAX_CLUSTER_VERTICES;
+        maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE * MAX_CLUSTER_TRIANGLE_VERTICES;
     const u32 maxNumClusters = maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE;
 
     const u32 maxInstances             = 1u << 21;
@@ -303,10 +303,6 @@ struct VirtualGeometryManager
     GPUBuffer voxelAddressTable;
     GPUBuffer voxelBlasInfosBuffer;
     GPUBuffer voxelCompactedBlasBuffer;
-
-    u64 voxelBlasBufferDeviceAddress;
-    u32 uploadAABBOffset;
-    u32 currentVoxelBLASSize;
 
     // u32 requestBatchWriteIndex;
     // RingBuffer<StreamingRequestBatch> streamingRequestBatches;
