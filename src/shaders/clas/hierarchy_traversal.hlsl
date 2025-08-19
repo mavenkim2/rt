@@ -14,6 +14,7 @@ float2 TestNode(float3x4 renderFromObject, float3x4 cameraFromRender, float4 lod
 {
     // Find length to cluster center
     float3 center = mul(renderFromObject, float4(lodBounds.xyz, 1.f));
+
     float radius = lodBounds.w * maxScale;
     float distSqr = length2(center);
 
@@ -39,7 +40,9 @@ float2 TestNode(float3x4 renderFromObject, float3x4 cameraFromRender, float4 lod
     float cosSub = (z * distTangent + x * radius) * invDistSqr;
     float cosAdd = (z * distTangent - x * radius) * invDistSqr;
 
-    test = z - radius;
+    printf("%f %f %f %f %f\n", z, distTangent, x, radius, distSqr);
+
+    test = cosAdd;
 
     // Clipping
     float depth = z - zNear;
@@ -133,7 +136,10 @@ struct ClusterCull
             float4 lodBounds = node.lodBounds[childIndex];
             float maxParentError = node.maxParentError[childIndex];
 
-            float3x4 renderFromObject = instance.renderFromObject;
+            float3x4 renderFromObject = instance.worldFromObject;
+            Translate(renderFromObject, -gpuScene.cameraP);
+
+            printf("%f %f %f %f\n", lodBounds.x, lodBounds.y, lodBounds.z, lodBounds.w);
 
             float3 scale = float3(length2(renderFromObject[0].xyz), length2(renderFromObject[1].xyz), 
                               length2(renderFromObject[2].xyz)); 
@@ -251,7 +257,8 @@ struct ClusterCull
         float4 lodBounds = header.lodBounds;
         float lodError = header.lodError;
 
-        float3x4 renderFromObject = instance.renderFromObject;
+        float3x4 renderFromObject = instance.worldFromObject;
+        Translate(renderFromObject, -gpuScene.cameraP);
         float3 scale = float3(length2(renderFromObject[0].xyz), length2(renderFromObject[1].xyz), 
                               length2(renderFromObject[2].xyz)); 
         scale = sqrt(scale);

@@ -1618,10 +1618,6 @@ void VirtualGeometryManager::HierarchyTraversal(CommandBuffer *cmd, GPUBuffer *q
     //
     //     Vec4u *data = (Vec4u *)readback.mappedPtr;
     //
-    //     // i don't understand what's happening
-    //     //     isn't everything literally right?
-    //     //     it's just that the calculation error is too high?
-    //     //     the voxel size equals the lod error right? so what am i supposed to do?
     //     int stop = 5;
     // }
 }

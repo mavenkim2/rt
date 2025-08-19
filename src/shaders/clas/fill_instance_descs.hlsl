@@ -1,4 +1,6 @@
+#include "../common.hlsli"
 #include "../../rt/shader_interop/as_shaderinterop.h"
+#include "../../rt/shader_interop/gpu_scene_shaderinterop.h"
 
 StructuredBuffer<uint64_t> blasAddresses : register(t0);
 RWStructuredBuffer<uint> globals : register(u1);
@@ -7,6 +9,7 @@ StructuredBuffer<GPUInstance> gpuInstances : register(t3);
 RWStructuredBuffer<AccelerationStructureInstance> instanceDescriptors : register(u4);
 
 StructuredBuffer<BLASVoxelInfo> blasVoxelInfos : register(t5);
+ConstantBuffer<GPUScene> gpuScene : register(b6);
 
 [numthreads(32, 1, 1)]
 void main(uint3 DTid : SV_DispatchThreadID)
@@ -19,8 +22,11 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
     GPUInstance instance = gpuInstances[blasData.instanceID];
 
+    float3x4 renderFromObject = instance.worldFromObject;
+    Translate(renderFromObject, -gpuScene.cameraP);
+
     AccelerationStructureInstance instanceDescriptor;
-    instanceDescriptor.transform = instance.renderFromObject;
+    instanceDescriptor.transform = renderFromObject;
     instanceDescriptor.instanceID = blasData.instanceID;
     instanceDescriptor.instanceMask = 0xff;
     instanceDescriptor.instanceContributionToHitGroupIndex = 0;
@@ -36,7 +42,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
         BLASVoxelInfo info = blasVoxelInfos[blasData.voxelClusterStartIndex + i];
 
-        instanceDescriptor.transform = instance.renderFromObject;
+        instanceDescriptor.transform = renderFromObject;
         instanceDescriptor.instanceID = info.clusterID;
         instanceDescriptor.instanceMask = 0xff;
         instanceDescriptor.instanceContributionToHitGroupIndex = 0;

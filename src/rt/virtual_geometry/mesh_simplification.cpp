@@ -4678,10 +4678,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
         {
             Cluster &cluster = clusters[group.clusterStartIndex + clusterGroupIndex];
 
-            Lane4F32 clusterMin(-cluster.bounds.minP);
-            Lane4F32 clusterMax(cluster.bounds.maxP);
-
-            partBounds.Extend(clusterMin, clusterMax);
+            partBounds.Extend(cluster.bounds);
         }
 
         primRef.minX = -partBounds.minP[0];

@@ -76,7 +76,7 @@ struct BLASData
     uint addressIndex;
 };
 
-struct BLASVoxelInfo 
+struct BLASVoxelInfo
 {
     uint64_t address;
     uint clusterID;
@@ -252,9 +252,9 @@ struct PackedHierarchyNode
 struct GPUInstance
 {
 #ifdef __cplusplus
-    float renderFromObject[3][4];
+    float worldFromObject[3][4];
 #else
-    row_major float3x4 renderFromObject;
+    row_major float3x4 worldFromObject;
 #endif
     uint globalRootNodeOffset;
 };

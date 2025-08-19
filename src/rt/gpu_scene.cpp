@@ -161,6 +161,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         fillInstanceLayout.AddBinding(i, DescriptorType::StorageBuffer,
                                       VK_SHADER_STAGE_COMPUTE_BIT);
     }
+    fillInstanceLayout.AddBinding(6, DescriptorType::UniformBuffer,
+                                  VK_SHADER_STAGE_COMPUTE_BIT);
     VkPipeline fillInstancePipeline = device->CreateComputePipeline(
         &fillInstanceShader, &fillInstanceLayout, 0, "fill instance descs");
 
@@ -668,7 +670,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 {
                     for (int c = 0; c < 4; c++)
                     {
-                        gpuInstance.renderFromObject[r][c] = transform[c][r];
+                        gpuInstance.worldFromObject[r][c] = transform[c][r];
                     }
                 }
                 gpuInstance.globalRootNodeOffset =
@@ -682,12 +684,12 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     else
     {
         GPUInstance gpuInstance;
-        AffineSpace &transform = params->renderFromWorld;
+        AffineSpace identity = AffineSpace::Identity();
         for (int r = 0; r < 3; r++)
         {
             for (int c = 0; c < 4; c++)
             {
-                gpuInstance.renderFromObject[r][c] = transform[c][r];
+                gpuInstance.worldFromObject[r][c] = identity[c][r];
             }
         }
         gpuInstance.globalRootNodeOffset = 0;
@@ -855,9 +857,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             axis.e[1] = Cross(axis.e[2], axis.e[0]);
             axis      = Transpose(axis);
 
-            AffineSpace cameraFromRender =
-                AffineSpace(axis, Vec3f(0)) * Translate(cameraStart - camera.position);
+            AffineSpace cameraFromRender = AffineSpace(axis, Vec3f(0));
 
+            gpuScene.cameraP          = camera.position;
             gpuScene.renderFromCamera = Inverse(cameraFromRender);
             gpuScene.cameraFromRender = cameraFromRender;
             gpuScene.clipFromRender =
@@ -1108,7 +1110,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     .Bind(&virtualGeometryManager.blasDataBuffer)
                     .Bind(&gpuInstancesBuffer.buffer)
                     .Bind(&tlasBuffer)
-                    .Bind(&virtualGeometryManager.voxelBlasInfosBuffer);
+                    .Bind(&virtualGeometryManager.voxelBlasInfosBuffer)
+                    .Bind(&sceneTransferBuffers[currentBuffer].buffer);
                 cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
                                         fillInstanceLayout.pipelineLayout);
 
