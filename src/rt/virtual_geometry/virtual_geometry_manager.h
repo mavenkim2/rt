@@ -123,6 +123,8 @@ struct VirtualGeometryManager
     const u32 hierarchyUploadBufferOffset = maxPageInstallsPerFrame * CLUSTER_PAGE_SIZE;
     const u32 evictedPagesOffset = hierarchyUploadBufferOffset + sizeof(u32) * maxNodes;
     const u32 clusterFixupOffset = evictedPagesOffset + sizeof(u32) * maxPageInstallsPerFrame;
+    const u32 voxelBlasOffset =
+        clusterFixupOffset + maxClusterFixupsPerFrame * sizeof(GPUClusterFixup);
 
     const u32 maxNumTriangles =
         maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE * MAX_CLUSTER_TRIANGLES;
@@ -186,10 +188,8 @@ struct VirtualGeometryManager
 
         // TODO: replace with filename
         u8 *pageData;
-        u32 *rebraid;
         u32 hierarchyNodeOffset;
         u32 virtualPageOffset;
-        u32 numRebraid;
 
         PackedHierarchyNode *nodes;
         u32 numNodes;
@@ -244,9 +244,6 @@ struct VirtualGeometryManager
     DescriptorSetLayout clusterFixupLayout = {};
     VkPipeline clusterFixupPipeline;
 
-    DescriptorSetLayout writeClasAddressesLayout = {};
-    VkPipeline writeClasAddressesPipeline;
-
     GPUBuffer evictedPagesBuffer;
     GPUBuffer hierarchyNodeBuffer;
     GPUBuffer clusterPageDataBuffer;
@@ -258,9 +255,6 @@ struct VirtualGeometryManager
     GPUBuffer uploadBuffer;
     GPUBuffer streamingRequestsBuffer;
     GPUBuffer readbackBuffer;
-
-    GPUBuffer clusterTempAccelAddresses;
-    GPUBuffer clusterTempAccelSizes;
 
     GPUBuffer clusterAccelAddresses;
     GPUBuffer clusterAccelSizes;
@@ -304,14 +298,10 @@ struct VirtualGeometryManager
     GPUBuffer ptlasUpdateInfosBuffer;
     GPUBuffer ptlasInstanceBitVectorBuffer;
 
-    // GPUBuffer templateIndexBuffer;
-    // GPUBuffer templateInfosBuffer;
-    // GPUBuffer templateImplicitDataBuffer;
-    // GPUBuffer templateScratchDataBuffer;
-    // GPUBuffer templateAddressesBuffer;
-
     GPUBuffer voxelAABBBuffer;
     GPUBuffer voxelBlasBuffer;
+    GPUBuffer voxelAddressTable;
+    GPUBuffer voxelBlasInfosBuffer;
     GPUBuffer voxelCompactedBlasBuffer;
 
     u64 voxelBlasBufferDeviceAddress;
@@ -329,8 +319,6 @@ struct VirtualGeometryManager
     // Range in virtual page space for each instanced geometry
     StaticArray<MeshInfo> meshInfos;
     // StaticArray<InstanceRef> instanceRefs;
-
-    StaticArray<InstanceRef> newInstanceRefs;
 
     StaticArray<VirtualPage> virtualTable;
     StaticArray<Page> physicalPages;
@@ -351,10 +339,10 @@ struct VirtualGeometryManager
     void UnlinkLRU(int pageIndex);
     void LinkLRU(int index);
 
-    void Test(ScenePrimitives *scene);
-    void BuildHierarchy(ScenePrimitives *scene, BuildRef4 *bRefs, RecordAOSSplits &record,
-                        std::atomic<u32> &numPartitions, std::atomic<u32> &instanceRefCount,
-                        bool parallel);
+    // void Test(ScenePrimitives *scene);
+    // void BuildHierarchy(ScenePrimitives *scene, BuildRef4 *bRefs, RecordAOSSplits &record,
+    //                     std::atomic<u32> &numPartitions, std::atomic<u32> &instanceRefCount,
+    //                     bool parallel);
 };
 
 } // namespace rt

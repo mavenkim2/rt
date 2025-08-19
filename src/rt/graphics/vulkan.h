@@ -22,6 +22,7 @@ namespace rt
 struct AffineSpace;
 struct Instance;
 struct Mesh;
+struct GPUBuffer;
 
 #define VK_CHECK(check)                                                                       \
     do                                                                                        \
@@ -38,6 +39,22 @@ struct BuildRangeInfo
     uint32_t primitiveOffset;
     uint32_t firstVertex;
     uint32_t transformOffset;
+};
+
+struct AccelerationStructureSizes
+{
+    u32 scratchSize;
+    u32 accelSize;
+};
+
+struct AccelerationStructureCreate
+{
+    GPUBuffer *buffer;
+    uint32_t bufferOffset;
+    uint32_t accelSize;
+
+    VkAccelerationStructureKHR as;
+    uint64_t asDeviceAddress;
 };
 
 struct VulkanAccelerationStructure
@@ -323,21 +340,30 @@ struct GPUBuffer
     VkAccessFlags2 lastAccess;
 };
 
+// struct BLASBuildInfo {
+//     GPUBuffer *buffer;
+//     VkAccelerationStructureKHR as;
+//     uint64_t scratchDataDeviceAddress;
+//
+//     uint64_t asDeviceAddress;
+//
+//     uint32_t accelSize;
+//     uint32_t scratchSize;
+//
+//     uint32_t bufferOffset;
+//
+//     uint32_t rangeStart;
+//     uint32_t rangeCount;
+// };
+
 struct BLASBuildInfo
 {
-    GPUBuffer *buffer;
     VkAccelerationStructureKHR as;
+
+    uint64_t dataDeviceAddress;
     uint64_t scratchDataDeviceAddress;
-
-    uint64_t asDeviceAddress;
-
-    uint32_t accelSize;
-    uint32_t scratchSize;
-
-    uint32_t bufferOffset;
-
-    uint32_t rangeStart;
-    uint32_t rangeCount;
+    uint32_t primitiveOffset;
+    uint32_t primitiveCount;
 };
 
 enum class AccelerationStructureCopyMode
@@ -817,8 +843,7 @@ struct CommandBuffer
                                          GPUBuffer *instanceData, GPUBuffer *buildRangeBuffer,
                                          u32 maxInstances);
     GPUAccelerationStructurePayload BuildCustomBLAS(GPUBuffer *aabbsBuffer, u32 numAabbs);
-    void BuildCustomBLAS(StaticArray<BLASBuildInfo> &blasBuildInfos,
-                         StaticArray<BuildRangeInfo> &rangeInfos);
+    void BuildCustomBLAS(StaticArray<BLASBuildInfo> &blasBuildInfos);
     void ClearBuffer(GPUBuffer *b, u32 val = 0);
     void ClearImage(GPUImage *image, u32 value, u32 baseMip = 0,
                     u32 numMips = VK_REMAINING_MIP_LEVELS, u32 baseLayer = 0,
@@ -1054,6 +1079,7 @@ struct Vulkan
     TransferBuffer GetStagingImage(ImageDesc desc);
     TransferBuffer GetReadbackBuffer(VkBufferUsageFlags flags, size_t totalSize);
     u64 GetDeviceAddress(VkBuffer buffer);
+    u64 GetDeviceAddress(GPUBuffer *buffer);
     void BeginEvent(CommandBuffer *cmd, string name);
     void EndEvent(CommandBuffer *cmd);
     Shader CreateShader(ShaderStage stage, string name, string shaderData);
@@ -1065,7 +1091,7 @@ struct Vulkan
                                              int numGroups, PushConstant *pc,
                                              DescriptorSetLayout *layout, u32 maxDepth,
                                              bool useClusters = false);
-    void CreateAccelerationStructures(StaticArray<BLASBuildInfo> &blasBuildInfos);
+    void CreateAccelerationStructures(StaticArray<AccelerationStructureCreate> &createInfos);
     void GetClusterBuildSizes(CLASOpInput opInput, CLASOpMode opMode, CLASOpType opType,
                               u32 &scratchSize, u32 &updateScratchSize,
                               u32 &accelerationStructureSize);
@@ -1089,8 +1115,8 @@ struct Vulkan
                             u32 partitionCount, u32 maxInstanceInGlobalPartitionCount,
                             u32 &scratchSize, u32 &accelSize);
     VkAccelerationStructureKHR CreatePTLAS(GPUBuffer *tlasData);
-    void GetBuildSizes(StaticArray<BLASBuildInfo> &blasBuildInfos,
-                       StaticArray<BuildRangeInfo> &buildRangeInfos);
+    StaticArray<AccelerationStructureSizes>
+    GetBuildSizes(Arena *inArena, StaticArray<BLASBuildInfo> &blasBuildInfos);
     void GetBuildSizes(VkAccelerationStructureTypeKHR accelType,
                        VkAccelerationStructureGeometryKHR *geometries, int count,
                        VkAccelerationStructureBuildRangeInfoKHR *buildRanges,

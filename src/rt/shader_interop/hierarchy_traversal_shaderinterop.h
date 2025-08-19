@@ -40,8 +40,6 @@ struct CLASPageInfo
     uint clasCount;
     uint clasSize;
 
-    uint decodeStartIndex;
-
     uint tempClusterOffset;
 };
 

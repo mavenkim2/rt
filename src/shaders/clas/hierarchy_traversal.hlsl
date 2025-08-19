@@ -105,7 +105,6 @@ RWStructuredBuffer<VisibleCluster> selectedClusters : register(u7);
 RWStructuredBuffer<BLASData> blasDatas : register(u9);
 
 RWStructuredBuffer<StreamingRequest> requests : register(u10);
-StructuredBuffer<InstanceRef> instanceRefs : register(t11);
 
 struct ClusterCull 
 {
@@ -264,10 +263,11 @@ struct ClusterCull
 
         if (isValid)
         {
+            bool isVoxel = (bool)header.numBricks;
             VisibleCluster cluster;
             cluster.pageIndex = pageIndex;
             cluster.clusterIndex = clusterIndex;
-            cluster.instanceID = instanceID;
+            cluster.instanceID = instanceID | (uint(isVoxel) << 31u);
             cluster.blasIndex = blasIndex;
 
             InterlockedAdd(blasDatas[blasIndex].clusterCount, 1);

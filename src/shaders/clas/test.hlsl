@@ -29,7 +29,7 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
     VisibleCluster cluster;
     cluster.pageIndex = pageIndex;
     cluster.clusterIndex = clusterIndex;
-    cluster.instanceID = 0;//instanceID;
+    //cluster.instanceID = 0;//instanceID;
     cluster.blasIndex = 0;//blasIndex;
 
     visibleClusters[descriptorIndex] = cluster;

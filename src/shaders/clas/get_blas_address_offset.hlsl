@@ -16,4 +16,10 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
     blasDatas[blasIndex].clusterStartIndex = clasStartIndex;
     blasDatas[blasIndex].clusterCount = 0;
+
+    uint voxelStartIndex;
+    InterlockedAdd(globals[GLOBALS_BLAS_VOXEL_CLUSTER_COUNT_INDEX], blasDatas[blasIndex].voxelClusterCount, voxelStartIndex);
+
+    blasDatas[blasIndex].voxelClusterStartIndex = voxelStartIndex;
+    blasDatas[blasIndex].voxelClusterCount = 0;
 }

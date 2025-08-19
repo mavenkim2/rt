@@ -10,7 +10,7 @@ StructuredBuffer<GPUInstance> gpuInstances : register(t3);
 RWStructuredBuffer<PTLAS_WRITE_INSTANCE_INFO> ptlasInstanceWriteInfos : register(u4);
 RWStructuredBuffer<PTLAS_UPDATE_INSTANCE_INFO> ptlasInstanceUpdateInfos : register(u5);
 RWStructuredBuffer<PTLAS_INDIRECT_COMMAND> ptlasIndirectCommands : register(u6);
-StructuredBuffer<InstanceRef> instanceRefs : register(t7);
+//StructuredBuffer<InstanceRef> instanceRefs : register(t7);
 RWByteAddressBuffer instanceBitVector : register(u8);
 
 [[vk::push_constant]] PtlasPushConstant pc;
@@ -18,6 +18,7 @@ RWByteAddressBuffer instanceBitVector : register(u8);
 [numthreads(32, 1, 1)] 
 void main(uint3 dtID : SV_DispatchThreadID)
 {
+#if 0
     uint blasIndex = dtID.x;
     if (blasIndex >= globals[GLOBALS_BLAS_COUNT_INDEX]) return;
 
@@ -144,4 +145,5 @@ void main(uint3 dtID : SV_DispatchThreadID)
     {
         //InterlockedAdd(globals[GLOBALS_DEBUG], 1);
     }
+#endif
 }

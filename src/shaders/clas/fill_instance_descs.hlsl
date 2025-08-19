@@ -1,11 +1,12 @@
 #include "../../rt/shader_interop/as_shaderinterop.h"
 
 StructuredBuffer<uint64_t> blasAddresses : register(t0);
-StructuredBuffer<uint> globals : register(t1);
+RWStructuredBuffer<uint> globals : register(u1);
 StructuredBuffer<BLASData> blasDatas : register(t2);
 StructuredBuffer<GPUInstance> gpuInstances : register(t3);
 RWStructuredBuffer<AccelerationStructureInstance> instanceDescriptors : register(u4);
-StructuredBuffer<InstanceRef> instanceRefs : register(t5);
+
+StructuredBuffer<BLASVoxelInfo> blasVoxelInfos : register(t5);
 
 [numthreads(32, 1, 1)]
 void main(uint3 DTid : SV_DispatchThreadID)
@@ -16,20 +17,32 @@ void main(uint3 DTid : SV_DispatchThreadID)
     BLASData blasData = blasDatas[blasIndex];
     if (blasData.clusterCount == 0) return;
 
-    InstanceRef ref = instanceRefs[blasData.instanceRefIndex];
-
-    GPUInstance instance = gpuInstances[ref.instanceID];
-
-    //uint index;
-    //InterlockedAdd(buildRangeInfos[0].primitiveCount, 1, index);
+    GPUInstance instance = gpuInstances[blasData.instanceID];
 
     AccelerationStructureInstance instanceDescriptor;
     instanceDescriptor.transform = instance.renderFromObject;
-    instanceDescriptor.instanceID = ref.instanceID;
+    instanceDescriptor.instanceID = blasData.instanceID;
     instanceDescriptor.instanceMask = 0xff;
     instanceDescriptor.instanceContributionToHitGroupIndex = 0;
     instanceDescriptor.flags = 0;
     instanceDescriptor.blasDeviceAddress = blasAddresses[blasData.addressIndex];
 
     instanceDescriptors[blasData.addressIndex] = instanceDescriptor;
+
+    for (int i = 0; i < blasData.voxelClusterCount; i++)
+    {
+        uint descriptorIndex;
+        InterlockedAdd(globals[GLOBALS_BLAS_FINAL_COUNT_INDEX], 1, descriptorIndex);
+
+        BLASVoxelInfo info = blasVoxelInfos[blasData.voxelClusterStartIndex + i];
+
+        instanceDescriptor.transform = instance.renderFromObject;
+        instanceDescriptor.instanceID = info.clusterID;
+        instanceDescriptor.instanceMask = 0xff;
+        instanceDescriptor.instanceContributionToHitGroupIndex = 0;
+        instanceDescriptor.flags = 0;
+        instanceDescriptor.blasDeviceAddress = info.address;
+
+        instanceDescriptors[descriptorIndex] = instanceDescriptor;
+    }
 }

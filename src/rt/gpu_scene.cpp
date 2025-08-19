@@ -91,70 +91,6 @@ void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, Geo
     primIndices = PrimitiveIndices(lightHandle, materialHandle, alphaTexture);
 }
 
-static void GetBrickMax(u64 bitMask, Vec3u &maxP)
-{
-    maxP.z = 4u - (LeadingZeroCount64(bitMask) >> 4u);
-
-    u32 bits = (u32)bitMask | u32(bitMask >> 32u);
-    bits |= bits << 16u;
-    maxP.y = 4u - (LeadingZeroCount(bits) >> 2u);
-
-    bits |= bits << 8u;
-    bits |= bits << 4u;
-    maxP.x = 4u - LeadingZeroCount(bits);
-
-    Assert(maxP.x <= 4 && maxP.y <= 4 && maxP.z <= 4);
-}
-
-static Brick DecodeBrick(u8 *pageData, u32 brickIndex, u32 baseAddress, u32 brickOffset)
-{
-    u32 bitsOffset = (64 + 14) * brickIndex;
-    u32 byteOffset = baseAddress + brickOffset + (bitsOffset >> 3u);
-    u32 bitOffset  = bitsOffset & 7u;
-
-    // Vec2u offsets  = GetAlignedAddressAndBitOffset(brickOffset, brickIndex * (64 + 14));
-    Vec3u data = *(Vec3u *)(pageData + byteOffset);
-
-    Vec3u packed;
-    packed.x = BitAlignU32(data.y, data.x, bitOffset);
-    packed.y = BitAlignU32(data.z, data.y, bitOffset);
-    packed.z = data.z >> bitOffset;
-
-    Brick brick;
-    brick.bitMask = packed.x;
-    brick.bitMask |= ((u64)packed.y << 32u);
-    brick.vertexOffset = BitFieldExtractU32(packed.z, 14, 0);
-
-    return brick;
-}
-
-static Vec3f DecodePosition(u8 *pageData, u32 vertexIndex, Vec3u posBitWidths, Vec3i anchor,
-                            u32 baseAddress, u32 geoBaseAddress)
-{
-    const uint bitsPerVertex = posBitWidths[0] + posBitWidths[1] + posBitWidths[2];
-    const uint bitsOffset    = vertexIndex * bitsPerVertex;
-
-    u32 byteOffset = baseAddress + geoBaseAddress + (bitsOffset >> 3u);
-    u32 bitOffset  = bitsOffset & 7u;
-    Vec3u data     = *(Vec3u *)(pageData + byteOffset);
-
-    Vec2u packed =
-        Vec2u(BitAlignU32(data.y, data.x, bitOffset), BitAlignU32(data.z, data.y, bitOffset));
-
-    Vec3i pos = Vec3i(0, 0, 0);
-    pos.x     = BitFieldExtractU32(packed.x, posBitWidths.x, 0);
-    packed.x  = BitAlignU32(packed.y, packed.x, posBitWidths.x);
-
-    packed.y >>= posBitWidths.x;
-    pos.y = BitFieldExtractU32(packed.x, posBitWidths.y, 0);
-
-    packed.x = BitAlignU32(packed.y, packed.x, posBitWidths.y);
-    pos.z    = BitFieldExtractU32(packed.x, posBitWidths.z, 0);
-
-    const float scale = AsFloat((127u - 6u) << 23u);
-    return Vec3f(pos + anchor) * scale;
-}
-
 void Render(RenderParams2 *params, int numScenes, Image *envMap)
 {
 
@@ -604,12 +540,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             materialID |= (1u << 31u);
         }
         gpuMaterials.Push(material);
-#if 0
-        if (material.eta != 0.f)
-        {
-            gpuMaterials.Push(material);
-        }
-#endif
     }
     GPUBuffer materialBuffer =
         tileCmd
@@ -654,128 +584,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     // Virtual geometry initialization
     CommandBuffer *dgfTransferCmd = device->BeginCommandBuffer(QueueType_Compute);
 
-    Assert(numBlas == 1);
-    GPUAccelerationStructurePayload blas = {};
-
-    GPUBuffer clusterPageDataBuffer;
-    {
-        ScenePrimitives *scene = blasScenes[0];
-
-        string filename = PushStr8F(sceneScratch.temp.arena, "%S%S.geo", params->directory,
-                                    RemoveFileExtension(scene->filename));
-        string clusterPageData = OS_ReadFile(sceneScratch.temp.arena, filename);
-
-        Tokenizer tokenizer;
-        tokenizer.input  = clusterPageData;
-        tokenizer.cursor = clusterPageData.str;
-
-        ClusterFileHeader clusterFileHeader;
-        GetPointerValue(&tokenizer, &clusterFileHeader);
-
-        u8 *buffer = tokenizer.cursor;
-
-        clusterPageDataBuffer =
-            dgfTransferCmd
-                ->SubmitBuffer(buffer, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                               clusterFileHeader.numPages * CLUSTER_PAGE_SIZE)
-                .buffer;
-
-        StaticArray<AABB> aabbs(sceneScratch.temp.arena, clusterFileHeader.numPages *
-                                                             MAX_CLUSTERS_PER_PAGE *
-                                                             MAX_CLUSTER_TRIANGLES);
-
-        for (u32 page = 0; page < clusterFileHeader.numPages; page++)
-        {
-            u8 *src                    = buffer + CLUSTER_PAGE_SIZE * page;
-            u32 numClusters            = *(u32 *)src;
-            u32 clusterHeaderSOAStride = numClusters * 16;
-
-            u32 pageNumBricks = 0;
-            for (u32 clusterIndex = 0; clusterIndex < numClusters; clusterIndex++)
-            {
-                u32 clusterHeaderSOAStride = numClusters * 16;
-                u32 baseOffset             = page * CLUSTER_PAGE_SIZE + 4 + clusterIndex * 16;
-
-                Vec4u packed[NUM_CLUSTER_HEADER_FLOAT4S];
-                for (int i = 0; i < NUM_CLUSTER_HEADER_FLOAT4S; i++)
-                {
-                    packed[i] = *(Vec4u *)(buffer + baseOffset + i * clusterHeaderSOAStride);
-                }
-
-                Vec3i anchor;
-                Vec3u posBitWidths;
-
-                u32 geoBaseAddress = packed[1].y;
-                u32 numVertices    = BitFieldExtractU32(packed[2].y, 14, 0);
-                anchor[0]          = BitFieldExtractI32((int)packed[1].z, ANCHOR_WIDTH, 0);
-                anchor[1]          = BitFieldExtractI32((int)packed[1].w, ANCHOR_WIDTH, 0);
-                posBitWidths[0]    = BitFieldExtractU32(packed[1].w, 5, ANCHOR_WIDTH);
-                anchor[2]          = BitFieldExtractI32((int)packed[2].x, ANCHOR_WIDTH, 0);
-                posBitWidths[1]    = BitFieldExtractU32(packed[2].y, 5, 22);
-                posBitWidths[2]    = BitFieldExtractU32(packed[2].y, 5, 27);
-                Assert(packed[2].w >> 31u);
-                u32 numBricks   = packed[2].w & 0x7fffffff;
-                f32 lodError    = AsFloat(packed[3].w);
-                u32 baseAddress = page * CLUSTER_PAGE_SIZE;
-
-                u32 vertexBitWidth = posBitWidths.x + posBitWidths.y + posBitWidths.z;
-                u32 brickOffset = geoBaseAddress + ((numVertices * vertexBitWidth + 7u) >> 3u);
-
-                if (numBricks)
-                {
-                    for (u32 brickIndex = 0; brickIndex < numBricks; brickIndex++)
-                    {
-                        Brick brick =
-                            DecodeBrick(buffer, brickIndex, baseAddress, brickOffset);
-                        Assert(brick.vertexOffset < numVertices);
-                        Vec3f position =
-                            DecodePosition(buffer, brick.vertexOffset, posBitWidths, anchor,
-                                           baseAddress, geoBaseAddress);
-
-                        Vec3u maxP;
-                        GetBrickMax(brick.bitMask, maxP);
-
-                        Vec3f aabbMin = position;
-                        Vec3f aabbMax = position + Vec3f(maxP) * lodError;
-
-                        AABB aabb;
-                        aabb.minX = aabbMin.x;
-                        aabb.minY = aabbMin.y;
-                        aabb.minZ = aabbMin.z;
-                        aabb.maxX = aabbMax.x;
-                        aabb.maxY = aabbMax.y;
-                        aabb.maxZ = aabbMax.z;
-
-                        aabbs.Push(aabb);
-                    }
-                    for (u32 extra = 0; extra < MAX_CLUSTER_TRIANGLES - numBricks; extra++)
-                    {
-                        AABB aabb = {};
-                        aabb.minX = float(NaN);
-
-                        aabbs.Push(aabb);
-                    }
-                    pageNumBricks += MAX_CLUSTER_TRIANGLES;
-                }
-            }
-            u32 limit = MAX_CLUSTERS_PER_PAGE * MAX_CLUSTER_TRIANGLES;
-            for (u32 extra = pageNumBricks; extra < limit; extra++)
-            {
-                AABB aabb = {};
-                aabb.minX = float(NaN);
-
-                aabbs.Push(aabb);
-            }
-        }
-
-        TransferBuffer aabbBuffer = dgfTransferCmd->SubmitBuffer(
-            aabbs.data, VK_BUFFER_USAGE_2_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-            sizeof(AABB) * aabbs.Length());
-
-        blas = dgfTransferCmd->BuildCustomBLAS(&aabbBuffer.buffer, aabbs.Length());
-    }
-
-#if 0
     VirtualGeometryManager virtualGeometryManager(dgfTransferCmd, sceneScratch.temp.arena);
 
     for (int sceneIndex = 0; sceneIndex < numBlas; sceneIndex++)
@@ -790,7 +598,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         virtualGeometryManager.AddNewMesh(sceneScratch.temp.arena, dgfTransferCmd,
                                           virtualGeoFilename);
     }
-#endif
 
     GPUBuffer visibleClustersBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -820,35 +627,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     Semaphore tlasSemaphore       = device->CreateSemaphore();
     GPUAccelerationStructure tlas = {};
 
-    {
-        Assert(numBlas == 1);
-        // Build the TLAS
-        VkAccelerationStructureInstanceKHR instance = {};
-        instance.mask                               = 0xff;
-        instance.transform                          = ConvertMatrix(params->renderFromWorld);
-        instance.accelerationStructureReference     = blas.as.address;
-
-        TransferBuffer instanceBuffer = allCommandBuffer->SubmitBuffer(
-            &instance, VK_BUFFER_USAGE_2_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-            sizeof(VkAccelerationStructureInstanceKHR));
-
-        allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                                  VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                                  VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                                  VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
-        allCommandBuffer->FlushBarriers();
-
-        tlas = allCommandBuffer->BuildTLAS(&instanceBuffer.buffer, 1).as;
-        allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                                  VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                                  VK_ACCESS_2_SHADER_READ_BIT);
-        allCommandBuffer->FlushBarriers();
-    }
-
     // Build the TLAS over BLAS
     StaticArray<GPUInstance> gpuInstances(sceneScratch.temp.arena, numInstances);
-#if 0
+
     GPUBuffer tlasBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
@@ -894,7 +675,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     virtualGeometryManager
                         .meshInfos[scene->childScenes[instances[instanceIndex].id]->sceneIndex]
                         .hierarchyNodeOffset;
-                // virtualGeometryManager.meshInfos[instances[instanceIndex].id];
                 gpuInstances.Push(gpuInstance);
             }
         }
@@ -916,14 +696,12 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         Assert(numInstances == 1);
         Assert(numScenes == 1);
     }
-#endif
 
     // virtualGeometryManager.Test(tlasScenes[0]);
 
-    // TransferBuffer gpuInstancesBuffer =
-    //     allCommandBuffer->SubmitBuffer(gpuInstances.data,
-    //     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-    //                                    sizeof(GPUInstance) * gpuInstances.Length());
+    TransferBuffer gpuInstancesBuffer =
+        allCommandBuffer->SubmitBuffer(gpuInstances.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                       sizeof(GPUInstance) * gpuInstances.Length());
 
     // allCommandBuffer->SubmitBuffer(
     //     &virtualGeometryManager.instanceRefBuffer,
@@ -1127,7 +905,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         if (device->frameCount == 0)
         {
-#if 0
             CommandBuffer *computeCmd =
                 device->BeginCommandBuffer(QueueType_Compute, "cmd populate readback");
 
@@ -1153,9 +930,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             computeCmd->FlushBarriers();
 
             {
-                u32 numInstanceRefs = virtualGeometryManager.newInstanceRefs.Length();
                 NumPushConstant instanceCullingPushConstant;
-                instanceCullingPushConstant.num = numInstanceRefs;
+                instanceCullingPushConstant.num = gpuInstances.Length();
                 device->BeginEvent(computeCmd, "Instance Culling");
 
                 computeCmd
@@ -1173,7 +949,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
                     .End();
 
-                computeCmd->Dispatch((numInstanceRefs + 63) / 64, 1, 1);
+                computeCmd->Dispatch((gpuInstances.Length() + 63) / 64, 1, 1);
                 computeCmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                     VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
@@ -1203,7 +979,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             computeCmd->SignalOutsideFrame(sem);
             device->SubmitCommandBuffer(computeCmd);
             device->Wait(sem);
-#endif
         }
         else
         {
@@ -1232,7 +1007,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         cmd->ClearBuffer(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
 
         // Virtual geometry pass
-#if 0
         {
             cmd->ClearBuffer(&visibleClustersBuffer, ~0u);
             cmd->ClearBuffer(&workItemQueueBuffer, ~0u);
@@ -1254,9 +1028,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
             // Instance culling
             {
-                u32 numInstanceRefs = virtualGeometryManager.newInstanceRefs.Length();
                 NumPushConstant instanceCullingPushConstant;
-                instanceCullingPushConstant.num = numInstanceRefs;
+                instanceCullingPushConstant.num = gpuInstances.Length();
                 device->BeginEvent(cmd, "Instance Culling");
 
                 cmd->StartBindingCompute(instanceCullingPipeline, &instanceCullingLayout)
@@ -1273,7 +1046,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
                     .End();
 
-                cmd->Dispatch((numInstanceRefs + 63) / 64, 1, 1);
+                cmd->Dispatch((gpuInstances.Length() + 63) / 64, 1, 1);
                 cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                              VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
@@ -1317,28 +1090,14 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
             virtualGeometryManager.BuildClusterBLAS(cmd, &visibleClustersBuffer);
 
-            virtualGeometryManager.BuildPTLAS(cmd, &gpuInstancesBuffer.buffer);
-            cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                         VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                         VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                         VK_ACCESS_2_SHADER_READ_BIT);
-            cmd->FlushBarriers();
+            // virtualGeometryManager.BuildPTLAS(cmd, &gpuInstancesBuffer.buffer);
+            // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+            //              VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+            //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+            //              VK_ACCESS_2_SHADER_READ_BIT);
+            // cmd->FlushBarriers();
 
-            {
-                cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                             VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                             VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                             VK_ACCESS_2_TRANSFER_READ_BIT);
-                cmd->FlushBarriers();
-                // cmd->CopyBuffer(&readback, &virtualGeometryManager.clasGlobalsBuffer);
-                // cmd->CopyBuffer(&readback2, &virtualGeometryManager.ptlasUpdateInfosBuffer);
-                // cmd->CopyBuffer(&readback3,
-                //                 &virtualGeometryManager.ptlasInstanceBitVectorBuffer);
-                // cmd->CopyBuffer(&readback4,
-                //                 &virtualGeometryManager.ptlasIndirectCommandBuffer);
-            }
-
-#if 0
+#if 1
             {
                 // Prepare instance descriptors for TLAS build
                 device->BeginEvent(cmd, "Prepare TLAS");
@@ -1350,7 +1109,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     .Bind(&virtualGeometryManager.blasDataBuffer)
                     .Bind(&gpuInstancesBuffer.buffer)
                     .Bind(&tlasBuffer)
-                    .Bind(&virtualGeometryManager.instanceRefBuffer);
+                    .Bind(&virtualGeometryManager.voxelBlasInfosBuffer);
                 cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
                                         fillInstanceLayout.pipelineLayout);
 
@@ -1406,7 +1165,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             }
 #endif
         }
-#endif
 
         RayPushConstant pc;
         pc.envMap   = envMapBindlessIndex;
@@ -1438,8 +1196,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             .Bind(&virtualTextureManager.pageTable)
             .Bind(&virtualTextureManager.gpuPhysicalPool)
             .Bind(&shaderDebugBuffers[currentBuffer].buffer)
-            // .Bind(&virtualGeometryManager.clusterPageDataBuffer)
-            .Bind(&clusterPageDataBuffer)
+            .Bind(&virtualGeometryManager.clusterPageDataBuffer)
             .Bind(&faceDataBuffer)
             .Bind(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
 

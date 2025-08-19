@@ -9,6 +9,8 @@ StructuredBuffer<uint64_t> inputAddressArray : register(t3);
 RWStructuredBuffer<uint64_t> blasAddressArray : register(u4);
 
 StructuredBuffer<CLASPageInfo> clasPageInfos : register(t5);
+StructuredBuffer<uint64_t> blasVoxelAddressTable : register(t6);
+RWStructuredBuffer<BLASVoxelInfo> blasVoxelInfos : register(u7);
 
 [numthreads(32, 1, 1)]
 void main(uint3 dtID : SV_DispatchThreadID)
@@ -19,11 +21,28 @@ void main(uint3 dtID : SV_DispatchThreadID)
     CLASPageInfo clasPageInfo = clasPageInfos[visibleCluster.pageIndex];
 
     uint blasIndex = visibleCluster.blasIndex;
-    uint destIndex;
-    InterlockedAdd(blasDatas[blasIndex].clusterCount, 1, destIndex);
+    if (visibleCluster.instanceID >> 31u)
+    {
+        uint destIndex;
+        InterlockedAdd(blasDatas[blasIndex].voxelClusterCount, 1, destIndex);
+        destIndex += blasDatas[blasIndex].voxelClusterStartIndex;
 
-    destIndex += blasDatas[blasIndex].clusterStartIndex;
-    
-    uint addressIndex = clasPageInfo.addressStartIndex + visibleCluster.clusterIndex;
-    blasAddressArray[destIndex] = inputAddressArray[addressIndex];
+        uint64_t address = blasVoxelAddressTable[visibleCluster.pageIndex * MAX_CLUSTERS_PER_PAGE + visibleCluster.clusterIndex];
+
+        BLASVoxelInfo info;
+        info.address = address;
+        info.clusterID = (visibleCluster.pageIndex << MAX_CLUSTERS_PER_PAGE_BITS) | visibleCluster.clusterIndex;
+        blasVoxelInfos[destIndex] = info;
+    }
+    else 
+    {
+        uint destIndex;
+        InterlockedAdd(blasDatas[blasIndex].clusterCount, 1, destIndex);
+
+        destIndex += blasDatas[blasIndex].clusterStartIndex;
+
+        uint addressIndex = clasPageInfo.addressStartIndex + visibleCluster.clusterIndex;
+        blasAddressArray[destIndex] = inputAddressArray[addressIndex];
+    }
+
 }

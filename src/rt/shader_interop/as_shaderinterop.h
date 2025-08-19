@@ -54,7 +54,6 @@ struct DecodeClusterData
     uint32_t clusterIndex;
     uint32_t indexBufferOffset;
     uint32_t vertexBufferOffset;
-    uint32_t addressIndex;
 };
 
 struct VoxelClusterData
@@ -67,11 +66,20 @@ struct VoxelClusterData
 
 struct BLASData
 {
-    uint instanceRefIndex;
+    uint instanceID;
     uint clusterStartIndex;
     uint clusterCount;
 
+    uint voxelClusterStartIndex;
+    uint voxelClusterCount;
+
     uint addressIndex;
+};
+
+struct BLASVoxelInfo 
+{
+    uint64_t address;
+    uint clusterID;
 };
 
 struct AccelerationStructureInstance
@@ -251,14 +259,13 @@ struct GPUInstance
     uint globalRootNodeOffset;
 };
 
-struct InstanceRef
-{
-    // TODO: variable-bit rate compression or quantize to 8-bit relative to partition bounds
-    float bounds[6];
-    uint instanceID;
-    uint nodeOffset;
-    uint partitionIndex;
-};
+// struct InstanceRef
+// {
+//     float bounds[6];
+//     uint instanceID;
+//     uint nodeOffset;
+//     uint partitionIndex;
+// };
 
 struct GPUClusterFixup
 {
@@ -305,10 +312,9 @@ struct Brick
 #define GLOBALS_PTLAS_UPDATE_INSTANCE_INDEX 22
 #define GLOBALS_DEBUG                       23
 
-#define GLOBALS_CLAS_VOXEL_CLUSTER_COUNT    24
-#define GLOBALS_CLAS_TRIANGLE_CLUSTER_COUNT 25
+#define GLOBALS_BLAS_VOXEL_CLUSTER_COUNT_INDEX 24
 
-#define GLOBALS_SIZE 26
+#define GLOBALS_SIZE 25
 
 #ifdef __cplusplus
 }

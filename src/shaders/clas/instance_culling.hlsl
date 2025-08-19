@@ -11,28 +11,29 @@ RWStructuredBuffer<uint> globals : register(u1);
 RWStructuredBuffer<CandidateNode> nodeQueue : register(u2);
 RWStructuredBuffer<Queue> queue : register(u3);
 RWStructuredBuffer<BLASData> blasDatas : register(u4);
-StructuredBuffer<InstanceRef> instanceRefs : register(t5);
-ConstantBuffer<GPUScene> gpuScene : register(b6);
-RWStructuredBuffer<PTLAS_INDIRECT_COMMAND> ptlasIndirectCommands : register(u7);
-RWStructuredBuffer<PTLAS_UPDATE_INSTANCE_INFO> ptlasInstanceUpdateInfos : register(u8);
-ByteAddressBuffer instanceBitVector : register(t9);
+ConstantBuffer<GPUScene> gpuScene : register(b5);
+
+#if 0
+RWStructuredBuffer<PTLAS_INDIRECT_COMMAND> ptlasIndirectCommands : register(u6);
+RWStructuredBuffer<PTLAS_UPDATE_INSTANCE_INFO> ptlasInstanceUpdateInfos : register(u7);
+ByteAddressBuffer instanceBitVector : register(t8);
+#endif
 
 [[vk::push_constant]] NumPushConstant pc;
 
 [numthreads(64, 1, 1)]
 void main(uint3 dtID : SV_DispatchThreadID)
 {
-    uint instanceRefIndex = dtID.x;
-    if (instanceRefIndex >= pc.num) return;
+    uint instanceIndex = dtID.x;
+    if (instanceIndex >= pc.num) return;
 
-    InstanceRef ref = instanceRefs[instanceRefIndex];
-    GPUInstance instance = gpuInstances[ref.instanceID];
+    GPUInstance instance = gpuInstances[instanceIndex];
 
+#if 0
     bool cull = FrustumCull(gpuScene.clipFromRender, instance.renderFromObject, 
         float3(ref.bounds[0], ref.bounds[1], ref.bounds[2]), 
         float3(ref.bounds[3], ref.bounds[4], ref.bounds[5]), gpuScene.p22, gpuScene.p23);
 
-#if 0
     if (cull) 
     {
         //globals[GLOBALS_DEBUG] += 100000;
@@ -81,14 +82,14 @@ void main(uint3 dtID : SV_DispatchThreadID)
     InterlockedAdd(globals[GLOBALS_BLAS_COUNT_INDEX], 1, blasIndex);
     
     CandidateNode candidateNode;
-    candidateNode.instanceID = ref.instanceID;
-    candidateNode.nodeOffset = ref.nodeOffset;
+    candidateNode.instanceID = instanceIndex;
+    candidateNode.nodeOffset = 0;
     candidateNode.blasIndex = blasIndex;
     candidateNode.pad = 0;
 
     nodeQueue[blasIndex] = candidateNode;
 
-    blasDatas[blasIndex].instanceRefIndex = instanceRefIndex;
+    blasDatas[blasIndex].instanceID = instanceIndex;
 
     InterlockedAdd(queue[0].nodeWriteOffset, 1);
     InterlockedAdd(queue[0].numNodes, 1);
