@@ -24,8 +24,8 @@ static_assert(sizeof(PTLAS_UPDATE_INSTANCE_INFO) ==
 
 VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
     : physicalPages(arena, maxPages + 2), virtualTable(arena, maxVirtualPages),
-      meshInfos(arena, maxInstances), currentClusterTotal(0), totalNumVirtualPages(0),
-      totalNumNodes(0), lruHead(-1), lruTail(-1)
+      meshInfos(arena, maxInstances), currentClusterTotal(0), currentTriangleClusterTotal(0),
+      totalNumVirtualPages(0), totalNumNodes(0), lruHead(-1), lruTail(-1)
 {
     for (u32 i = 0; i < maxVirtualPages; i++)
     {
@@ -137,7 +137,7 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
     computeClasAddressesPush.stage  = ShaderStage::Compute;
     computeClasAddressesPush.size   = sizeof(AddressPushConstant);
     computeClasAddressesPush.offset = 0;
-    for (int i = 0; i <= 4; i++)
+    for (int i = 0; i <= 5; i++)
     {
         computeClasAddressesLayout.AddBinding(i, DescriptorType::StorageBuffer,
                                               VK_SHADER_STAGE_COMPUTE_BIT);
@@ -383,7 +383,7 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
     voxelAABBBuffer      = {};
     voxelAddressTable    = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                                                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                                    VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                                 sizeof(u64) * MAX_CLUSTERS_PER_PAGE * maxPages);
     voxelBlasInfosBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
@@ -776,7 +776,6 @@ static Brick DecodeBrick(u8 *pageData, u32 brickIndex, u32 baseAddress, u32 bric
     u32 byteOffset = baseAddress + brickOffset + (bitsOffset >> 3u);
     u32 bitOffset  = bitsOffset & 7u;
 
-    // Vec2u offsets  = GetAlignedAddressAndBitOffset(brickOffset, brickIndex * (64 + 14));
     Vec3u data = *(Vec3u *)(pageData + byteOffset);
 
     Vec3u packed;
@@ -963,6 +962,7 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         if (page.virtualIndex != -1)
         {
             currentClusterTotal -= page.numClusters;
+            currentTriangleClusterTotal -= page.numTriangleClusters;
             EditRegistration(page.handle.instanceID, page.handle.pageIndex, false);
             virtualTable[page.virtualIndex].pageIndex = -1;
             virtualTable[page.virtualIndex].pageFlag  = PageFlag::NonResident;
@@ -998,9 +998,6 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         virtualTable[meshInfos[page.instanceID].virtualPageOffset + page.pageIndex].priority =
             0;
     }
-
-    u32 newClasOffset = currentClusterTotal;
-    currentClusterTotal += clustersToAdd;
 
     Array<GPUClusterFixup> gpuClusterFixup(scratch.temp.arena, uninstallRequests.Length());
 
@@ -1180,7 +1177,8 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
     StaticArray<VoxelBLASInfo> voxelBlasInfos(scratch.temp.arena,
                                               pagesToInstall * MAX_CLUSTERS_PER_PAGE);
 
-    u32 totalNumBricks = 0;
+    u32 totalNumBricks        = 0;
+    u32 triangleClustersToAdd = 0;
 
     for (int requestIndex = 0; requestIndex < pagesToInstall; requestIndex++)
     {
@@ -1193,6 +1191,7 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         u8 *src                    = meshInfo.pageData + CLUSTER_PAGE_SIZE * request.pageIndex;
         u32 numClusters            = *(u32 *)src;
         u32 clusterHeaderSOAStride = numClusters * 16;
+        u32 numTriangleClusters    = 0;
 
         for (u32 clusterIndex = 0; clusterIndex < numClusters; clusterIndex++)
         {
@@ -1206,7 +1205,11 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
                     *(Vec4u *)(meshInfo.pageData + baseOffset + i * clusterHeaderSOAStride);
             }
 
-            if ((packed[2].w >> 31u) == 0) continue;
+            if ((packed[2].w >> 31u) == 0)
+            {
+                numTriangleClusters++;
+                continue;
+            }
 
             Vec3i anchor;
             Vec3u posBitWidths;
@@ -1229,7 +1232,7 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
             if (numBricks)
             {
                 BLASBuildInfo buildInfo   = {};
-                buildInfo.primitiveOffset = totalNumBricks;
+                buildInfo.primitiveOffset = sizeof(AABB) * totalNumBricks;
                 buildInfo.primitiveCount  = numBricks;
                 totalNumBricks += numBricks;
 
@@ -1267,7 +1270,12 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
                 }
             }
         }
+        physicalPages[page].numTriangleClusters = numTriangleClusters;
+        triangleClustersToAdd += numTriangleClusters;
     }
+
+    u32 newClasOffset = currentTriangleClusterTotal;
+    currentTriangleClusterTotal += triangleClustersToAdd;
 
     if (aabbs.Length())
     {
@@ -1277,14 +1285,15 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
 
         StaticArray<AccelerationStructureCreate> creates(scratch.temp.arena,
                                                          buildInfos.Length());
-        // TODO: actually handle allocation
         u32 totalScratch = 0;
         u32 totalAccel   = 0;
         for (AccelerationStructureSizes sizeInfo : sizes)
         {
+            totalAccel = AlignPow2(totalAccel, 256);
+
             AccelerationStructureCreate create = {};
             create.accelSize                   = sizeInfo.accelSize;
-            create.bufferOffset                = totalScratch;
+            create.bufferOffset                = totalAccel;
 
             creates.Push(create);
 
@@ -1294,7 +1303,8 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
 
         GPUBuffer scratchBuffer = device->CreateBuffer(
             VK_BUFFER_USAGE_2_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-                VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT,
+                VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT |
+                VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT,
             totalScratch);
         GPUBuffer accelBuffer =
             device->CreateBuffer(VK_BUFFER_USAGE_2_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
@@ -1304,6 +1314,19 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         for (AccelerationStructureCreate &create : creates)
         {
             create.buffer = &accelBuffer;
+        }
+
+        if (voxelAABBBuffer.size < sizeof(AABB) * aabbs.Length())
+        {
+            if (voxelAABBBuffer.size)
+            {
+                device->DestroyBuffer(&voxelAABBBuffer);
+            }
+
+            voxelAABBBuffer = device->CreateBuffer(
+                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+                sizeof(AABB) * aabbs.Length());
         }
 
         uint64_t scratchDataDeviceAddress = device->GetDeviceAddress(&scratchBuffer);
@@ -1326,19 +1349,6 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
             totalScratch += sizeInfo.scratchSize;
         }
 
-        if (voxelAABBBuffer.size < sizeof(AABB) * aabbs.Length())
-        {
-            if (voxelAABBBuffer.size)
-            {
-                device->DestroyBuffer(&voxelAABBBuffer);
-            }
-
-            voxelAABBBuffer = device->CreateBuffer(
-                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-                sizeof(AABB) * aabbs.Length());
-        }
-
         cmd->SubmitBuffer(&voxelAABBBuffer, aabbs.data, sizeof(AABB) * aabbs.Length());
         cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                      VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
@@ -1355,7 +1365,6 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         cmd->FlushBarriers();
         device->EndEvent(cmd);
 
-        StaticArray<uint64_t> addresses(scratch.temp.arena, creates.Length());
         StaticArray<BufferToBufferCopy> copies(scratch.temp.arena, creates.Length());
 
         for (u32 createIndex = 0; createIndex < creates.Length(); createIndex++)
@@ -1366,14 +1375,14 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
 
             BufferToBufferCopy copy;
             copy.srcOffset = voxelBlasOffset + createIndex * sizeof(u64);
-            copy.dstOffset = info.pageIndex * MAX_CLUSTERS_PER_PAGE + info.clusterIndex;
-            copy.size      = sizeof(u64);
+            copy.dstOffset =
+                sizeof(u64) * (info.pageIndex * MAX_CLUSTERS_PER_PAGE + info.clusterIndex);
+            copy.size = sizeof(u64);
 
             MemoryCopy((u8 *)uploadBuffer.mappedPtr + voxelBlasOffset +
                            createIndex * sizeof(u64),
                        &create.asDeviceAddress, sizeof(u64));
 
-            addresses.Push(create.asDeviceAddress);
             copies.Push(copy);
         }
         cmd->CopyBuffer(&voxelAddressTable, &uploadBuffer, copies.data, copies.Length());
@@ -1512,6 +1521,30 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         device->EndEvent(cmd);
     }
 
+    // if (device->frameCount > 10)
+    // {
+    //     GPUBuffer readback = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+    //                                               vertexBuffer.size, MemoryUsage::GPU_TO_CPU);
+    //
+    //     // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+    //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+    //     //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+    //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
+    //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+    //                  VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+    //     cmd->FlushBarriers();
+    //     cmd->CopyBuffer(&readback, &vertexBuffer);
+    //     Semaphore testSemaphore   = device->CreateSemaphore();
+    //     testSemaphore.signalValue = 1;
+    //     cmd->SignalOutsideFrame(testSemaphore);
+    //     device->SubmitCommandBuffer(cmd);
+    //     device->Wait(testSemaphore);
+    //
+    //     Vec3f *data = (Vec3f *)readback.mappedPtr;
+    //
+    //     int stop = 5;
+    // }
+
     u32 templateOffset = maxPages * MAX_CLUSTERS_PER_PAGE;
     // Compute the CLAS addresses
     {
@@ -1522,8 +1555,8 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
 
         cmd->ComputeCLASSizes(&buildClusterTriangleInfoBuffer, &clasScratchBuffer,
                               &clusterAccelSizes, &clasGlobalsBuffer,
-                              sizeof(u32) * GLOBALS_CLAS_COUNT_INDEX, 0, maxNumTriangles,
-                              maxNumVertices, maxNumClusters);
+                              sizeof(u32) * GLOBALS_CLAS_COUNT_INDEX, newClasOffset,
+                              maxNumTriangles, maxNumVertices, maxNumClusters);
 
         cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -1559,7 +1592,7 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
                        &buildClusterTriangleInfoBuffer, &clusterAccelAddresses,
                        &clusterAccelSizes, &clasGlobalsBuffer,
                        sizeof(u32) * GLOBALS_CLAS_COUNT_INDEX, maxNumClusters, maxNumTriangles,
-                       maxNumVertices);
+                       maxNumVertices, newClasOffset);
         device->EndEvent(cmd);
     }
 }
@@ -1595,31 +1628,6 @@ void VirtualGeometryManager::HierarchyTraversal(CommandBuffer *cmd, GPUBuffer *q
     cmd->FlushBarriers();
 
     device->EndEvent(cmd);
-
-    // if (device->frameCount > 10)
-    // {
-    //     GPUBuffer readback =
-    //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT, workItemQueueBuffer->size,
-    //                              MemoryUsage::GPU_TO_CPU);
-    //
-    //     // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-    //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-    //     //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-    //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-    //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-    //                  VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-    //     cmd->FlushBarriers();
-    //     cmd->CopyBuffer(&readback, workItemQueueBuffer);
-    //     Semaphore testSemaphore   = device->CreateSemaphore();
-    //     testSemaphore.signalValue = 1;
-    //     cmd->SignalOutsideFrame(testSemaphore);
-    //     device->SubmitCommandBuffer(cmd);
-    //     device->Wait(testSemaphore);
-    //
-    //     Vec4u *data = (Vec4u *)readback.mappedPtr;
-    //
-    //     int stop = 5;
-    // }
 }
 
 void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd,
@@ -1652,8 +1660,8 @@ void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd,
             .Bind(&clusterAccelAddresses)
             .Bind(&blasClasAddressBuffer)
             .Bind(&clasPageInfoBuffer)
-            .Bind(&clasPageInfoBuffer)
-            .Bind(&clasPageInfoBuffer)
+            .Bind(&voxelAddressTable)
+            .Bind(&voxelBlasInfosBuffer)
             .End();
 
         cmd->DispatchIndirect(&clasGlobalsBuffer, sizeof(u32) * GLOBALS_CLAS_INDIRECT_X);

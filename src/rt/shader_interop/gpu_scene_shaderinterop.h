@@ -18,6 +18,8 @@ struct GPUScene
     float3x4 lightFromRender;
 
     float3 cameraP;
+    float lodScale;
+
     float3 dxCamera;
     float lensRadius;
     float3 dyCamera;

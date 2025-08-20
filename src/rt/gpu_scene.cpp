@@ -223,6 +223,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     gpuScene.renderFromCamera = params->renderFromCamera;
     gpuScene.cameraFromRender = params->cameraFromRender;
     gpuScene.lightFromRender  = params->lightFromRender;
+    gpuScene.lodScale         = 0.5f * params->NDCFromCamera[1][1] * params->height;
     gpuScene.dxCamera         = params->dxCamera;
     gpuScene.lensRadius       = params->lensRadius;
     gpuScene.dyCamera         = params->dyCamera;
@@ -1099,6 +1100,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             // cmd->FlushBarriers();
 
 #if 1
+
             {
                 // Prepare instance descriptors for TLAS build
                 device->BeginEvent(cmd, "Prepare TLAS");
@@ -1126,7 +1128,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 device->EndEvent(cmd);
             }
 
-            // if (device->frameCount > 10)
+            // if (device->frameCount > 100)
             // {
             //     GPUBuffer readback =
             //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT, tlasBuffer.size,

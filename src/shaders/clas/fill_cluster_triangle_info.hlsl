@@ -44,13 +44,12 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
     DenseGeometry header = GetDenseGeometryHeader(basePageAddress, numClusters, clusterID);
 
     uint addressOffset = 0;
-    if (header.numTriangles == 0)
+    if (header.numTriangles)
     {
         InterlockedAdd(numTriangleClusters, 1, addressOffset);
     }
     GroupMemoryBarrierWithGroupSync();
 
-    uint vertexBufferOffset, indexBufferOffset, descriptorIndex;
 
     if (groupIndex == 0)
     {
@@ -58,13 +57,16 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
 
         CLASPageInfo pageInfo;
         pageInfo.addressStartIndex = pc.clusterOffset + clusterStartIndex;
+        pageInfo.tempClusterOffset = clusterStartIndex;
         pageInfo.clasSize = 0;
+        pageInfo.numTriangleClusters = numTriangleClusters;
         clasPageInfos[pageIndex] = pageInfo;
     }
     GroupMemoryBarrierWithGroupSync();
 
     if (header.numTriangles)
     {
+        uint vertexBufferOffset, indexBufferOffset;
         uint descriptorIndex = clusterStartIndex + addressOffset;
 
         InterlockedAdd(globals[GLOBALS_VERTEX_BUFFER_OFFSET_INDEX], header.numVertices, vertexBufferOffset);

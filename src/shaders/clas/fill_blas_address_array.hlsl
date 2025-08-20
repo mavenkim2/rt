@@ -27,7 +27,8 @@ void main(uint3 dtID : SV_DispatchThreadID)
         InterlockedAdd(blasDatas[blasIndex].voxelClusterCount, 1, destIndex);
         destIndex += blasDatas[blasIndex].voxelClusterStartIndex;
 
-        uint64_t address = blasVoxelAddressTable[visibleCluster.pageIndex * MAX_CLUSTERS_PER_PAGE + visibleCluster.clusterIndex];
+        uint addressIndex = visibleCluster.pageIndex * MAX_CLUSTERS_PER_PAGE + visibleCluster.clusterIndex;
+        uint64_t address = blasVoxelAddressTable[addressIndex];
 
         BLASVoxelInfo info;
         info.address = address;

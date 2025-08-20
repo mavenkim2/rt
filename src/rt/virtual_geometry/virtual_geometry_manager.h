@@ -120,12 +120,6 @@ struct VirtualGeometryManager
     const u32 maxPageInstallsPerFrame      = 128;
     const u32 maxQueueBatches              = 4;
 
-    const u32 hierarchyUploadBufferOffset = maxPageInstallsPerFrame * CLUSTER_PAGE_SIZE;
-    const u32 evictedPagesOffset = hierarchyUploadBufferOffset + sizeof(u32) * maxNodes;
-    const u32 clusterFixupOffset = evictedPagesOffset + sizeof(u32) * maxPageInstallsPerFrame;
-    const u32 voxelBlasOffset =
-        clusterFixupOffset + maxClusterFixupsPerFrame * sizeof(GPUClusterFixup);
-
     const u32 maxNumTriangles =
         maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE * MAX_CLUSTER_TRIANGLES;
     const u32 maxNumVertices =
@@ -139,6 +133,12 @@ struct VirtualGeometryManager
     const u32 maxClusterCountPerAccelerationStructure = MAX_CLUSTERS_PER_BLAS;
 
     const u32 maxClusterFixupsPerFrame = 2 * maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE;
+
+    const u32 hierarchyUploadBufferOffset = maxPageInstallsPerFrame * CLUSTER_PAGE_SIZE;
+    const u32 evictedPagesOffset = hierarchyUploadBufferOffset + sizeof(u32) * maxNodes;
+    const u32 clusterFixupOffset = evictedPagesOffset + sizeof(u32) * maxPageInstallsPerFrame;
+    const u32 voxelBlasOffset =
+        clusterFixupOffset + maxClusterFixupsPerFrame * sizeof(GPUClusterFixup);
 
     enum class PageFlag
     {
@@ -168,6 +168,7 @@ struct VirtualGeometryManager
 
     struct Page
     {
+        u32 numTriangleClusters;
         u32 numClusters;
 
         VirtualPageHandle handle;
@@ -196,6 +197,7 @@ struct VirtualGeometryManager
     };
 
     u32 currentClusterTotal;
+    u32 currentTriangleClusterTotal;
     u32 totalNumVirtualPages;
     u32 totalNumNodes;
     u32 maxWriteClusters;

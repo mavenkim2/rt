@@ -37,7 +37,7 @@ namespace Eigen
 {
 
 template <int j, int k, typename T>
-inline void jacobiRotateRight(T A[9], T s, T tau)
+inline void jacobiRotateRight(T *A, T s, T tau)
 {
     for (unsigned int i = 0; i < 3; ++i)
     {
@@ -49,7 +49,7 @@ inline void jacobiRotateRight(T A[9], T s, T tau)
 }
 
 template <int j, int k, int l, typename T>
-bool jacobiRotation(T A[9], T V[9], T Z[3], const T tol)
+bool jacobiRotation(T *A, T *V, T *Z, const T tol)
 {
     // Load everything into local variables to make things easier on the
     // optimizer:
@@ -115,12 +115,12 @@ inline T maxOffDiagSymm(const T *A, u32 size)
 }
 
 template <typename T>
-void jacobiEigenSolver(T A[9], T S[3], T V[9], const T tol)
+void jacobiEigenSolver(T *A, T *S, T *V, const T tol)
 {
     for (int i = 0; i < 3; ++i)
     {
         S[i]         = A[3 * i + i];
-        V[3 * i + i] = T(0);
+        V[3 * i + i] = T(1);
     }
 
     const int maxIter = 20; // In case we get really unlucky, prevents infinite loops

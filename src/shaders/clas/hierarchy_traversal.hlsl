@@ -40,8 +40,6 @@ float2 TestNode(float3x4 renderFromObject, float3x4 cameraFromRender, float4 lod
     float cosSub = (z * distTangent + x * radius) * invDistSqr;
     float cosAdd = (z * distTangent - x * radius) * invDistSqr;
 
-    printf("%f %f %f %f %f\n", z, distTangent, x, radius, distSqr);
-
     test = cosAdd;
 
     // Clipping
@@ -139,19 +137,19 @@ struct ClusterCull
             float3x4 renderFromObject = instance.worldFromObject;
             Translate(renderFromObject, -gpuScene.cameraP);
 
-            printf("%f %f %f %f\n", lodBounds.x, lodBounds.y, lodBounds.z, lodBounds.w);
+            float scaleX = length2(float3(renderFromObject[0].x, renderFromObject[1].x, renderFromObject[2].x));
+            float scaleY = length2(float3(renderFromObject[0].y, renderFromObject[1].y, renderFromObject[2].y));
+            float scaleZ = length2(float3(renderFromObject[0].z, renderFromObject[1].z, renderFromObject[2].z));
 
-            float3 scale = float3(length2(renderFromObject[0].xyz), length2(renderFromObject[1].xyz), 
-                              length2(renderFromObject[2].xyz)); 
+            float3 scale = float3(scaleX, scaleY, scaleZ);
             scale = sqrt(scale);
             minScale = min(scale.x, min(scale.y, scale.z));
             float maxScale = max(scale.x, max(scale.y, scale.z));
 
             edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, maxScale, test);
 
-            printf("%f %f\n", edgeScales.x, test);
+            float threshold = maxParentError * minScale * gpuScene.lodScale;
 
-            float threshold = maxParentError * minScale;
             isVisible = edgeScales.x <= threshold;
             isValid &= isVisible;
 
@@ -259,8 +257,11 @@ struct ClusterCull
 
         float3x4 renderFromObject = instance.worldFromObject;
         Translate(renderFromObject, -gpuScene.cameraP);
-        float3 scale = float3(length2(renderFromObject[0].xyz), length2(renderFromObject[1].xyz), 
-                              length2(renderFromObject[2].xyz)); 
+        float scaleX = length2(float3(renderFromObject[0].x, renderFromObject[1].x, renderFromObject[2].x));
+        float scaleY = length2(float3(renderFromObject[0].y, renderFromObject[1].y, renderFromObject[2].y));
+        float scaleZ = length2(float3(renderFromObject[0].z, renderFromObject[1].z, renderFromObject[2].z));
+
+        float3 scale = float3(scaleX, scaleY, scaleZ);
         scale = sqrt(scale);
         float minScale = min(scale.x, min(scale.y, scale.z));
         float maxScale = max(scale.x, max(scale.y, scale.z));
@@ -268,7 +269,7 @@ struct ClusterCull
         float test;
         float2 edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, maxScale, test);
 
-        bool isValid = (edgeScales.x > lodError * minScale) || (header.flags & CLUSTER_STREAMING_LEAF_FLAG);
+        bool isValid = (edgeScales.x > gpuScene.lodScale * lodError * minScale) || (header.flags & CLUSTER_STREAMING_LEAF_FLAG);
 
         uint clusterOffset;
         WaveInterlockedAddScalarTest(globals[GLOBALS_VISIBLE_CLUSTER_COUNT_INDEX], isValid, 1, clusterOffset);

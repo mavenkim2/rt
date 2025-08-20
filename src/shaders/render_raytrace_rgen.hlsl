@@ -87,15 +87,13 @@ void main()
         query.TraceRayInline(accel, RAY_FLAG_NONE, 0xff, desc);
 
         uint hitKind = 0;
-        uint hitAxis = 0;
         float3 hitP;
         while (query.Proceed())
         {
             if (query.CandidateType() == CANDIDATE_PROCEDURAL_PRIMITIVE)
             {
-                uint primitiveIndex = query.CandidatePrimitiveIndex();
-                uint brickIndex = primitiveIndex & (MAX_CLUSTER_TRIANGLES - 1u);
-                uint clusterID = primitiveIndex >> MAX_CLUSTER_TRIANGLES_BIT;
+                uint clusterID = query.CandidateInstanceID();
+                uint brickIndex = query.CandidatePrimitiveIndex();
 
                 uint pageIndex = GetPageIndexFromClusterID(clusterID); 
                 uint clusterIndex = GetClusterIndexFromClusterID(clusterID);
@@ -105,14 +103,15 @@ void main()
                 DenseGeometry dg = GetDenseGeometryHeader(basePageAddress, numClusters, clusterIndex);
 
                 Brick brick = dg.DecodeBrick(brickIndex);
-                float3 pos = dg.DecodePosition(brick.vertexOffset);
+
+                float3 position = dg.DecodePosition(brick.vertexOffset);
                 float voxelSize = dg.lodError;
                 float rcpVoxelSize = rcp(voxelSize);
 
                 uint3 voxelMax;
                 GetBrickMax(brick.bitMask, voxelMax);
-                float3 boundsMin = pos; 
-                float3 boundsMax = pos + float3(voxelMax) * voxelSize; 
+                float3 boundsMin = position; 
+                float3 boundsMax = position + float3(voxelMax) * voxelSize; 
 
                 float3 objectRayOrigin = query.CandidateObjectRayOrigin();
                 float3 objectRayDir = query.CandidateObjectRayDirection();
@@ -156,7 +155,6 @@ void main()
                         {
                             hitKind = bit;
 
-                            hitAxis = 2 * axis + (objectRayDir[axis] >= 0 ? 0 : 1);
                             query.CommitProceduralPrimitiveHit(tHit);
                             break;
                         }
@@ -329,9 +327,8 @@ void main()
         }
         else if (query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
         {
-            uint primitiveIndex = query.CommittedPrimitiveIndex();
-            uint brickIndex = primitiveIndex & (MAX_CLUSTER_TRIANGLES - 1u);
-            uint clusterID = primitiveIndex >> MAX_CLUSTER_TRIANGLES_BIT;
+            uint brickIndex = query.CommittedPrimitiveIndex();
+            uint clusterID = query.CommittedInstanceID();
 
             uint pageIndex = GetPageIndexFromClusterID(clusterID); 
             uint clusterIndex = GetClusterIndexFromClusterID(clusterID);
@@ -346,16 +343,13 @@ void main()
             uint64_t mask = brick.bitMask & ((1ull << hitKind) - 1ull);
             uint vertexOffset = brick.vertexOffset + countbits(uint(mask)) + countbits(uint(mask >> 32u));
 
-            // TODO: get shading normal
             hitInfo.hitP = pos + dir * rayT;
-            //hitInfo.ss = float3(1, 0, 0);
-            //hitInfo.ts = float3(0, 1, 0);
 
-            hitInfo.n[hitAxis >> 1] = (hitAxis & 1) ? -1 : 1;
+            hitInfo.n = dg.DecodeNormal(vertexOffset);
+            hitInfo.gn = hitInfo.n;
             float2x3 tb = BuildOrthonormalBasis(hitInfo.n);
             hitInfo.ss = tb[0];
             hitInfo.ts = tb[1];
-
         }
 
         // Get material
@@ -411,7 +405,16 @@ void main()
         float3 origin = TransformP(objectToWorld, hitInfo.hitP);
         dir = hitInfo.ss * dir.x + hitInfo.ts * dir.y + hitInfo.n * dir.z;
         dir = normalize(TransformV(objectToWorld, dir));
+
         pos = OffsetRayOrigin(origin, hitInfo.gn, printDebug);
+
+        if (query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT && depth > 1)
+        {
+#if 0
+            printf("%f %f %f\n", dir.x,  dir.y,  dir.z);
+            printf("yay\n");
+#endif
+        }
 
 #if 1
         // Warp based russian roulette

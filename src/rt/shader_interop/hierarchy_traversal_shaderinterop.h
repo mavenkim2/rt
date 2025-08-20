@@ -39,6 +39,7 @@ struct CLASPageInfo
     uint accelByteOffset;
     uint clasCount;
     uint clasSize;
+    uint numTriangleClusters;
 
     uint tempClusterOffset;
 };

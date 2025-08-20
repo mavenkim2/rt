@@ -239,8 +239,8 @@ void DenseGeometryBuildData::WriteVertexData(const Mesh &mesh,
     packed.h     = BitFieldPackU32(packed.h, numOctBitsY, headerOffset, 5);
 
     headerOffset = 0;
-    packed.i     = BitFieldPackU32(packed.h, tempResources.minOct.x, headerOffset, 16);
-    packed.i     = BitFieldPackU32(packed.h, tempResources.minOct.y, headerOffset, 16);
+    packed.i     = BitFieldPackU32(packed.i, tempResources.minOct.x, headerOffset, 16);
+    packed.i     = BitFieldPackU32(packed.i, tempResources.minOct.y, headerOffset, 16);
 }
 
 void DenseGeometryBuildData::WriteMaterialIDs(const StaticArray<u32> &materialIndices,
@@ -534,6 +534,8 @@ void DenseGeometryBuildData::WriteTriangleData(StaticArray<int> &triangleIndices
             }
         }
     }
+
+    Assert(vertexCount <= MAX_CLUSTER_TRIANGLE_VERTICES);
 
     // Build adjacency data for triangles
     u32 *counts  = PushArray(scratch.temp.arena, u32, clusterNumTriangles);
@@ -1062,7 +1064,7 @@ void DenseGeometryBuildData::WriteTriangleData(StaticArray<int> &triangleIndices
     headerOffset = ANCHOR_WIDTH + 5;
     packed.c     = BitFieldPackU32(packed.c, numIndexBits - 1, headerOffset, 3);
 
-    headerOffset = 0;
+    headerOffset = 14;
     Assert(reuseBuffer.Length() < (1 << 8));
     packed.e = BitFieldPackU32(packed.e, reuseBuffer.Length(), headerOffset, 8);
 
@@ -1079,11 +1081,10 @@ void DenseGeometryBuildData::WriteTriangleData(StaticArray<int> &triangleIndices
     packed.g = BitFieldPackI32(packed.g, edge2HighBitPerDword[1], headerOffset, 7);
     packed.g = BitFieldPackI32(packed.g, edge2HighBitPerDword[2], headerOffset, 8);
 
-    headerOffset = 5;
+    headerOffset = 10;
     packed.h     = BitFieldPackU32(packed.h, restartCountPerDword[0], headerOffset, 6);
     packed.h     = BitFieldPackU32(packed.h, restartCountPerDword[1], headerOffset, 7);
     packed.h     = BitFieldPackU32(packed.h, restartCountPerDword[2], headerOffset, 8);
-    // packed.h     = BitFieldPackU32(packed.h, numFaceBits, headerOffset, 6);
 
     headers.AddBack() = packed;
 }

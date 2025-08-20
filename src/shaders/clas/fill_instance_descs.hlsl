@@ -18,7 +18,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
     if (blasIndex >= globals[GLOBALS_BLAS_COUNT_INDEX]) return;
 
     BLASData blasData = blasDatas[blasIndex];
-    if (blasData.clusterCount == 0) return;
+    if (blasData.clusterCount == 0 && blasData.voxelClusterCount == 0) return;
 
     GPUInstance instance = gpuInstances[blasData.instanceID];
 
