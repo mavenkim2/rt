@@ -13,6 +13,7 @@ struct Mesh;
 struct PrimRef;
 struct RecordAOSSplits;
 struct ScenePrimitives;
+struct SGGXCompact;
 struct TileMetadata;
 
 enum class TriangleStripType
@@ -46,7 +47,6 @@ struct DGFTempResources
     Vec3f quantizeP;
     int precision;
     bool hasAnyNormals;
-    u32 vertexCount;
 
     Vec3i minP;
     Vec3i maxP;
@@ -83,11 +83,13 @@ struct alignas(CACHE_LINE_SIZE) DenseGeometryBuildData
     DenseGeometryBuildData(Arena *arena);
 
     void WriteVertexData(const Mesh &mesh, const StaticArray<u32> &meshVertexIndices,
+                         const StaticArray<u32> &meshNormalIndices,
                          DGFTempResources &tempResources);
     void WriteMaterialIDs(const StaticArray<u32> &materialIndices,
                           DGFTempResources &tempResources);
     void WriteVoxelData(StaticArray<CompressedVoxel> &voxels, Mesh &mesh,
-                        const StaticArray<u32> &materialIDs, StaticArray<u32> &voxelGeomIDs);
+                        const StaticArray<u32> &materialIDs, StaticArray<u32> &voxelGeomIDs,
+                        f32 *coverages, SGGXCompact *sggx);
     void WriteTriangleData(StaticArray<int> &triangleIndices, StaticArray<u32> &geomIDs,
                            Mesh &mesh, StaticArray<u32> &materialIDs);
 };

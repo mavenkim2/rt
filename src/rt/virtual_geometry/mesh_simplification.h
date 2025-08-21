@@ -126,10 +126,16 @@ struct MeshSimplifier
 void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndices,
                     string filename);
 
+struct SGGXCompact
+{
+    u8 packed[6];
+};
+
 struct Voxel
 {
     Vec3i loc;
     Vec3f normal;
+    SGGXCompact sggx;
     f32 coverage;
     u32 geomID;
 };

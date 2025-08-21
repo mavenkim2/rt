@@ -2708,7 +2708,8 @@ static void GenerateVoxelRefs(PrimRef *out, StaticArray<CompressedVoxel> &voxels
 }
 
 static Mesh CompressVoxels(Arena *arena, StaticArray<Voxel> &voxels, StaticArray<u32> &geomIDs,
-                           StaticArray<CompressedVoxel> &compressedVoxels, f32 voxelSize)
+                           StaticArray<CompressedVoxel> &compressedVoxels, f32 voxelSize,
+                           f32 *&coverages, SGGXCompact *&sggx)
 {
     struct Handle
     {
@@ -2754,6 +2755,9 @@ static Mesh CompressVoxels(Arena *arena, StaticArray<Voxel> &voxels, StaticArray
     outputMesh.n       = PushArrayNoZero(arena, Vec3f, voxels.Length());
     outputMesh.indices = PushArrayNoZero(arena, u32, 3 * voxels.Length());
 
+    coverages = PushArrayNoZero(arena, f32, voxels.Length());
+    sggx      = PushArrayNoZero(arena, SGGXCompact, voxels.Length());
+
     u32 numBricks = 0;
     u32 numVoxels = 0;
     for (u32 handleIndex = 0; handleIndex < voxels.Length(); handleIndex++)
@@ -2773,6 +2777,8 @@ static Mesh CompressVoxels(Arena *arena, StaticArray<Voxel> &voxels, StaticArray
         geomIDs.Push(voxel.geomID);
         outputMesh.p[vertexOffset] = Vec3f(voxel.loc) * voxelSize;
         outputMesh.n[vertexOffset] = voxel.normal;
+        coverages[vertexOffset]    = voxel.coverage;
+        sggx[vertexOffset]         = voxel.sggx;
 
         for (int z = 0; z < 4; z++)
         {
@@ -2797,6 +2803,8 @@ static Mesh CompressVoxels(Arena *arena, StaticArray<Voxel> &voxels, StaticArray
                             u32 vertexIndex           = numVoxels++;
                             outputMesh.p[vertexIndex] = Vec3f(neighbor.loc) * voxelSize;
                             outputMesh.n[vertexIndex] = neighbor.normal;
+                            coverages[vertexIndex]    = neighbor.coverage;
+                            sggx[vertexIndex]         = neighbor.sggx;
 
                             geomIDs.Push(neighbor.geomID);
                             break;
@@ -3838,7 +3846,9 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                         // Temp
                         StaticArray<Voxel> voxels;
                         StaticArray<Vec3i> extraVoxels;
-                        Mesh voxelMesh = {};
+                        Mesh voxelMesh    = {};
+                        f32 *coverages    = 0;
+                        SGGXCompact *sggx = 0;
                         StaticArray<u32> voxelGeomIDs;
                         f32 error = 0.f;
                         u32 numSlots =
@@ -3936,7 +3946,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                                 {
                                     voxelMesh = CompressVoxels(scratch.temp.arena, voxels,
                                                                voxelGeomIDs, compressedVoxels,
-                                                               voxelSize);
+                                                               voxelSize, coverages, sggx);
                                     // Print("num bricks: %u\n", compressedVoxels.Length());
                                 }
 
@@ -4032,7 +4042,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
                                 groupBuildData->WriteVoxelData(cluster.compressedVoxels,
                                                                voxelMesh, materialIndices,
-                                                               voxelGeomIDs);
+                                                               voxelGeomIDs, coverages, sggx);
                             }
 
                             if (extraVoxels.Length())
@@ -5322,7 +5332,7 @@ static void CheckVoxelOccupancy(Arena *arena, ScenePrimitives *scene,
                                 f32 voxelSize)
 {
     ScratchArena scratch(&arena, 1);
-    const u32 numRays = 16;
+    const u32 numRays = 128;
 
     struct SGGX
     {
@@ -5357,8 +5367,19 @@ static void CheckVoxelOccupancy(Arena *arena, ScenePrimitives *scene,
             nzz += n.z * n.z;
         }
 
-        Vec3f Fit()
+        Vec3f Fit(u32 hitCount)
         {
+            f32 hits = f32(hitCount);
+
+            nxx /= hits;
+            nxy /= hits;
+            nxz /= hits;
+
+            nyy /= hits;
+            nyz /= hits;
+
+            nzz /= hits;
+
             float m[9] = {
                 nxx, nxy, nxz, nxy, nyy, nyz, nxz, nyz, nzz,
             };
@@ -5395,6 +5416,28 @@ static void CheckVoxelOccupancy(Arena *arena, ScenePrimitives *scene,
                 result[axis] = eigenVectors[3 * axis + chosenAxis];
             }
             return result;
+        }
+
+        SGGXCompact Compact()
+        {
+            SGGXCompact compact;
+            f32 sigmaX = Sqrt(nxx);
+            f32 sigmaY = Sqrt(nyy);
+            f32 sigmaZ = Sqrt(nzz);
+
+            f32 rxy = nxy / Sqrt(nxx * nyy);
+            f32 rxz = nxz / Sqrt(nxx * nzz);
+            f32 ryz = nyz / Sqrt(nyy * nzz);
+
+            compact.packed[0] = u8(Clamp(u32(sigmaX * 255.f + 0.5f), 0u, 255u));
+            compact.packed[1] = u8(Clamp(u32(sigmaY * 255.f + 0.5f), 0u, 255u));
+            compact.packed[2] = u8(Clamp(u32(sigmaZ * 255.f + 0.5f), 0u, 255u));
+
+            compact.packed[3] = u8(Clamp(u32((rxy + 1.f) * 0.5f * 255.f + 0.5f), 0u, 255u));
+            compact.packed[4] = u8(Clamp(u32((rxz + 1.f) * 0.5f * 255.f + 0.5f), 0u, 255u));
+            compact.packed[5] = u8(Clamp(u32((ryz + 1.f) * 0.5f * 255.f + 0.5f), 0u, 255u));
+
+            return compact;
         }
     };
 
@@ -5497,8 +5540,9 @@ static void CheckVoxelOccupancy(Arena *arena, ScenePrimitives *scene,
 
                 Voxel v;
                 v.loc      = voxel;
-                v.normal   = sggx.Fit();
+                v.normal   = sggx.Fit(hitCount);
                 v.coverage = coverage;
+                v.sggx     = sggx.Compact();
                 v.geomID   = geomID;
 
                 voxels.Push(v);

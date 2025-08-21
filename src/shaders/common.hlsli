@@ -205,6 +205,12 @@ float length2(float3 v)
     return dot(v, v);
 }
 
+template <typename T>
+T Sqr(T val)
+{
+    return val * val;
+}
+
 void Translate(inout float3x4 transform, float3 p)
 {
     transform[0].w += p.x;

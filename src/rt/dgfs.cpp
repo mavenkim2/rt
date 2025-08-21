@@ -8,6 +8,7 @@
 #include "math/vec2.h"
 #include "shader_interop/dense_geometry_shaderinterop.h"
 #include "shader_interop/ray_shaderinterop.h"
+#include "virtual_geometry/mesh_simplification.h"
 #include "parallel.h"
 #include "mesh.h"
 #include "dgfs.h"
@@ -119,8 +120,8 @@ DenseGeometryBuildData::DenseGeometryBuildData(Arena *arena) : arena(arena)
 }
 
 DGFTempResources::DGFTempResources()
-    : hasAnyNormals(false), vertexCount(0), minP(pos_inf), maxP(neg_inf), minOct(Vec2u(65536)),
-      maxOct(0), precision(6)
+    : hasAnyNormals(false), minP(pos_inf), maxP(neg_inf), minOct(Vec2u(65536)), maxOct(0),
+      precision(6)
 {
     Assert(precision > CLUSTER_MIN_PRECISION);
     quantizeP = AsFloat((127 + precision) << 23);
@@ -145,8 +146,10 @@ void DGFTempResources::UpdateNormalBounds(const Vec3f &normal)
 
 void DenseGeometryBuildData::WriteVertexData(const Mesh &mesh,
                                              const StaticArray<u32> &meshVertexIndices,
+                                             const StaticArray<u32> &meshNormalIndices,
                                              DGFTempResources &tempResources)
 {
+    Assert(meshNormalIndices.Length() >= meshVertexIndices.Length());
     Vec3u bitWidths;
     bitWidths.x = tempResources.minP[0] == tempResources.maxP[0]
                       ? 0
@@ -158,7 +161,7 @@ void DenseGeometryBuildData::WriteVertexData(const Mesh &mesh,
                       ? 0
                       : Log2Int(Max(tempResources.maxP[2] - tempResources.minP[2], 1)) + 1;
 
-    u32 numBits = tempResources.vertexCount * (bitWidths.x + bitWidths.y + bitWidths.z);
+    u32 numBits = meshVertexIndices.Length() * (bitWidths.x + bitWidths.y + bitWidths.z);
     Assert(bitWidths.x < 32 && bitWidths.y < 32 && bitWidths.z < 32);
 
     u32 vertexBitStreamSize                      = (numBits + 7) >> 3;
@@ -180,8 +183,8 @@ void DenseGeometryBuildData::WriteVertexData(const Mesh &mesh,
             Abs(tempResources.minP[2]) < (1 << 23),
         "%i %i %i\n", tempResources.minP[0], tempResources.minP[1], tempResources.minP[2]);
 
-    u32 vertexCount         = meshVertexIndices.Length();
-    u32 normalBitStreamSize = (vertexCount * (numOctBitsX + numOctBitsY) + 7) >> 3;
+    u32 normalBitStreamSize =
+        mesh.n ? ((meshNormalIndices.Length() * (numOctBitsX + numOctBitsY) + 7) >> 3) : 0;
     ChunkedLinkedList<u8>::ChunkNode *normalNode = 0;
     if (normalBitStreamSize)
     {
@@ -199,8 +202,11 @@ void DenseGeometryBuildData::WriteVertexData(const Mesh &mesh,
         {
             WriteBits((u32 *)vertexNode->values, bitOffset, p[axis], bitWidths[axis]);
         }
+    }
 
-        if (mesh.n)
+    if (mesh.n)
+    {
+        for (u32 index : meshNormalIndices)
         {
             Vec3f &n    = mesh.n[index];
             u32 normal  = EncodeOctahedral(n);
@@ -212,7 +218,7 @@ void DenseGeometryBuildData::WriteVertexData(const Mesh &mesh,
     }
 
     Assert(bitOffset == numBits);
-    Assert(normalBitOffset == vertexCount * (numOctBitsX + numOctBitsY));
+    Assert(normalBitOffset == meshNormalIndices.Length() * (numOctBitsX + numOctBitsY));
 
     PackedDenseGeometryHeader &packed = tempResources.packed;
 
@@ -229,7 +235,7 @@ void DenseGeometryBuildData::WriteVertexData(const Mesh &mesh,
                                headerOffset, 8);
 
     headerOffset = 0;
-    packed.e     = BitFieldPackU32(packed.e, vertexCount, headerOffset, 14);
+    packed.e     = BitFieldPackU32(packed.e, meshNormalIndices.Length(), headerOffset, 14);
     headerOffset += 8;
     packed.e = BitFieldPackU32(packed.e, bitWidths.y, headerOffset, 5);
     packed.e = BitFieldPackU32(packed.e, bitWidths.z, headerOffset, 5);
@@ -343,7 +349,8 @@ void DenseGeometryBuildData::WriteMaterialIDs(const StaticArray<u32> &materialIn
 
 void DenseGeometryBuildData::WriteVoxelData(StaticArray<CompressedVoxel> &voxels, Mesh &mesh,
                                             const StaticArray<u32> &materialIDs,
-                                            StaticArray<u32> &voxelGeomIDs)
+                                            StaticArray<u32> &voxelGeomIDs, f32 *coverages,
+                                            SGGXCompact *sggx)
 {
     ScratchArena scratch;
     DGFTempResources tempResources;
@@ -375,6 +382,7 @@ void DenseGeometryBuildData::WriteVoxelData(StaticArray<CompressedVoxel> &voxels
         }
     }
 
+    StaticArray<u32> voxelBaseVertexIndices(scratch.temp.arena, voxels.Length());
     StaticArray<u32> voxelVertexIndices(scratch.temp.arena, voxelTotal);
     StaticArray<u32> voxelClusterVertexIndices(scratch.temp.arena, voxels.Length());
 
@@ -387,6 +395,7 @@ void DenseGeometryBuildData::WriteVoxelData(StaticArray<CompressedVoxel> &voxels
         u32 vertexOffset = voxel.vertexOffset;
 
         voxelClusterVertexIndices.Push(voxelTotal);
+        voxelBaseVertexIndices.Push(vertexOffset);
         for (u32 voxelIndex = 0; voxelIndex < numVoxels; voxelIndex++)
         {
             u32 vertexIndex   = vertexOffset + voxelIndex;
@@ -397,12 +406,29 @@ void DenseGeometryBuildData::WriteVoxelData(StaticArray<CompressedVoxel> &voxels
         voxelTotal += numVoxels;
     }
 
-    tempResources.vertexCount = voxelTotal;
-
     u32 geoBaseAddress     = geoByteBuffer.Length();
     u32 shadingBaseAddress = shadingByteBuffer.Length();
 
-    WriteVertexData(mesh, voxelVertexIndices, tempResources);
+    WriteVertexData(mesh, voxelBaseVertexIndices, voxelVertexIndices, tempResources);
+
+    auto *coverageNode    = shadingByteBuffer.AddNode(voxelTotal * sizeof(f32));
+    u32 coverageBitOffset = 0;
+    for (u32 vertexIndex : voxelVertexIndices)
+    {
+        Assert(coverages[vertexIndex] != 0.f);
+        WriteBits((u32 *)coverageNode->values, coverageBitOffset,
+                  AsUInt(coverages[vertexIndex]), 32);
+    }
+
+    auto *sggxNode    = shadingByteBuffer.AddNode(voxelTotal * sizeof(SGGXCompact));
+    u32 sggxBitOffset = 0;
+    for (u32 vertexIndex : voxelVertexIndices)
+    {
+        for (int i = 0; i < 6; i++)
+        {
+            WriteBits((u32 *)sggxNode->values, sggxBitOffset, sggx[vertexIndex].packed[i], 8);
+        }
+    }
 
     u32 brickBitOffset      = 0;
     u32 brickOffset         = geoByteBuffer.Length();
@@ -938,8 +964,7 @@ void DenseGeometryBuildData::WriteTriangleData(StaticArray<int> &triangleIndices
     }
 
     Assert(addedVertexCount == vertexCount);
-    tempResources.vertexCount = addedVertexCount;
-    WriteVertexData(mesh, meshVertexIndices, tempResources);
+    WriteVertexData(mesh, meshVertexIndices, meshVertexIndices, tempResources);
 
     FixedArray<u32, 4> restartHighBitPerDword = {0, 0, 0, 0};
     FixedArray<u32, 4> restartCountPerDword   = {1, 0, 0, 0};

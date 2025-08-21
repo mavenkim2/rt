@@ -5,6 +5,7 @@
 #include "common.hlsli"
 #include "../rt/shader_interop/dense_geometry_shaderinterop.h"
 #include "../rt/shader_interop/as_shaderinterop.h"
+#include "voxel.hlsli"
 
 ByteAddressBuffer clusterPageData : register(t8);
 
@@ -29,6 +30,8 @@ struct DenseGeometry
     uint numVertices;
 
     uint normalOffset;
+    uint coverageOffset;
+    uint sggxOffset;
     uint faceIDOffset;
     uint indexOffset;
     uint ctrlOffset;
@@ -254,6 +257,50 @@ struct DenseGeometry
         return UnpackOctahedral(float2(nx, ny));
     }
 
+    float DecodeCoverage(uint vertexIndex)
+    {
+        uint2 vals = GetAlignedAddressAndBitOffset(baseAddress + shadBaseAddress + coverageOffset + 4 * vertexIndex, 0);
+        uint2 data = clusterPageData.Load2(vals[0]);
+        uint c = BitAlignU32(data.y, data.x, vals[1]);
+
+        return asfloat(c);
+    }
+
+    SGGX DecodeSGGX(uint vertexIndex)
+    {
+        uint2 vals = GetAlignedAddressAndBitOffset(baseAddress + shadBaseAddress + sggxOffset + 6 * vertexIndex, 0);
+        uint2 data = clusterPageData.Load2(vals[0]);
+        uint packed0 = BitAlignU32(data.y, data.x, vals[1]);
+        uint packed1 = data.y >> vals[1];
+
+        uint sigmaX = BitFieldExtractU32(packed0, 8, 0);
+        uint sigmaY = BitFieldExtractU32(packed0, 8, 8);
+        uint sigmaZ = BitFieldExtractU32(packed0, 8, 16);
+
+        uint rxy = BitFieldExtractU32(packed0, 8, 24);
+        uint rxz = BitFieldExtractU32(packed1, 8, 0);
+        uint ryz = BitFieldExtractU32(packed1, 8, 8);
+
+        float sigmaXF = sigmaX / 255.f;
+        float sigmaYF = sigmaY / 255.f;
+        float sigmaZF = sigmaZ / 255.f;
+
+        float rxyf = (rxy / 255.f) * 2 - 1;
+        float rxzf = (rxz / 255.f) * 2 - 1;
+        float ryzf = (ryz / 255.f) * 2 - 1;
+
+        SGGX result;
+        result.nxx = Sqr(sigmaXF);
+        result.nyy = Sqr(sigmaYF);
+        result.nzz = Sqr(sigmaZF);
+
+        result.nxy = rxyf * sigmaXF * sigmaYF;
+        result.nxz = rxzf * sigmaXF * sigmaZF;
+        result.nyz = ryzf * sigmaYF * sigmaZF;
+
+        return result;
+    }
+
     uint DecodeReuse(uint reuseIndex)
     {
         const uint bitsOffset = reuseIndex * indexBitWidth;
@@ -399,10 +446,14 @@ DenseGeometry GetDenseGeometryHeader(uint4 packed[NUM_CLUSTER_HEADER_FLOAT4S], u
     const uint vertexBitWidth = result.posBitWidths[0] + result.posBitWidths[1] + result.posBitWidths[2];
     const uint octBitWidth = result.octBitWidths[0] + result.octBitWidths[1];
 
-    result.normalOffset = 0;
-    result.faceIDOffset = result.normalOffset + ((result.numVertices * octBitWidth + 7) >> 3);
+    uint numPositions = result.numBricks ? result.numBricks : result.numVertices;
 
-    result.ctrlOffset = (result.numVertices * vertexBitWidth + 7) >> 3;
+    result.normalOffset = 0;
+    result.coverageOffset = result.normalOffset + ((result.numVertices * octBitWidth + 7) >> 3);
+    result.sggxOffset = result.coverageOffset + 4 * result.numVertices;
+    //result.faceIDOffset = result.normalOffset + ((result.numVertices * octBitWidth + 7) >> 3);
+
+    result.ctrlOffset = (numPositions * vertexBitWidth + 7) >> 3;
     result.brickOffset = result.ctrlOffset;
 
     result.indexOffset = result.ctrlOffset + 12 * ((result.numTriangles + 31u) >> 5u);
@@ -459,6 +510,13 @@ void GetBrickMax(uint64_t bitMask, out uint3 maxP)
     bits |= bits << 8u;
     bits |= bits << 4u;
     maxP.x = firstbithigh(bits >> 28u) + 1u;
+}
+
+uint GetVoxelVertexOffset(uint brickVertexOffset, uint64_t bitMask, uint voxel) 
+{
+    uint64_t mask = bitMask & ((1ull << voxel) - 1ull);
+    uint vertexOffset = brickVertexOffset + countbits(uint(mask)) + countbits(uint(mask >> 32u));
+    return vertexOffset;
 }
 
 #endif

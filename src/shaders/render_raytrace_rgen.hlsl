@@ -25,6 +25,7 @@
 #include "nvidia/ser.hlsli"
 #include "nvidia/clas.hlsli"
 #include "wave_intrinsics.hlsli"
+#include "voxel.hlsli"
 
 RaytracingAccelerationStructure accel : register(t0);
 RWTexture2D<half4> image : register(u1);
@@ -104,7 +105,7 @@ void main()
 
                 Brick brick = dg.DecodeBrick(brickIndex);
 
-                float3 position = dg.DecodePosition(brick.vertexOffset);
+                float3 position = dg.DecodePosition(brickIndex);
                 float voxelSize = dg.lodError;
                 float rcpVoxelSize = rcp(voxelSize);
 
@@ -141,6 +142,8 @@ void main()
                     float3 stepT = abs(invDir) * voxelSize; 
 
                     float3 intersectP = objectRayOrigin + objectRayDir * tHit - boundsMin;
+
+                    hitP = intersectP + boundsMin;
                     int3 voxel = clamp((int3)floor(intersectP * rcpVoxelSize), 0, 3);
 
                     float3 nextTime = tHit + ((voxel + add) * voxelSize - intersectP) * invDir;
@@ -153,10 +156,24 @@ void main()
                         uint bit = voxel.x + voxel.y * 4 + voxel.z * 16;
                         if (brick.bitMask & (1u << bit))
                         {
+#if 1
+                            uint vertexOffset = GetVoxelVertexOffset(brick.vertexOffset, brick.bitMask, bit);
+                            float alpha = dg.DecodeCoverage(vertexOffset);
+
+                            if (rng.Uniform() < alpha)
+                            {
+                                hitKind = bit;
+
+                                query.CommitProceduralPrimitiveHit(tHit);
+                                break;
+                            }
+#else
                             hitKind = bit;
 
                             query.CommitProceduralPrimitiveHit(tHit);
                             break;
+#endif
+
                         }
 
                         float nextT = min(nextTime.x, min(nextTime.y, nextTime.z));
@@ -340,16 +357,42 @@ void main()
             materialID = dg.DecodeMaterialID(brickIndex);
             Brick brick = dg.DecodeBrick(brickIndex);
 
-            uint64_t mask = brick.bitMask & ((1ull << hitKind) - 1ull);
-            uint vertexOffset = brick.vertexOffset + countbits(uint(mask)) + countbits(uint(mask >> 32u));
+            uint vertexOffset = GetVoxelVertexOffset(brick.vertexOffset, brick.bitMask, hitKind);
 
-            hitInfo.hitP = pos + dir * rayT;
+            hitInfo.hitP = query.CommittedObjectRayOrigin() + dir * rayT;
 
+#if 1
+            float2x3 wBasis = BuildOrthonormalBasis(-objectRayDir);
+            float3 wk = wBasis[0];
+            float3 wj = wBasis[1];
+            SGGX sggx = dg.DecodeSGGX(vertexOffset);
+
+            float3 wm = sggx.SampleSGGX(-objectRayDir, wk, wj, rng.Uniform2D());
+
+            if (any(isnan(wm)) || any(isinf(wm)))
+            {
+                hitInfo.n = dg.DecodeNormal(vertexOffset);
+                hitInfo.gn = hitInfo.n;
+                float2x3 tb = BuildOrthonormalBasis(hitInfo.n);
+                hitInfo.ss = tb[0];
+                hitInfo.ts = tb[1];
+            }
+            else 
+            {
+                hitInfo.n = wm;
+                hitInfo.gn = wm;
+                float2x3 tb = BuildOrthonormalBasis(hitInfo.n);
+                hitInfo.ss = tb[0];
+                hitInfo.ts = tb[1];
+            }
+
+#else
             hitInfo.n = dg.DecodeNormal(vertexOffset);
             hitInfo.gn = hitInfo.n;
             float2x3 tb = BuildOrthonormalBasis(hitInfo.n);
             hitInfo.ss = tb[0];
             hitInfo.ts = tb[1];
+#endif
         }
 
         // Get material
@@ -386,7 +429,6 @@ void main()
 
                 float4 reflectance = float4(0.f, 1.f, 0.f, 1.f);
                 dir = SampleDiffuse(reflectance.xyz, wo, sample, throughput, printDebug);
-
 #if 0
                 if (depth == 1)
                 {
@@ -401,20 +443,24 @@ void main()
         }
 
 
-        if (dir.z == 0) break;
+        if (dir.z == 0)
+        {
+            printf("sucks\n");
+            break;
+        }
+
         float3 origin = TransformP(objectToWorld, hitInfo.hitP);
+
         dir = hitInfo.ss * dir.x + hitInfo.ts * dir.y + hitInfo.n * dir.z;
         dir = normalize(TransformV(objectToWorld, dir));
 
-        pos = OffsetRayOrigin(origin, hitInfo.gn, printDebug);
-
-        if (query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT && depth > 1)
+        if (0)
         {
-#if 0
-            printf("%f %f %f\n", dir.x,  dir.y,  dir.z);
-            printf("yay\n");
-#endif
+            printf("%f %f %f %f %f %f %f %f %f\n", hitInfo.ts.x, hitInfo.ts.y, hitInfo.ts.z, 
+                    hitInfo.ss.x, hitInfo.ss.y, hitInfo.ss.z,  dir.x, dir.y, dir.z);
         }
+
+        pos = OffsetRayOrigin(origin, hitInfo.gn, printDebug);
 
 #if 1
         // Warp based russian roulette

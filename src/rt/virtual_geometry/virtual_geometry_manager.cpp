@@ -1226,11 +1226,10 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
             f32 lodError       = AsFloat(packed[3].w);
             u32 baseAddress    = request.pageIndex * CLUSTER_PAGE_SIZE;
 
-            u32 vertexBitWidth = posBitWidths.x + posBitWidths.y + posBitWidths.z;
-            u32 brickOffset    = geoBaseAddress + ((numVertices * vertexBitWidth + 7u) >> 3u);
-
             if (numBricks)
             {
+                u32 vertexBitWidth = posBitWidths.x + posBitWidths.y + posBitWidths.z;
+                u32 brickOffset = geoBaseAddress + ((numBricks * vertexBitWidth + 7u) >> 3u);
                 BLASBuildInfo buildInfo   = {};
                 buildInfo.primitiveOffset = sizeof(AABB) * totalNumBricks;
                 buildInfo.primitiveCount  = numBricks;
@@ -1249,8 +1248,8 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
                         DecodeBrick(meshInfo.pageData, brickIndex, baseAddress, brickOffset);
                     Assert(brick.vertexOffset < numVertices);
                     Vec3f position =
-                        DecodePosition(meshInfo.pageData, brick.vertexOffset, posBitWidths,
-                                       anchor, baseAddress, geoBaseAddress);
+                        DecodePosition(meshInfo.pageData, brickIndex, posBitWidths, anchor,
+                                       baseAddress, geoBaseAddress);
 
                     Vec3u maxP;
                     GetBrickMax(brick.bitMask, maxP);
@@ -1524,13 +1523,15 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
     // if (device->frameCount > 10)
     // {
     //     GPUBuffer readback = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-    //                                               vertexBuffer.size, MemoryUsage::GPU_TO_CPU);
+    //                                               vertexBuffer.size,
+    //                                               MemoryUsage::GPU_TO_CPU);
     //
     //     // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
     //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
     //     //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
     //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-    //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+    //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+    //     VK_PIPELINE_STAGE_2_TRANSFER_BIT,
     //                  VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
     //     cmd->FlushBarriers();
     //     cmd->CopyBuffer(&readback, &vertexBuffer);
