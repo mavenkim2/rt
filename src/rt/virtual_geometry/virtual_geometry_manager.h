@@ -357,7 +357,7 @@ struct VirtualGeometryManager
                             GPUBuffer *gpuInstancesBuffer, GPUBuffer *visibleClustersBuffer);
     void BuildClusterBLAS(CommandBuffer *cmd, GPUBuffer *visibleClustersBuffer);
     void AllocateInstances(StaticArray<GPUInstance> &gpuInstances);
-    void BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstances);
+    void BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstances, GPUBuffer *blasSceneBounds);
     void UnlinkLRU(int pageIndex);
     void LinkLRU(int index);
 

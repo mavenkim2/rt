@@ -5339,7 +5339,7 @@ static void CheckVoxelOccupancy(Arena *arena, ScenePrimitives *scene,
                                 f32 voxelSize)
 {
     ScratchArena scratch(&arena, 1);
-    const u32 numRays = 128;
+    const u32 numRays = 16;
 
     struct SGGX
     {

@@ -3885,7 +3885,7 @@ bool Vulkan::BeginFrame(bool doubleBuffer)
                 waitInfo.pValues             = &val;
                 waitInfo.semaphoreCount      = 1;
                 waitInfo.pSemaphores         = &queue.submitSemaphore[GetCurrentBuffer()];
-                VkResult result = vkWaitSemaphores(device, &waitInfo, 1e9); // UINT64_MAX);
+                VkResult result = vkWaitSemaphores(device, &waitInfo, 10e9); // UINT64_MAX);
 
                 if (result != VK_SUCCESS)
                 {

@@ -588,6 +588,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     CommandBuffer *dgfTransferCmd = device->BeginCommandBuffer(QueueType_Compute);
 
     VirtualGeometryManager virtualGeometryManager(dgfTransferCmd, sceneScratch.temp.arena);
+    StaticArray<AABB> blasSceneBounds(sceneScratch.temp.arena, numBlas);
 
     for (int sceneIndex = 0; sceneIndex < numBlas; sceneIndex++)
     {
@@ -600,7 +601,21 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         virtualGeometryManager.AddNewMesh(sceneScratch.temp.arena, dgfTransferCmd,
                                           virtualGeoFilename);
+
+        Bounds b = scene->GetSceneBounds();
+        AABB aabb;
+        aabb.minX = b.minP[0];
+        aabb.minY = b.minP[1];
+        aabb.minZ = b.minP[2];
+        aabb.maxX = b.maxP[0];
+        aabb.maxY = b.maxP[1];
+        aabb.maxZ = b.maxP[2];
+        blasSceneBounds.Push(aabb);
     }
+
+    TransferBuffer aabbBuffer =
+        dgfTransferCmd->SubmitBuffer(blasSceneBounds.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                     sizeof(AABB) * blasSceneBounds.Length());
 
     GPUBuffer visibleClustersBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -633,6 +648,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     // Build the TLAS over BLAS
     StaticArray<GPUInstance> gpuInstances(sceneScratch.temp.arena, numInstances);
 
+#if 0
     GPUBuffer tlasBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
@@ -640,8 +656,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         virtualGeometryManager.maxInstances * sizeof(VkAccelerationStructureInstanceKHR));
 
     u32 tlasScratchSize, tlasAccelSize;
-    device->GetTLASBuildSizes(virtualGeometryManager.maxInstances, tlasScratchSize,
-                              tlasAccelSize);
+    device->GetTLASBuildSizes(1u << 21u, tlasScratchSize, tlasAccelSize);
     GPUBuffer tlasScratchBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
@@ -653,6 +668,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
         tlasAccelSize);
+#endif
 
     if (tlasScenes.Length() != 0)
     {
@@ -665,6 +681,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             {
                 GPUInstance gpuInstance;
                 gpuInstance.resourceID = instances[instanceIndex].id;
+
                 AffineSpace &transform =
                     scene->affineTransforms[instances[instanceIndex].transformIndex];
 
@@ -733,7 +750,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     int envMapBindlessIndex;
 
     ViewCamera camera = {};
-    camera.position   = params->pCamera;
+    camera.position   = Vec3f(0);
     camera.forward    = Normalize(params->look - params->pCamera);
     // camera.forward = Vec3f(-.290819466f, .091174677f, .9524323811f);
     camera.right = Normalize(Cross(camera.forward, params->up));
@@ -760,8 +777,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         OS_Key_S,
     };
     int dir[4] = {};
-
-    Vec3f cameraStart = params->pCamera;
 
     GPUBuffer counterBuffer =
         device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(u32));
@@ -861,7 +876,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             axis.e[1] = Cross(axis.e[2], axis.e[0]);
             axis      = Transpose(axis);
 
-            AffineSpace cameraFromRender = AffineSpace(axis, Vec3f(0));
+            AffineSpace cameraFromRender =
+                AffineSpace(axis, Vec3f(0)) * Translate(-camera.position);
 
             gpuScene.cameraP          = camera.position;
             gpuScene.renderFromCamera = Inverse(cameraFromRender);
@@ -1023,7 +1039,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             cmd->ClearBuffer(&virtualGeometryManager.clasGlobalsBuffer);
             cmd->ClearBuffer(&virtualGeometryManager.streamingRequestsBuffer);
             cmd->ClearBuffer(&virtualGeometryManager.blasDataBuffer);
-            cmd->ClearBuffer(&tlasBuffer);
+            // cmd->ClearBuffer(&tlasBuffer);
             cmd->ClearBuffer(&virtualGeometryManager.ptlasIndirectCommandBuffer);
 
             cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
@@ -1099,7 +1115,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
             virtualGeometryManager.BuildClusterBLAS(cmd, &visibleClustersBuffer);
 
-            virtualGeometryManager.BuildPTLAS(cmd, &gpuInstancesBuffer.buffer);
+            virtualGeometryManager.BuildPTLAS(cmd, &gpuInstancesBuffer.buffer,
+                                              &aabbBuffer.buffer);
             cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                          VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
                          VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
@@ -1135,38 +1152,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 device->EndEvent(cmd);
             }
 
-            // if (device->frameCount > 100)
-            // {
-            //     GPUBuffer readback =
-            //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT, tlasBuffer.size,
-            //                              MemoryUsage::GPU_TO_CPU);
-            //
-            //     // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-            //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-            //     //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-            //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-            //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-            //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-            //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-            //     cmd->FlushBarriers();
-            //     cmd->CopyBuffer(&readback, &tlasBuffer);
-            //     Semaphore testSemaphore   = device->CreateSemaphore();
-            //     testSemaphore.signalValue = 1;
-            //     cmd->SignalOutsideFrame(testSemaphore);
-            //     device->SubmitCommandBuffer(cmd);
-            //     device->Wait(testSemaphore);
-            //
-            //     AccelerationStructureInstance *data =
-            //         (AccelerationStructureInstance *)readback.mappedPtr;
-            //
-            //     int stop = 5;
-            // }
-
             {
                 // Build the TLAS
                 device->BeginEvent(cmd, "Build TLAS");
                 tlas.as = cmd->BuildTLAS(&tlasAccelBuffer, &tlasScratchBuffer, &tlasBuffer,
-                                         virtualGeometryManager.maxInstances);
+                                         1u << 21u); // virtualGeometryManager.maxInstances);
                 cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                              VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
                              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,

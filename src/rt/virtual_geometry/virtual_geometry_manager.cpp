@@ -32,6 +32,12 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
         virtualTable.Push(VirtualPage{0, PageFlag::NonResident, -1});
     }
 
+    instanceIDFreeRanges = StaticArray<Range>(arena, 32);
+    instanceIDFreeRanges.Push(Range{0, maxInstances});
+
+    pageClusterIDRanges = StaticArray<Range>(arena, 32);
+    pageClusterIDRanges.Push(Range{0, maxPages * MAX_CLUSTERS_PER_PAGE * 2});
+
     string decodeDgfClustersName   = "../src/shaders/decode_dgf_clusters.spv";
     string decodeDgfClustersData   = OS_ReadFile(arena, decodeDgfClustersName);
     Shader decodeDgfClustersShader = device->CreateShader(
@@ -97,7 +103,7 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
     Shader ptlasUpdateUnusedInstancesShader = device->CreateShader(
         ShaderStage::Compute, "ptlas update unused instances", ptlasUpdateUnusedInstancesData);
 
-    string ptlasWriteCommandInfosName   = "../src/shaders/ptlas_write_commands_infos.spv";
+    string ptlasWriteCommandInfosName   = "../src/shaders/ptlas_write_command_infos.spv";
     string ptlasWriteCommandInfosData   = OS_ReadFile(arena, ptlasWriteCommandInfosName);
     Shader ptlasWriteCommandInfosShader = device->CreateShader(
         ShaderStage::Compute, "ptlas write command infos", ptlasWriteCommandInfosData);
@@ -272,8 +278,8 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
                                                 VK_SHADER_STAGE_COMPUTE_BIT);
     }
     ptlasWriteCommandInfosPipeline = device->CreateComputePipeline(
-        &ptlasWriteCommandInfosShader, &ptlasWriteCommandInfosLayout, 0,
-        "ptlas write command infos");
+        &ptlasWriteCommandInfosShader, &ptlasWriteCommandInfosLayout,
+        &ptlasWriteCommandInfosPush, "ptlas write command infos");
 
     // cluster fixup
     clusterFixupPush.size   = sizeof(NumPushConstant);
@@ -423,15 +429,15 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
                                                 sizeof(BLASVoxelInfo) * maxTotalClusterCount);
 
     u32 tlasScratchSize, tlasAccelSize;
-    device->GetPTLASBuildSizes(maxInstances, maxInstancesPerPartition, maxPartitions, 0,
-                               tlasScratchSize, tlasAccelSize);
+    device->GetPTLASBuildSizes(maxInstances, maxInstances, 1, 0, tlasScratchSize,
+                               tlasAccelSize);
 
     tlasScratchBuffer = device->CreateBuffer(
-        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, tlasScratchSize);
+        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, blasSize);
     tlasAccelBuffer =
         device->CreateBuffer(VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
                                  VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                             tlasAccelSize);
+                             blasSize);
     ptlasIndirectCommandBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
@@ -441,14 +447,17 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        sizeof(PTLAS_WRITE_INSTANCE_INFO) * maxInstances);
+        sizeof(PTLAS_WRITE_INSTANCE_INFO) * (1u << 21u));
     ptlasUpdateInfosBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        sizeof(PTLAS_UPDATE_INSTANCE_INFO) * maxInstances);
-    ptlasInstanceBitVectorBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                                        maxInstances >> 3u);
+        sizeof(PTLAS_UPDATE_INSTANCE_INFO) * (1u << 21u));
+    ptlasInstanceBitVectorBuffer =
+        device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, (maxInstances + 7u) >> 3u);
+    ptlasInstanceFrameBitVectorBuffer0 =
+        device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, (maxInstances + 7u) >> 3u);
+    ptlasInstanceFrameBitVectorBuffer1 =
+        device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, (maxInstances + 7u) >> 3u);
 
     decodeClusterDataBuffer        = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                                               VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -1307,7 +1316,7 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
             }
         }
 
-        numVoxelClusters.Push(pageNumVoxelClusters);
+        numVoxelClusters.Push(numClusters);
         physicalPages[page].numTriangleClusters = numTriangleClusters;
         triangleClustersToAdd += numTriangleClusters;
     }
@@ -1316,16 +1325,19 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
                                                       1 + numVoxelClusters.Length());
     for (u32 index = 0; index < numVoxelClusters.Length(); index++)
     {
+        u32 num = numVoxelClusters[index];
+
+        if (num == 0) continue;
+
         PageHandle handle         = pageHandles[index];
         VirtualPageHandle request = unloadedRequests[handle.index];
         u32 page                  = pageIndices[index];
 
         u32 voxelClusterOffset = ~0u;
-        u32 num                = numVoxelClusters[index];
 
         for (Range &range : pageClusterIDRanges)
         {
-            if (range.end - range.begin <= num)
+            if (range.end - range.begin >= num)
             {
                 voxelClusterOffset = range.begin;
                 range.begin += num;
@@ -1343,6 +1355,8 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
 
         MemoryCopy((u8 *)uploadBuffer.mappedPtr + copy.srcOffset, &voxelClusterOffset,
                    copy.size);
+
+        voxelOffsetCopies.Push(copy);
     }
 
     if (voxelOffsetCopies.Length())
@@ -1601,32 +1615,6 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         device->EndEvent(cmd);
     }
 
-    // if (device->frameCount > 10)
-    // {
-    //     GPUBuffer readback = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-    //                                               vertexBuffer.size,
-    //                                               MemoryUsage::GPU_TO_CPU);
-    //
-    //     // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-    //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-    //     //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-    //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-    //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-    //     VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-    //                  VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-    //     cmd->FlushBarriers();
-    //     cmd->CopyBuffer(&readback, &vertexBuffer);
-    //     Semaphore testSemaphore   = device->CreateSemaphore();
-    //     testSemaphore.signalValue = 1;
-    //     cmd->SignalOutsideFrame(testSemaphore);
-    //     device->SubmitCommandBuffer(cmd);
-    //     device->Wait(testSemaphore);
-    //
-    //     Vec3f *data = (Vec3f *)readback.mappedPtr;
-    //
-    //     int stop = 5;
-    // }
-
     u32 templateOffset = maxPages * MAX_CLUSTERS_PER_PAGE;
     // Compute the CLAS addresses
     {
@@ -1841,12 +1829,14 @@ void VirtualGeometryManager::AllocateInstances(StaticArray<GPUInstance> &gpuInst
     for (GPUInstance &instance : gpuInstances)
     {
         MeshInfo &meshInfo = meshInfos[instance.resourceID];
-        u32 numInstances   = meshInfo.totalNumVoxelClusters + 1;
-        bool found         = false;
+        u32 numInstances   = 2000;
+        //(meshInfo.totalNumVoxelClusters ? meshInfo.numClusters : 0) + 1;
+        bool found = false;
         for (Range &range : instanceIDFreeRanges)
         {
             if (range.end - range.begin >= numInstances)
             {
+                u32 start = range.begin;
                 if (range.end - range.begin > numInstances)
                 {
                     range.begin = range.begin + numInstances;
@@ -1857,7 +1847,7 @@ void VirtualGeometryManager::AllocateInstances(StaticArray<GPUInstance> &gpuInst
                     instanceIDFreeRanges.size_ -= 1;
                 }
 
-                instance.instanceIDStart = range.begin;
+                instance.instanceIDStart = start;
                 found                    = true;
                 break;
             }
@@ -1866,9 +1856,10 @@ void VirtualGeometryManager::AllocateInstances(StaticArray<GPUInstance> &gpuInst
     }
 }
 
-void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstances)
+void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstances,
+                                        GPUBuffer *blasSceneBounds)
 {
-    uint buffer = device->GetCurrentBuffer() & 1;
+    uint buffer = device->frameCount & 1;
 
     GPUBuffer *lastFrameBitVector =
         buffer ? &ptlasInstanceFrameBitVectorBuffer0 : &ptlasInstanceFrameBitVectorBuffer1;
@@ -1899,8 +1890,8 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstan
             .Bind(&voxelBlasInfosBuffer)
             .Bind(&clasPageInfoBuffer)
             .Bind(&ptlasInstanceBitVectorBuffer)
-            .Bind(lastFrameBitVector)
             .Bind(thisFrameBitVector)
+            .Bind(blasSceneBounds)
             .End();
 
         cmd->DispatchIndirect(&clasGlobalsBuffer, sizeof(u32) * GLOBALS_BLAS_INDIRECT_X);
@@ -1922,10 +1913,37 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstan
             .Bind(&clasGlobalsBuffer)
             .Bind(&ptlasUpdateInfosBuffer)
             .End();
+        cmd->Dispatch((maxInstances + 31) / 32, 1, 1);
         cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
                      VK_ACCESS_2_SHADER_READ_BIT);
+        cmd->FlushBarriers();
         device->EndEvent(cmd);
+    }
+
+    if (device->frameCount > 500)
+    {
+        GPUBuffer readback =
+            device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT, voxelBlasInfosBuffer.size,
+                                 MemoryUsage::GPU_TO_CPU);
+
+        // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+        //              VK_ACCESS_2_TRANSFER_READ_BIT);
+        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                     VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+        cmd->FlushBarriers();
+        cmd->CopyBuffer(&readback, &voxelBlasInfosBuffer);
+        Semaphore testSemaphore   = device->CreateSemaphore();
+        testSemaphore.signalValue = 1;
+        cmd->SignalOutsideFrame(testSemaphore);
+        device->SubmitCommandBuffer(cmd);
+        device->Wait(testSemaphore);
+
+        BLASVoxelInfo *data = (BLASVoxelInfo *)readback.mappedPtr;
+
+        int stop = 5;
     }
 
     // Update command infos
@@ -1940,6 +1958,7 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstan
             .Bind(&ptlasIndirectCommandBuffer)
             .PushConstants(&ptlasWriteCommandInfosPush, &pc)
             .End();
+        cmd->Dispatch(1, 1, 1);
         cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                      VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                      VK_ACCESS_2_SHADER_WRITE_BIT,
@@ -1950,7 +1969,7 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstan
 
     cmd->BuildPTLAS(&tlasAccelBuffer, &tlasScratchBuffer, &ptlasIndirectCommandBuffer,
                     &clasGlobalsBuffer, sizeof(u32) * GLOBALS_PTLAS_OP_TYPE_COUNT_INDEX,
-                    maxInstances, maxInstancesPerPartition, maxPartitions, 0);
+                    maxInstances, maxInstances, 1, 0);
 }
 
 struct GetHierarchyNode

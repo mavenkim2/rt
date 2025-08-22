@@ -50,7 +50,6 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
     }
     GroupMemoryBarrierWithGroupSync();
 
-
     if (groupIndex == 0)
     {
         InterlockedAdd(globals[GLOBALS_CLAS_COUNT_INDEX], numTriangleClusters, clusterStartIndex);

@@ -23,7 +23,6 @@ void main(uint3 DTid : SV_DispatchThreadID)
     GPUInstance instance = gpuInstances[blasData.instanceID];
 
     float3x4 renderFromObject = instance.worldFromObject;
-    Translate(renderFromObject, -gpuScene.cameraP);
 
     AccelerationStructureInstance instanceDescriptor;
     instanceDescriptor.transform = renderFromObject;

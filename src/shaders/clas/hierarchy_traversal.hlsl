@@ -146,6 +146,8 @@ struct ClusterCull
             minScale = min(scale.x, min(scale.y, scale.z));
             float maxScale = max(scale.x, max(scale.y, scale.z));
 
+            test = minScale;
+
             edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, maxScale, test);
 
             float threshold = maxParentError * minScale * gpuScene.lodScale;
@@ -283,7 +285,14 @@ struct ClusterCull
             cluster.instanceID = instanceID | (uint(isVoxel) << 31u);
             cluster.blasIndex = blasIndex;
 
-            InterlockedAdd(blasDatas[blasIndex].clusterCount, 1);
+            if (header.numBricks)
+            {
+                InterlockedAdd(blasDatas[blasIndex].voxelClusterCount, 1);
+            }
+            else 
+            {
+                InterlockedAdd(blasDatas[blasIndex].clusterCount, 1);
+            }
 
             selectedClusters[clusterOffset] = cluster;
         }

@@ -1,5 +1,6 @@
 #include "../common.hlsli"
 #include "../../rt/shader_interop/as_shaderinterop.h"
+#include "../../rt/shader_interop/dense_geometry_shaderinterop.h"
 #include "../../rt/shader_interop/hierarchy_traversal_shaderinterop.h"
 #include "../bit_twiddling.hlslI"
 
@@ -14,14 +15,13 @@ RWStructuredBuffer<PTLAS_UPDATE_INSTANCE_INFO> ptlasInstanceUpdateInfos : regist
 StructuredBuffer<BLASVoxelInfo> blasVoxelInfos : register(t6);
 StructuredBuffer<CLASPageInfo> clasPageInfos : register(t7);
 RWStructuredBuffer<uint> instanceRenderedBitVector : register(u8);
-StructuredBuffer<uint> lastFrameBitVector : register(t9);
-RWStructuredBuffer<uint> thisFrameBitVector : register(u10);
+RWStructuredBuffer<uint> thisFrameBitVector : register(u9);
+StructuredBuffer<AABB> aabbs : register(t10);
 
 void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint instanceID, uint instanceIndex) 
 {
     uint2 offsets = uint2(instanceIndex >> 5u, instanceIndex & 31u);
     uint wasRendered = instanceRenderedBitVector[offsets.x] & (1u << offsets.y);
-    uint wasRenderedLastFrame = lastFrameBitVector[offsets.x] & (1u << offsets.y);
 
     if (!wasRendered)
     {
@@ -30,19 +30,47 @@ void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint instance
         uint descriptorIndex;
         InterlockedAdd(globals[GLOBALS_PTLAS_WRITE_COUNT_INDEX], 1, descriptorIndex);
 
+#if 0
+        AABB aabb = aabbs[instance.resourceID];
+
+        float3 minP = float3(FLT_MAX, FLT_MAX, FLT_MAX);
+        float3 maxP = float3(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+        for (int z = 2; z <= 5; z += 3)
+        {
+            for (int y = 1; y <= 4; y += 3)
+            {
+                for (int x = 0; x <= 3; x += 3)
+                {
+                    float3 p = float3(x ? aabb.maxX : aabb.minX, y ? aabb.maxY : aabb.minY, z ? aabb.maxZ : aabb.minZ);
+                    float3 pos = mul(instance.worldFromObject, float4(p, 1.f));
+                    minP = min(minP, pos);
+                    maxP = max(maxP, pos);
+                }
+            }
+        }
+#endif
+
+
         PTLAS_WRITE_INSTANCE_INFO instanceInfo = (PTLAS_WRITE_INSTANCE_INFO)0;
         instanceInfo.transform = instance.worldFromObject;
+#if 0
+        for (int i = 0; i < 3; i++)
+        {
+            instanceInfo.explicitAABB[i] = minP[i];
+            instanceInfo.explicitAABB[3 + i] = maxP[i];
+        }
+#endif
         instanceInfo.instanceID = instanceID;
         instanceInfo.instanceMask = 0xff;
         instanceInfo.instanceContributionToHitGroupIndex = 0;
-        instanceInfo.instanceFlags = (1u << 0u); //| (1u << 4u);
+        instanceInfo.instanceFlags = (1u << 0u);// | (1u << 4u);
         instanceInfo.instanceIndex = instanceIndex;
         instanceInfo.partitionIndex = 0;
         instanceInfo.accelerationStructure = address;
 
         ptlasInstanceWriteInfos[descriptorIndex] = instanceInfo;
     }
-    else if (wasRendered && !wasRenderedLastFrame)
+    else if (wasRendered)
     {
         uint descriptorIndex;
         InterlockedAdd(globals[GLOBALS_PTLAS_UPDATE_COUNT_INDEX], 1, descriptorIndex);

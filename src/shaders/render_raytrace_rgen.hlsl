@@ -362,7 +362,7 @@ void main()
 
             uint vertexOffset = GetVoxelVertexOffset(brick.vertexOffset, brick.bitMask, hitKind);
 
-            hitInfo.hitP = query.CommittedObjectRayOrigin() + dir * rayT;
+            hitInfo.hitP = query.CommittedObjectRayOrigin() + objectRayDir * rayT;
 
 #if 1
             float2x3 wBasis = BuildOrthonormalBasis(-objectRayDir);
