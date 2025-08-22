@@ -3258,6 +3258,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                                         materialIndices);
     }
 
+    std::atomic<u32> numVoxelClusters(0);
     u32 depth = 0;
     {
         // 1. Split triangles into clusters (mesh remains)
@@ -4044,6 +4045,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                                                                voxelMesh, materialIndices,
                                                                voxelGeomIDs, coverages, sggx);
                             }
+                            numVoxelClusters.fetch_add(records.Length(),
+                                                       std::memory_order_relaxed);
 
                             if (extraVoxels.Length())
                             {
@@ -4954,11 +4957,15 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
           numParts, numLeaves, numLeafParts);
     Assert(hierarchy.Length() == numNodes);
 
+    u32 totalNumVoxelClusters = numVoxelClusters.load();
     ClusterFileHeader *fileHeader =
         (ClusterFileHeader *)GetMappedPtr(&builder, fileHeaderOffset);
-    fileHeader->magic    = CLUSTER_FILE_MAGIC;
-    fileHeader->numPages = pageInfos.Length();
-    fileHeader->numNodes = numNodes;
+    fileHeader->magic            = CLUSTER_FILE_MAGIC;
+    fileHeader->numPages         = pageInfos.Length();
+    fileHeader->numNodes         = numNodes;
+    fileHeader->numVoxelClusters = totalNumVoxelClusters;
+
+    Print("num voxel clusters: %u\n", totalNumVoxelClusters);
 
     // Write hierarchy to disk
     u64 hierarchyOffset = AllocateSpace(&builder, sizeof(PackedHierarchyNode) * numNodes);
@@ -5367,7 +5374,7 @@ static void CheckVoxelOccupancy(Arena *arena, ScenePrimitives *scene,
             nzz += n.z * n.z;
         }
 
-        Vec3f Fit(u32 hitCount)
+        Vec3f Fit(u32 hitCount, Vec2f &alpha)
         {
             f32 hits = f32(hitCount);
 
@@ -5415,6 +5422,9 @@ static void CheckVoxelOccupancy(Arena *arena, ScenePrimitives *scene,
             {
                 result[axis] = eigenVectors[3 * axis + chosenAxis];
             }
+            alpha[0] = 0.5f * (scale[maxIndex] + scale[lut[maxIndex]]);
+            alpha[1] = scale[chosenAxis];
+
             return result;
         }
 
@@ -5538,12 +5548,16 @@ static void CheckVoxelOccupancy(Arena *arena, ScenePrimitives *scene,
                 Float fl;
                 fl.f = coverage;
 
+                Vec2f alpha;
                 Voxel v;
-                v.loc      = voxel;
-                v.normal   = sggx.Fit(hitCount);
+                v.loc    = voxel;
+                v.normal = sggx.Fit(hitCount, alpha);
+
                 v.coverage = coverage;
-                v.sggx     = sggx.Compact();
-                v.geomID   = geomID;
+                // v.coverage = alpha.x > alpha.y ? 1.f - 0.5f * alpha.y / alpha.x
+                //                                : 0.5f * alpha.x / alpha.y;
+                v.sggx   = sggx.Compact();
+                v.geomID = geomID;
 
                 voxels.Push(v);
 

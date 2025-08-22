@@ -55,12 +55,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
     {
         InterlockedAdd(globals[GLOBALS_CLAS_COUNT_INDEX], numTriangleClusters, clusterStartIndex);
 
-        CLASPageInfo pageInfo;
-        pageInfo.addressStartIndex = pc.clusterOffset + clusterStartIndex;
-        pageInfo.tempClusterOffset = clusterStartIndex;
-        pageInfo.clasSize = 0;
-        pageInfo.numTriangleClusters = numTriangleClusters;
-        clasPageInfos[pageIndex] = pageInfo;
+        clasPageInfos[pageIndex].addressStartIndex = pc.clusterOffset + clusterStartIndex;
+        clasPageInfos[pageIndex].tempClusterOffset = clusterStartIndex;
+        clasPageInfos[pageIndex].clasSize = 0;
+        clasPageInfos[pageIndex].numTriangleClusters = numTriangleClusters;
     }
     GroupMemoryBarrierWithGroupSync();
 

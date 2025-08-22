@@ -89,6 +89,8 @@ void main()
 
         uint hitKind = 0;
         float3 hitP;
+
+        float testColor = 0;
         while (query.Proceed())
         {
             if (query.CandidateType() == CANDIDATE_PROCEDURAL_PRIMITIVE)
@@ -162,6 +164,7 @@ void main()
 
                             if (rng.Uniform() < alpha)
                             {
+                                testColor = alpha;
                                 hitKind = bit;
 
                                 query.CommitProceduralPrimitiveHit(tHit);
@@ -373,18 +376,15 @@ void main()
             {
                 hitInfo.n = dg.DecodeNormal(vertexOffset);
                 hitInfo.gn = hitInfo.n;
-                float2x3 tb = BuildOrthonormalBasis(hitInfo.n);
-                hitInfo.ss = tb[0];
-                hitInfo.ts = tb[1];
             }
             else 
             {
                 hitInfo.n = wm;
-                hitInfo.gn = wm;
-                float2x3 tb = BuildOrthonormalBasis(hitInfo.n);
-                hitInfo.ss = tb[0];
-                hitInfo.ts = tb[1];
+                hitInfo.gn = dg.DecodeNormal(vertexOffset);
             }
+            float2x3 tb = BuildOrthonormalBasis(hitInfo.n);
+            hitInfo.ss = tb[0];
+            hitInfo.ts = tb[1];
 
 #else
             hitInfo.n = dg.DecodeNormal(vertexOffset);
@@ -428,6 +428,7 @@ void main()
 #endif
 
                 float4 reflectance = float4(0.f, 1.f, 0.f, 1.f);
+
                 dir = SampleDiffuse(reflectance.xyz, wo, sample, throughput, printDebug);
 #if 0
                 if (depth == 1)
@@ -445,7 +446,6 @@ void main()
 
         if (dir.z == 0)
         {
-            printf("sucks\n");
             break;
         }
 
@@ -453,12 +453,6 @@ void main()
 
         dir = hitInfo.ss * dir.x + hitInfo.ts * dir.y + hitInfo.n * dir.z;
         dir = normalize(TransformV(objectToWorld, dir));
-
-        if (0)
-        {
-            printf("%f %f %f %f %f %f %f %f %f\n", hitInfo.ts.x, hitInfo.ts.y, hitInfo.ts.z, 
-                    hitInfo.ss.x, hitInfo.ss.y, hitInfo.ss.z,  dir.x, dir.y, dir.z);
-        }
 
         pos = OffsetRayOrigin(origin, hitInfo.gn, printDebug);
 

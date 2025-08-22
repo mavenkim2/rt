@@ -92,6 +92,16 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
     Shader clusterFixupShader =
         device->CreateShader(ShaderStage::Compute, "cluster fixup", clusterFixupData);
 
+    string ptlasUpdateUnusedInstancesName = "../src/shaders/ptlas_update_unused_instances.spv";
+    string ptlasUpdateUnusedInstancesData = OS_ReadFile(arena, ptlasUpdateUnusedInstancesName);
+    Shader ptlasUpdateUnusedInstancesShader = device->CreateShader(
+        ShaderStage::Compute, "ptlas update unused instances", ptlasUpdateUnusedInstancesData);
+
+    string ptlasWriteCommandInfosName   = "../src/shaders/ptlas_write_commands_infos.spv";
+    string ptlasWriteCommandInfosData   = OS_ReadFile(arena, ptlasWriteCommandInfosName);
+    Shader ptlasWriteCommandInfosShader = device->CreateShader(
+        ShaderStage::Compute, "ptlas write command infos", ptlasWriteCommandInfosData);
+
     // fill cluster triangle info
     fillClusterTriangleInfoPush.stage  = ShaderStage::Compute;
     fillClusterTriangleInfoPush.size   = sizeof(FillClusterTriangleInfoPushConstant);
@@ -232,17 +242,38 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
         device->CreateComputePipeline(&computeBlasAddressesShader, &computeBlasAddressesLayout,
                                       &computeBlasAddressesPush, "compute blas addresses");
 
-    ptlasWriteInstancesPush.size   = sizeof(PtlasPushConstant);
-    ptlasWriteInstancesPush.offset = 0;
-    ptlasWriteInstancesPush.stage  = ShaderStage::Compute;
-    for (int i = 0; i <= 8; i++)
+    // ptlas write instances
+    for (int i = 0; i <= 10; i++)
     {
         ptlasWriteInstancesLayout.AddBinding(i, DescriptorType::StorageBuffer,
                                              VK_SHADER_STAGE_COMPUTE_BIT);
     }
-    ptlasWriteInstancesPipeline =
-        device->CreateComputePipeline(&ptlasWriteInstancesShader, &ptlasWriteInstancesLayout,
-                                      &ptlasWriteInstancesPush, "compute blas addresses");
+    ptlasWriteInstancesPipeline = device->CreateComputePipeline(
+        &ptlasWriteInstancesShader, &ptlasWriteInstancesLayout, 0, "ptlas write instances");
+
+    // ptlas update unused instances
+    for (int i = 0; i <= 3; i++)
+    {
+        ptlasUpdateUnusedInstancesLayout.AddBinding(i, DescriptorType::StorageBuffer,
+                                                    VK_SHADER_STAGE_COMPUTE_BIT);
+    }
+    ptlasUpdateUnusedInstancesPipeline = device->CreateComputePipeline(
+        &ptlasUpdateUnusedInstancesShader, &ptlasUpdateUnusedInstancesLayout, 0,
+        "ptlas write instances");
+
+    // ptlas write command infos
+    ptlasWriteCommandInfosPush.size   = sizeof(PtlasPushConstant);
+    ptlasWriteCommandInfosPush.offset = 0;
+    ptlasWriteCommandInfosPush.stage  = ShaderStage::Compute;
+
+    for (int i = 0; i <= 2; i++)
+    {
+        ptlasWriteCommandInfosLayout.AddBinding(i, DescriptorType::StorageBuffer,
+                                                VK_SHADER_STAGE_COMPUTE_BIT);
+    }
+    ptlasWriteCommandInfosPipeline = device->CreateComputePipeline(
+        &ptlasWriteCommandInfosShader, &ptlasWriteCommandInfosLayout, 0,
+        "ptlas write command infos");
 
     // cluster fixup
     clusterFixupPush.size   = sizeof(NumPushConstant);
@@ -267,7 +298,8 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         maxPageInstallsPerFrame * (sizeof(u32) + CLUSTER_PAGE_SIZE) +
             2 * maxNodes * sizeof(u32) + maxClusterFixupsPerFrame * sizeof(GPUClusterFixup) +
-            MAX_CLUSTERS_PER_PAGE * maxPageInstallsPerFrame * sizeof(u64),
+            MAX_CLUSTERS_PER_PAGE * maxPageInstallsPerFrame * sizeof(u64) +
+            sizeof(u32) * maxPageInstallsPerFrame,
         MemoryUsage::CPU_TO_GPU);
 
     evictedPagesBuffer    = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
@@ -538,8 +570,9 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, string 
 
     ClusterFileHeader clusterFileHeader;
     GetPointerValue(&tokenizer, &clusterFileHeader);
-    u32 numPages = clusterFileHeader.numPages;
-    u32 numNodes = clusterFileHeader.numNodes;
+    u32 numPages         = clusterFileHeader.numPages;
+    u32 numNodes         = clusterFileHeader.numNodes;
+    u32 numVoxelClusters = clusterFileHeader.numVoxelClusters;
 
     u8 *pageData = tokenizer.cursor;
 
@@ -684,6 +717,7 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, string 
     meshInfo.pageData                 = pageData;
     meshInfo.pageToParentClusters     = pageToParentCluster;
     meshInfo.pageToParentPageGraph    = pageToParentPage;
+    meshInfo.totalNumVoxelClusters    = numVoxelClusters;
 
     meshInfo.nodes    = nodes;
     meshInfo.numNodes = numNodes;
@@ -1179,6 +1213,7 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
 
     u32 totalNumBricks        = 0;
     u32 triangleClustersToAdd = 0;
+    StaticArray<u32> numVoxelClusters(scratch.temp.arena, pagesToInstall);
 
     for (int requestIndex = 0; requestIndex < pagesToInstall; requestIndex++)
     {
@@ -1192,6 +1227,7 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         u32 numClusters            = *(u32 *)src;
         u32 clusterHeaderSOAStride = numClusters * 16;
         u32 numTriangleClusters    = 0;
+        u32 pageNumVoxelClusters   = 0;
 
         for (u32 clusterIndex = 0; clusterIndex < numClusters; clusterIndex++)
         {
@@ -1211,6 +1247,7 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
                 continue;
             }
 
+            pageNumVoxelClusters++;
             Vec3i anchor;
             Vec3u posBitWidths;
 
@@ -1269,8 +1306,52 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
                 }
             }
         }
+
+        numVoxelClusters.Push(pageNumVoxelClusters);
         physicalPages[page].numTriangleClusters = numTriangleClusters;
         triangleClustersToAdd += numTriangleClusters;
+    }
+
+    StaticArray<BufferToBufferCopy> voxelOffsetCopies(scratch.temp.arena,
+                                                      1 + numVoxelClusters.Length());
+    for (u32 index = 0; index < numVoxelClusters.Length(); index++)
+    {
+        PageHandle handle         = pageHandles[index];
+        VirtualPageHandle request = unloadedRequests[handle.index];
+        u32 page                  = pageIndices[index];
+
+        u32 voxelClusterOffset = ~0u;
+        u32 num                = numVoxelClusters[index];
+
+        for (Range &range : pageClusterIDRanges)
+        {
+            if (range.end - range.begin <= num)
+            {
+                voxelClusterOffset = range.begin;
+                range.begin += num;
+                break;
+            }
+        }
+
+        Assert(voxelClusterOffset != ~0u);
+
+        BufferToBufferCopy copy;
+        copy.srcOffset = voxelRangeOffset + index * sizeof(u32);
+        copy.dstOffset =
+            sizeof(CLASPageInfo) * page + OffsetOf(CLASPageInfo, voxelClusterOffset);
+        copy.size = sizeof(u32);
+
+        MemoryCopy((u8 *)uploadBuffer.mappedPtr + copy.srcOffset, &voxelClusterOffset,
+                   copy.size);
+    }
+
+    if (voxelOffsetCopies.Length())
+    {
+        cmd->CopyBuffer(&clasPageInfoBuffer, &uploadBuffer, voxelOffsetCopies.data,
+                        voxelOffsetCopies.Length());
+        cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                     VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+        cmd->FlushBarriers();
     }
 
     u32 newClasOffset = currentTriangleClusterTotal;
@@ -1755,8 +1836,49 @@ void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd,
     }
 }
 
+void VirtualGeometryManager::AllocateInstances(StaticArray<GPUInstance> &gpuInstances)
+{
+    for (GPUInstance &instance : gpuInstances)
+    {
+        MeshInfo &meshInfo = meshInfos[instance.resourceID];
+        u32 numInstances   = meshInfo.totalNumVoxelClusters + 1;
+        bool found         = false;
+        for (Range &range : instanceIDFreeRanges)
+        {
+            if (range.end - range.begin >= numInstances)
+            {
+                if (range.end - range.begin > numInstances)
+                {
+                    range.begin = range.begin + numInstances;
+                }
+                else
+                {
+                    Swap(instanceIDFreeRanges[instanceIDFreeRanges.Length() - 1], range);
+                    instanceIDFreeRanges.size_ -= 1;
+                }
+
+                instance.instanceIDStart = range.begin;
+                found                    = true;
+                break;
+            }
+        }
+        Assert(found);
+    }
+}
+
 void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstances)
 {
+    uint buffer = device->GetCurrentBuffer() & 1;
+
+    GPUBuffer *lastFrameBitVector =
+        buffer ? &ptlasInstanceFrameBitVectorBuffer0 : &ptlasInstanceFrameBitVectorBuffer1;
+    GPUBuffer *thisFrameBitVector =
+        buffer ? &ptlasInstanceFrameBitVectorBuffer1 : &ptlasInstanceFrameBitVectorBuffer0;
+
+    cmd->ClearBuffer(thisFrameBitVector);
+    cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                 VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+    cmd->FlushBarriers();
     // Update/write PTLAS instances
     {
         device->BeginEvent(cmd, "Update PTLAS Instances");
@@ -1774,20 +1896,55 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstan
             .Bind(gpuInstances)
             .Bind(&ptlasWriteInfosBuffer)
             .Bind(&ptlasUpdateInfosBuffer)
-            .Bind(&ptlasIndirectCommandBuffer)
-            .Bind(&instanceRefBuffer)
+            .Bind(&voxelBlasInfosBuffer)
+            .Bind(&clasPageInfoBuffer)
             .Bind(&ptlasInstanceBitVectorBuffer)
-            .PushConstants(&ptlasWriteInstancesPush, &pc)
+            .Bind(lastFrameBitVector)
+            .Bind(thisFrameBitVector)
             .End();
 
         cmd->DispatchIndirect(&clasGlobalsBuffer, sizeof(u32) * GLOBALS_BLAS_INDIRECT_X);
 
         cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                     VK_ACCESS_2_SHADER_READ_BIT);
+        cmd->FlushBarriers();
+        device->EndEvent(cmd);
+    }
+
+    // Update unused instances
+    {
+        device->BeginEvent(cmd, "PTLAS Update Unused Instances");
+        cmd->StartBindingCompute(ptlasUpdateUnusedInstancesPipeline,
+                                 &ptlasUpdateUnusedInstancesLayout)
+            .Bind(lastFrameBitVector)
+            .Bind(thisFrameBitVector)
+            .Bind(&clasGlobalsBuffer)
+            .Bind(&ptlasUpdateInfosBuffer)
+            .End();
+        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                     VK_ACCESS_2_SHADER_READ_BIT);
+        device->EndEvent(cmd);
+    }
+
+    // Update command infos
+    {
+        PtlasPushConstant pc;
+        pc.writeAddress  = device->GetDeviceAddress(&ptlasWriteInfosBuffer);
+        pc.updateAddress = device->GetDeviceAddress(&ptlasUpdateInfosBuffer);
+
+        device->BeginEvent(cmd, "Write PTLAS Command Infos");
+        cmd->StartBindingCompute(ptlasWriteCommandInfosPipeline, &ptlasWriteCommandInfosLayout)
+            .Bind(&clasGlobalsBuffer)
+            .Bind(&ptlasIndirectCommandBuffer)
+            .PushConstants(&ptlasWriteCommandInfosPush, &pc)
+            .End();
+        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                      VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                      VK_ACCESS_2_SHADER_WRITE_BIT,
                      VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
                          VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
-        cmd->FlushBarriers();
         device->EndEvent(cmd);
     }
 

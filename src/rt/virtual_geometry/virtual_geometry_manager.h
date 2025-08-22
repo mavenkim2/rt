@@ -115,6 +115,8 @@ struct VirtualGeometryManager
     const u32 maxPages          = 1024; // streamingPoolSize >> CLUSTER_PAGE_SIZE_BITS;
     const u32 maxVirtualPages   = maxPages << 8u;
 
+    const u32 instanceIDStart = maxPages * MAX_CLUSTERS_PER_PAGE;
+
     const u32 maxNodes                     = 1u << 17u;
     const u32 maxStreamingRequestsPerFrame = (1u << 18u);
     const u32 maxPageInstallsPerFrame      = 128;
@@ -139,6 +141,8 @@ struct VirtualGeometryManager
     const u32 clusterFixupOffset = evictedPagesOffset + sizeof(u32) * maxPageInstallsPerFrame;
     const u32 voxelBlasOffset =
         clusterFixupOffset + maxClusterFixupsPerFrame * sizeof(GPUClusterFixup);
+    const u32 voxelRangeOffset =
+        voxelBlasOffset + MAX_CLUSTERS_PER_PAGE * sizeof(u64) * maxPageInstallsPerFrame;
 
     enum class PageFlag
     {
@@ -166,6 +170,12 @@ struct VirtualGeometryManager
         Compacted,
     };
 
+    struct Range
+    {
+        u32 begin;
+        u32 end;
+    };
+
     struct Page
     {
         u32 numTriangleClusters;
@@ -191,6 +201,8 @@ struct VirtualGeometryManager
         u8 *pageData;
         u32 hierarchyNodeOffset;
         u32 virtualPageOffset;
+
+        u32 totalNumVoxelClusters;
 
         PackedHierarchyNode *nodes;
         u32 numNodes;
@@ -238,9 +250,15 @@ struct VirtualGeometryManager
     DescriptorSetLayout computeBlasAddressesLayout = {};
     VkPipeline computeBlasAddressesPipeline;
 
-    PushConstant ptlasWriteInstancesPush;
     DescriptorSetLayout ptlasWriteInstancesLayout = {};
     VkPipeline ptlasWriteInstancesPipeline;
+
+    DescriptorSetLayout ptlasUpdateUnusedInstancesLayout = {};
+    VkPipeline ptlasUpdateUnusedInstancesPipeline;
+
+    PushConstant ptlasWriteCommandInfosPush;
+    DescriptorSetLayout ptlasWriteCommandInfosLayout = {};
+    VkPipeline ptlasWriteCommandInfosPipeline;
 
     PushConstant clusterFixupPush;
     DescriptorSetLayout clusterFixupLayout = {};
@@ -298,7 +316,10 @@ struct VirtualGeometryManager
     GPUBuffer ptlasIndirectCommandBuffer;
     GPUBuffer ptlasWriteInfosBuffer;
     GPUBuffer ptlasUpdateInfosBuffer;
+
     GPUBuffer ptlasInstanceBitVectorBuffer;
+    GPUBuffer ptlasInstanceFrameBitVectorBuffer0;
+    GPUBuffer ptlasInstanceFrameBitVectorBuffer1;
 
     GPUBuffer voxelAABBBuffer;
     GPUBuffer voxelBlasBuffer;
@@ -320,6 +341,8 @@ struct VirtualGeometryManager
 
     StaticArray<VirtualPage> virtualTable;
     StaticArray<Page> physicalPages;
+    StaticArray<Range> instanceIDFreeRanges;
+    StaticArray<Range> pageClusterIDRanges;
 
     VirtualGeometryManager(CommandBuffer *cmd, Arena *arena);
     void EditRegistration(u32 instanceID, u32 pageIndex, bool add);
@@ -333,6 +356,7 @@ struct VirtualGeometryManager
                             GPUBuffer *gpuSceneBuffer, GPUBuffer *workItemQueueBuffer,
                             GPUBuffer *gpuInstancesBuffer, GPUBuffer *visibleClustersBuffer);
     void BuildClusterBLAS(CommandBuffer *cmd, GPUBuffer *visibleClustersBuffer);
+    void AllocateInstances(StaticArray<GPUInstance> &gpuInstances);
     void BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstances);
     void UnlinkLRU(int pageIndex);
     void LinkLRU(int index);

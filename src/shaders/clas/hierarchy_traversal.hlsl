@@ -226,7 +226,7 @@ struct ClusterCull
             {
                 StreamingRequest request;
                 request.priority = priority;
-                request.instanceID = candidateNode.instanceID;
+                request.instanceID = instance.resourceID;
                 request.pageIndex_numPages = (localPageIndex << MAX_PARTS_PER_GROUP_BITS) | numPages;
 
                 uint requestIndex;

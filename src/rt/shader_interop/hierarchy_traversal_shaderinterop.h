@@ -41,6 +41,8 @@ struct CLASPageInfo
     uint clasSize;
     uint numTriangleClusters;
 
+    uint voxelClusterOffset;
+
     uint tempClusterOffset;
 };
 

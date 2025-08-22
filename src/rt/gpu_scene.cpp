@@ -664,6 +664,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             for (int instanceIndex = 0; instanceIndex < scene->numPrimitives; instanceIndex++)
             {
                 GPUInstance gpuInstance;
+                gpuInstance.resourceID = instances[instanceIndex].id;
                 AffineSpace &transform =
                     scene->affineTransforms[instances[instanceIndex].transformIndex];
 
@@ -684,8 +685,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     }
     else
     {
-        GPUInstance gpuInstance;
-        AffineSpace identity = AffineSpace::Identity();
+        GPUInstance gpuInstance = {};
+        AffineSpace identity    = AffineSpace::Identity();
         for (int r = 0; r < 3; r++)
         {
             for (int c = 0; c < 4; c++)
@@ -701,6 +702,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     }
 
     // virtualGeometryManager.Test(tlasScenes[0]);
+
+    virtualGeometryManager.AllocateInstances(gpuInstances);
 
     TransferBuffer gpuInstancesBuffer =
         allCommandBuffer->SubmitBuffer(gpuInstances.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -925,6 +928,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             computeCmd->ClearBuffer(&virtualGeometryManager.streamingRequestsBuffer);
             computeCmd->ClearBuffer(&virtualGeometryManager.blasDataBuffer);
             computeCmd->ClearBuffer(&virtualGeometryManager.ptlasInstanceBitVectorBuffer);
+            computeCmd->ClearBuffer(
+                &virtualGeometryManager.ptlasInstanceFrameBitVectorBuffer0);
+            computeCmd->ClearBuffer(
+                &virtualGeometryManager.ptlasInstanceFrameBitVectorBuffer1);
 
             computeCmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -1092,14 +1099,14 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
             virtualGeometryManager.BuildClusterBLAS(cmd, &visibleClustersBuffer);
 
-            // virtualGeometryManager.BuildPTLAS(cmd, &gpuInstancesBuffer.buffer);
-            // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-            //              VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-            //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-            //              VK_ACCESS_2_SHADER_READ_BIT);
-            // cmd->FlushBarriers();
+            virtualGeometryManager.BuildPTLAS(cmd, &gpuInstancesBuffer.buffer);
+            cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                         VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                         VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                         VK_ACCESS_2_SHADER_READ_BIT);
+            cmd->FlushBarriers();
 
-#if 1
+#if 0
 
             {
                 // Prepare instance descriptors for TLAS build
@@ -1188,12 +1195,12 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         cmd->FlushBarriers();
         cmd->BindPipeline(bindPoint, rts.pipeline);
 
-        // u64 ptlasAddress =
-        //     device->GetDeviceAddress(virtualGeometryManager.tlasAccelBuffer.buffer);
+        u64 ptlasAddress =
+            device->GetDeviceAddress(virtualGeometryManager.tlasAccelBuffer.buffer);
         DescriptorSet descriptorSet = layout.CreateDescriptorSet();
         descriptorSet
-            .Bind(&tlas.as)
-            // .Bind(&ptlasAddress)
+            // .Bind(&tlas.as)
+            .Bind(&ptlasAddress)
             .Bind(image)
             .Bind(&sceneTransferBuffers[currentBuffer].buffer)
             .Bind(&materialBuffer)
