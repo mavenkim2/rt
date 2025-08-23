@@ -3284,7 +3284,29 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
         for (;;)
         {
             Print("depth: %u num clusters: %u\n", depth, levelClusters.num);
-            if (levelClusters.Length() < 2) break;
+            if (levelClusters.Length() < 2)
+            {
+                levelClusters[0].groupIndex = clusterGroups.Length();
+                ClusterGroup rootGroup;
+                rootGroup.vertexData        = 0;
+                rootGroup.indices           = 0;
+                rootGroup.buildDataIndex    = 0;
+                rootGroup.isLeaf            = false;
+                rootGroup.maxParentError    = 1e10;
+                rootGroup.lodBounds         = levelClusters[0].lodBounds;
+                rootGroup.parentStartIndex  = ~0u;
+                rootGroup.parentCount       = ~0u;
+                rootGroup.clusterStartIndex = prevClusterArrayEnd;
+                rootGroup.clusterCount      = 1;
+
+                rootGroup.numVertices = 0;
+                rootGroup.numIndices  = 0;
+                rootGroup.mipLevel    = depth++;
+
+                clusterGroups.Push(rootGroup);
+
+                break;
+            }
 
             u32 hashSize = NextPowerOfTwo(3 * MAX_CLUSTER_TRIANGLES * levelClusters.Length());
             HashIndex edgeHash(scratch.temp.arena, hashSize, hashSize);

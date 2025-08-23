@@ -785,10 +785,9 @@ bool VirtualGeometryManager::VerifyPageDependencies(u32 virtualOffset, u32 start
 bool VirtualGeometryManager::CheckDuplicatedFixup(u32 virtualOffset, u32 pageIndex,
                                                   u32 startPage, u32 numPages)
 {
-    for (u32 otherPageIndex = pageIndex + 1; otherPageIndex < startPage + numPages;
-         otherPageIndex++)
+    for (u32 otherPageIndex = startPage; otherPageIndex < pageIndex; otherPageIndex++)
     {
-        VirtualPage &virtualPage = virtualTable[virtualOffset + pageIndex];
+        VirtualPage &virtualPage = virtualTable[virtualOffset + otherPageIndex];
         Assert(virtualPage.pageIndex != -1);
         if (virtualPage.pageFlag == PageFlag::ResidentThisFrame)
         {
