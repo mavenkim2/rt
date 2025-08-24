@@ -3021,8 +3021,10 @@ void Vulkan::ConvertCLASIndirectInfo(CLASOpInput opInput, CLASOpType opType,
         vkOpInput.triangleClusters.vertexFormat                  = VK_FORMAT_R32G32B32_SFLOAT;
         vkOpInput.triangleClusters.maxGeometryIndexValue         = 1;
         vkOpInput.triangleClusters.maxClusterUniqueGeometryCount = 1;
-        vkOpInput.triangleClusters.maxClusterTriangleCount       = MAX_CLUSTER_TRIANGLES;
-        vkOpInput.triangleClusters.maxClusterVertexCount = MAX_CLUSTER_TRIANGLE_VERTICES;
+        vkOpInput.triangleClusters.maxClusterTriangleCount =
+            opInput.triangleClusters.maxClusterTriangles;
+        vkOpInput.triangleClusters.maxClusterVertexCount =
+            opInput.triangleClusters.maxClusterVertices;
         vkOpInput.triangleClusters.maxTotalTriangleCount =
             opInput.triangleClusters.maxNumTriangles;
         vkOpInput.triangleClusters.maxTotalVertexCount =
@@ -3122,8 +3124,10 @@ void CommandBuffer::ComputeCLASSizes(GPUBuffer *srcInfosArray, GPUBuffer *scratc
                                      u32 maxNumClusters)
 {
     CLASOpInput opInput;
-    opInput.triangleClusters.maxNumTriangles = maxNumTriangles;
-    opInput.triangleClusters.maxNumVertices  = maxNumVertices;
+    opInput.triangleClusters.maxNumTriangles     = maxNumTriangles;
+    opInput.triangleClusters.maxNumVertices      = maxNumVertices;
+    opInput.triangleClusters.maxClusterTriangles = MAX_CLUSTER_TRIANGLES;
+    opInput.triangleClusters.maxClusterVertices  = MAX_CLUSTER_VERTICES;
 
     opInput.maxAccelerationStructureCount = maxNumClusters;
 
@@ -3152,17 +3156,18 @@ void CommandBuffer::ComputeCLASTemplateSizes(GPUBuffer *srcInfosArray,
                                              GPUBuffer *scratchBuffer, GPUBuffer *dstSizes,
                                              GPUBuffer *srcInfosCount, u32 srcInfosOffset,
                                              u32 maxNumTriangles, u32 maxNumVertices,
+                                             u32 maxClusterTriangles, u32 maxClusterVertices,
                                              u32 maxNumClusters, u32 dstAddressesOffset)
 {
     CLASOpInput opInput;
-    opInput.triangleClusters.maxNumTriangles = maxNumTriangles;
-    opInput.triangleClusters.maxNumVertices  = maxNumVertices;
-
-    opInput.maxAccelerationStructureCount = maxNumClusters;
+    opInput.triangleClusters.maxNumTriangles     = maxNumTriangles;
+    opInput.triangleClusters.maxNumVertices      = maxNumVertices;
+    opInput.triangleClusters.maxClusterTriangles = maxClusterTriangles;
+    opInput.triangleClusters.maxClusterVertices  = maxClusterVertices;
 
     CLASIndirect(opInput, CLASOpMode::ComputeSizes,
-                 CLASOpType::CLAS | CLASOpType::BuildTemplate, 0, scratchBuffer, 0, dstSizes,
-                 srcInfosArray, srcInfosCount, srcInfosOffset, dstAddressesOffset);
+                 CLASOpType::CLAS | CLASOpType::InstantiateTemplate, 0, scratchBuffer, 0,
+                 dstSizes, srcInfosArray, srcInfosCount, srcInfosOffset, dstAddressesOffset);
 }
 
 void CommandBuffer::BuildCLAS(CLASOpMode opMode, GPUBuffer *dstImplicitData,
@@ -3172,8 +3177,10 @@ void CommandBuffer::BuildCLAS(CLASOpMode opMode, GPUBuffer *dstImplicitData,
                               u32 maxNumTriangles, u32 maxNumVertices, u32 dstClasOffset)
 {
     CLASOpInput opInput;
-    opInput.triangleClusters.maxNumTriangles = maxNumTriangles;
-    opInput.triangleClusters.maxNumVertices  = maxNumVertices;
+    opInput.triangleClusters.maxNumTriangles     = maxNumTriangles;
+    opInput.triangleClusters.maxNumVertices      = maxNumVertices;
+    opInput.triangleClusters.maxClusterTriangles = MAX_CLUSTER_TRIANGLES;
+    opInput.triangleClusters.maxClusterVertices  = MAX_CLUSTER_VERTICES;
 
     opInput.maxAccelerationStructureCount = maxNumClusters;
 
@@ -3226,12 +3233,15 @@ void CommandBuffer::BuildCLASTemplates(CLASOpMode opMode, GPUBuffer *dstImplicit
                                        GPUBuffer *dstSizes, GPUBuffer *srcInfosArray,
                                        GPUBuffer *srcInfosCount, u32 srcInfosOffset,
                                        u32 maxNumTriangles, u32 maxNumVertices,
+                                       u32 maxClusterTriangles, u32 maxClusterVertices,
                                        u32 numTemplates)
 {
 
     CLASOpInput opInput;
-    opInput.triangleClusters.maxNumTriangles = maxNumTriangles;
-    opInput.triangleClusters.maxNumVertices  = maxNumVertices;
+    opInput.triangleClusters.maxNumTriangles     = maxNumTriangles;
+    opInput.triangleClusters.maxNumVertices      = maxNumVertices;
+    opInput.triangleClusters.maxClusterTriangles = maxClusterTriangles;
+    opInput.triangleClusters.maxClusterVertices  = maxClusterVertices;
 
     opInput.maxAccelerationStructureCount = numTemplates;
 
@@ -3245,11 +3255,14 @@ void CommandBuffer::InstantiateCLASTemplate(CLASOpMode opMode, GPUBuffer *dstImp
                                             GPUBuffer *dstSizes, GPUBuffer *srcInfosArray,
                                             GPUBuffer *srcInfosCount, u32 srcInfosOffset,
                                             u32 maxNumTriangles, u32 maxNumVertices,
+                                            u32 maxClusterTriangles, u32 maxClusterVertices,
                                             u32 maxNumClusters, u32 dstClasOffset)
 {
     CLASOpInput opInput;
-    opInput.triangleClusters.maxNumTriangles = maxNumTriangles;
-    opInput.triangleClusters.maxNumVertices  = maxNumVertices;
+    opInput.triangleClusters.maxNumTriangles     = maxNumTriangles;
+    opInput.triangleClusters.maxNumVertices      = maxNumVertices;
+    opInput.triangleClusters.maxClusterTriangles = maxClusterTriangles;
+    opInput.triangleClusters.maxClusterVertices  = maxClusterVertices;
 
     opInput.maxAccelerationStructureCount = maxNumClusters;
 
@@ -3447,9 +3460,11 @@ void Vulkan::GetCLASBuildSizes(CLASOpMode opMode, int maxNumClusters, u32 maxNum
 {
 
     CLASOpInput opInput;
-    opInput.triangleClusters.maxNumTriangles = maxNumTriangles;
-    opInput.triangleClusters.maxNumVertices  = maxNumVertices;
-    opInput.maxAccelerationStructureCount    = maxNumClusters;
+    opInput.triangleClusters.maxNumTriangles     = maxNumTriangles;
+    opInput.triangleClusters.maxNumVertices      = maxNumVertices;
+    opInput.triangleClusters.maxClusterTriangles = MAX_CLUSTER_TRIANGLES;
+    opInput.triangleClusters.maxClusterVertices  = MAX_CLUSTER_VERTICES;
+    opInput.maxAccelerationStructureCount        = maxNumClusters;
 
     u32 updateScratchSize;
     GetClusterBuildSizes(opInput, opMode, CLASOpType::CLAS, scratchSize, updateScratchSize,
@@ -3458,12 +3473,15 @@ void Vulkan::GetCLASBuildSizes(CLASOpMode opMode, int maxNumClusters, u32 maxNum
 
 void Vulkan::GetCLASTemplateBuildSizes(CLASOpMode opMode, int maxNumClusters,
                                        u32 maxNumTriangles, u32 maxNumVertices,
+                                       u32 maxClusterTriangles, u32 maxClusterVertices,
                                        u32 &scratchSize, u32 &accelerationStructureSize)
 {
     CLASOpInput opInput;
-    opInput.triangleClusters.maxNumTriangles = maxNumTriangles;
-    opInput.triangleClusters.maxNumVertices  = maxNumVertices;
-    opInput.maxAccelerationStructureCount    = maxNumClusters;
+    opInput.triangleClusters.maxNumTriangles     = maxNumTriangles;
+    opInput.triangleClusters.maxNumVertices      = maxNumVertices;
+    opInput.triangleClusters.maxClusterTriangles = maxClusterTriangles;
+    opInput.triangleClusters.maxClusterVertices  = maxClusterVertices;
+    opInput.maxAccelerationStructureCount        = maxNumClusters;
 
     u32 updateScratchSize;
     GetClusterBuildSizes(opInput, opMode, CLASOpType::CLAS | CLASOpType::BuildTemplate,
@@ -3472,12 +3490,15 @@ void Vulkan::GetCLASTemplateBuildSizes(CLASOpMode opMode, int maxNumClusters,
 
 void Vulkan::GetCLASTemplateInstantiateSizes(CLASOpMode opMode, int maxNumClusters,
                                              u32 maxNumTriangles, u32 maxNumVertices,
+                                             u32 maxClusterTriangles, u32 maxClusterVertices,
                                              u32 &scratchSize, u32 &accelerationStructureSize)
 {
     CLASOpInput opInput;
-    opInput.triangleClusters.maxNumTriangles = maxNumTriangles;
-    opInput.triangleClusters.maxNumVertices  = maxNumVertices;
-    opInput.maxAccelerationStructureCount    = maxNumClusters;
+    opInput.triangleClusters.maxNumTriangles     = maxNumTriangles;
+    opInput.triangleClusters.maxNumVertices      = maxNumVertices;
+    opInput.triangleClusters.maxClusterTriangles = maxClusterTriangles;
+    opInput.triangleClusters.maxClusterVertices  = maxClusterVertices;
+    opInput.maxAccelerationStructureCount        = maxNumClusters;
 
     u32 updateScratchSize;
     GetClusterBuildSizes(opInput, opMode, CLASOpType::CLAS | CLASOpType::InstantiateTemplate,

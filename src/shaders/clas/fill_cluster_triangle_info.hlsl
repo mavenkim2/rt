@@ -10,10 +10,15 @@ RWStructuredBuffer<DecodeClusterData> decodeClusterDatas : register(u2);
 RWStructuredBuffer<uint> globals : register(u3);
 RWStructuredBuffer<CLASPageInfo> clasPageInfos : register(u4);
 
+StructuredBuffer<uint64_t> templateAddresses : register(t5);
+RWStructuredBuffer<INSTANTIATE_CLUSTER_TEMPLATE_INFO> instantiateInfos : register(u6);
+
 [[vk::push_constant]] FillClusterTriangleInfoPushConstant pc;
 
 groupshared uint clusterStartIndex;
-groupshared uint numTriangleClusters;
+groupshared uint numClusterAddresses;
+groupshared uint numVoxelClusterAddresses;
+groupshared uint voxelClusterStartIndex;
 
 [numthreads(MAX_CLUSTERS_PER_PAGE, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupID, uint groupIndex : SV_GroupIndex)
@@ -30,7 +35,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
 
     if (groupIndex == 0)
     {
-        numTriangleClusters = 0;
+        numClusterAddresses = 0;
+        numVoxelClusterAddresses = 0;
     }
     GroupMemoryBarrierWithGroupSync();
 
@@ -44,27 +50,40 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
     DenseGeometry header = GetDenseGeometryHeader(basePageAddress, numClusters, clusterID);
 
     uint addressOffset = 0;
+    uint voxelAddressOffset = 0;
     if (header.numTriangles)
     {
-        InterlockedAdd(numTriangleClusters, 1, addressOffset);
+        InterlockedAdd(numClusterAddresses, 1, addressOffset);
+        InterlockedAdd(globals[GLOBALS_TRIANGLE_CLUSTER_COUNT], 1);
+    }
+    else 
+    {
+        uint numAddresses = (header.numBricks + MAX_BRICKS_PER_TEMPLATE - 1) / MAX_BRICKS_PER_TEMPLATE;
+        InterlockedAdd(numClusterAddresses, numAddresses, addressOffset);
+        InterlockedAdd(numVoxelClusterAddresses, numAddresses, voxelAddressOffset);
     }
     GroupMemoryBarrierWithGroupSync();
 
     if (groupIndex == 0)
     {
-        InterlockedAdd(globals[GLOBALS_CLAS_COUNT_INDEX], numTriangleClusters, clusterStartIndex);
+        InterlockedAdd(globals[GLOBALS_CLAS_COUNT_INDEX], numClusterAddresses, clusterStartIndex);
+        InterlockedAdd(globals[GLOBALS_TEMPLATE_CLUSTER_COUNT], numVoxelClusterAddresses, voxelClusterStartIndex);
 
         clasPageInfos[pageIndex].addressStartIndex = pc.clusterOffset + clusterStartIndex;
         clasPageInfos[pageIndex].tempClusterOffset = clusterStartIndex;
         clasPageInfos[pageIndex].clasSize = 0;
-        clasPageInfos[pageIndex].numTriangleClusters = numTriangleClusters;
+        //clasPageInfos[pageIndex].numTriangleClusters = numTriangleClusters;
     }
     GroupMemoryBarrierWithGroupSync();
 
     if (header.numTriangles)
     {
         uint vertexBufferOffset, indexBufferOffset;
-        uint descriptorIndex = clusterStartIndex + addressOffset;
+
+        uint decodeIndex = clusterStartIndex + addressOffset;
+        // TODO: this is wrong
+        uint buildIndex = clusterStartIndex + addressOffset;
+        //uint instantiateIndex = voxelClusterStartIndex + voxelAddressOffset;
 
         InterlockedAdd(globals[GLOBALS_VERTEX_BUFFER_OFFSET_INDEX], header.numVertices, vertexBufferOffset);
         InterlockedAdd(globals[GLOBALS_INDEX_BUFFER_OFFSET_INDEX], header.numTriangles * 3, indexBufferOffset);
@@ -88,7 +107,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
         desc.opacityMicromapArray = 0;
         desc.opacityMicromapIndexBuffer = 0;
 
-        buildClusterTriangleInfos[descriptorIndex] = desc;
+        buildClusterTriangleInfos[buildIndex] = desc;
 
         DecodeClusterData clusterData;
         clusterData.pageIndex = pageIndex;
@@ -96,6 +115,35 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
         clusterData.indexBufferOffset = indexBufferOffset;
         clusterData.vertexBufferOffset = vertexBufferOffset;
 
-        decodeClusterDatas[descriptorIndex] = clusterData;
+        decodeClusterDatas[decodeIndex] = clusterData;
+    }
+    else
+    {
+        uint decodeIndex = clusterStartIndex + addressOffset;
+        uint instantiateIndex = voxelClusterStartIndex + voxelAddressOffset;
+
+        for (uint i = 0; i < header.numBricks; i+= MAX_BRICKS_PER_TEMPLATE)
+        {
+            uint numBricksInTemplate = min(header.numBricks - i, MAX_BRICKS_PER_TEMPLATE);
+            uint vertexBufferOffset;
+
+            InterlockedAdd(globals[GLOBALS_VERTEX_BUFFER_OFFSET_INDEX], numBricksInTemplate * 8, vertexBufferOffset);
+
+            INSTANTIATE_CLUSTER_TEMPLATE_INFO instantiateInfo = (INSTANTIATE_CLUSTER_TEMPLATE_INFO)0;
+            instantiateInfo.clusterIdOffset =  pageIndex * MAX_CLUSTERS_PER_PAGE + clusterID;
+            instantiateInfo.clusterTemplateAddress = templateAddresses[numBricksInTemplate - 1];
+            instantiateInfo.vertexBuffer.startAddress = vertexBufferBaseAddress + vertexBufferOffset * 12;
+            instantiateInfo.vertexBuffer.strideInBytes = 12;
+
+            instantiateInfos[instantiateIndex++] = instantiateInfo;
+
+            DecodeClusterData clusterData;
+            clusterData.pageIndex = pageIndex;
+            clusterData.clusterIndex = clusterID;
+            clusterData.indexBufferOffset = i;
+            clusterData.vertexBufferOffset = vertexBufferOffset;
+
+            decodeClusterDatas[decodeIndex++] = clusterData;
+        }
     }
 }

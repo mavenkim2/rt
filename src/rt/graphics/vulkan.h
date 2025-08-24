@@ -136,6 +136,8 @@ struct CLASOpInput
             // TODO: add the rest
             u32 maxNumTriangles;
             u32 maxNumVertices;
+            u32 maxClusterTriangles;
+            u32 maxClusterVertices;
         } triangleClusters;
 
         struct ClusterBottomLevel
@@ -804,6 +806,7 @@ struct CommandBuffer
     void ComputeCLASTemplateSizes(GPUBuffer *srcInfosArray, GPUBuffer *scratchBuffer,
                                   GPUBuffer *dstSizes, GPUBuffer *srcInfosCount,
                                   u32 srcInfosOffset, u32 maxNumTriangles, u32 maxNumVertices,
+                                  u32 maxClusterTriangles, u32 maxClusterVertices,
                                   u32 maxNumClusters, u32 dstAddressesOffset = 0);
     void BuildCLAS(CLASOpMode opMode, GPUBuffer *dstImplicitData, GPUBuffer *scratchBuffer,
                    GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddresses,
@@ -828,13 +831,15 @@ struct CommandBuffer
                             GPUBuffer *scratchBuffer, GPUBuffer *dstAddresses,
                             GPUBuffer *dstSizes, GPUBuffer *srcInfosArray,
                             GPUBuffer *srcInfosCount, u32 srcInfosOffset, u32 maxNumTriangles,
-                            u32 maxNumVertices, u32 numTemplates);
+                            u32 maxNumVertices, u32 maxClusterTriangles,
+                            u32 maxClusterVertices, u32 numTemplates);
     void InstantiateCLASTemplate(CLASOpMode opMode, GPUBuffer *dstImplicitData,
                                  GPUBuffer *scratchBuffer, GPUBuffer *dstAddresses,
                                  GPUBuffer *dstSizes, GPUBuffer *srcInfosArray,
                                  GPUBuffer *srcInfosCount, u32 srcInfosOffset,
-                                 u32 maxNumTriangles, u32 maxNumVertices, u32 maxNumClusters,
-                                 u32 dstClasOffset = 0);
+                                 u32 maxNumTriangles, u32 maxNumVertices,
+                                 u32 maxClusterTriangles, u32 maxClusterVertices,
+                                 u32 maxNumClusters, u32 dstClasOffset = 0);
 
     GPUAccelerationStructurePayload BuildTLAS(GPUBuffer *instanceData, u32 numInstances);
     VkAccelerationStructureKHR BuildTLAS(GPUBuffer *accelBuffer, GPUBuffer *scratchBuffer,
@@ -1099,10 +1104,12 @@ struct Vulkan
                            u32 maxNumVertices, u32 &scratchSize,
                            u32 &accelerationStructureSize);
     void GetCLASTemplateBuildSizes(CLASOpMode opMode, int maxNumClusters, u32 maxNumTriangles,
-                                   u32 maxNumVertices, u32 &scratchSize,
+                                   u32 maxNumVertices, u32 maxClusterTriangles,
+                                   u32 maxClusterVertices, u32 &scratchSize,
                                    u32 &accelerationStructureSize);
     void GetCLASTemplateInstantiateSizes(CLASOpMode opMode, int maxNumClusters,
                                          u32 maxNumTriangles, u32 maxNumVertices,
+                                         u32 maxClusterTriangles, u32 maxClusterVertices,
                                          u32 &scratchSize, u32 &accelerationStructureSize);
     void GetClusterBLASBuildSizes(CLASOpMode opMode, u32 maxTotalClusterCount,
                                   u32 maxClusterCountPerAccelerationStructure,

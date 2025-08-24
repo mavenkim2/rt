@@ -11,8 +11,8 @@
 #include "../graphics/vulkan.h"
 #include "../parallel.h"
 #include "../scene.h"
+#include "../bvh/bvh_types.h"
 #include "../bvh/bvh_aos.h"
-#include "../bvh/partial_rebraiding.h"
 
 namespace rt
 {
@@ -113,7 +113,7 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
     fillClusterTriangleInfoPush.size   = sizeof(FillClusterTriangleInfoPushConstant);
     fillClusterTriangleInfoPush.offset = 0;
 
-    for (int i = 0; i <= 4; i++)
+    for (int i = 0; i <= 6; i++)
     {
         fillClusterTriangleInfoLayout.AddBinding(i, DescriptorType::StorageBuffer,
                                                  VK_SHADER_STAGE_COMPUTE_BIT);
@@ -350,6 +350,133 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
             VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
         sizeof(u32) * GLOBALS_SIZE);
 
+    // Templates
+    const u32 cubeTable[] = {
+        // Front Face
+        0, 1, 2, // Triangle 1
+        1, 3, 2, // Triangle 2
+
+        // Back Face
+        4, 6, 5, // Triangle 3
+        5, 6, 7, // Triangle 4
+
+        // Left Face
+        4, 0, 6, // Triangle 5
+        0, 2, 6, // Triangle 6
+
+        // Right Face
+        1, 5, 3, // Triangle 7
+        5, 7, 3, // Triangle 8
+
+        // Top Face
+        2, 3, 6, // Triangle 9
+        3, 7, 6, // Triangle 10
+
+        // Bottom Face
+        4, 5, 0, // Triangle 11
+        5, 1, 0  // Triangle 12;
+    };
+
+    ScratchArena scratch;
+
+    StaticArray<VkClusterAccelerationStructureBuildTriangleClusterTemplateInfoNV> infos(
+        scratch.temp.arena, MAX_BRICKS_PER_TEMPLATE);
+    StaticArray<u8> templateIndexBuffer(scratch.temp.arena, 36 * MAX_BRICKS_PER_TEMPLATE);
+    for (int i = 0; i < MAX_BRICKS_PER_TEMPLATE; i++)
+    {
+        for (int j = 0; j < ArrayLength(cubeTable); j++)
+        {
+            templateIndexBuffer.Push(8 * i + cubeTable[j]);
+        }
+    }
+
+    TransferBuffer templateIndexBufferBuffer = cmd->SubmitBuffer(
+        templateIndexBuffer.data,
+        VK_BUFFER_USAGE_2_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+        templateIndexBuffer.Length());
+    u64 templateIndexBufferDeviceAddress =
+        device->GetDeviceAddress(&templateIndexBufferBuffer.buffer);
+
+    for (int i = 1; i <= MAX_BRICKS_PER_TEMPLATE; i++)
+    {
+        VkClusterAccelerationStructureBuildTriangleClusterTemplateInfoNV info = {};
+        info.triangleCount                                                    = 12 * i;
+        info.vertexCount                                                      = 8 * i;
+        info.indexType                                                        = 1;
+        info.indexBuffer = templateIndexBufferDeviceAddress;
+        infos.Push(info);
+    }
+
+    u32 numTemplates = MAX_BRICKS_PER_TEMPLATE;
+    templatesBuffer  = device->CreateBuffer(
+        VK_BUFFER_USAGE_2_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, kilobytes(100));
+    templateAddresses = device->CreateBuffer(
+        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+        sizeof(u64) * numTemplates);
+    templateSizes = device->CreateBuffer(
+        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+        sizeof(u32) * numTemplates);
+
+    u32 templateScratchSize, templateAccelSize;
+    device->GetCLASTemplateInstantiateSizes(
+        CLASOpMode::ExplicitDestinations, maxNumClusters, maxNumTriangles, maxNumVertices,
+        12 * MAX_BRICKS_PER_TEMPLATE, 8 * MAX_BRICKS_PER_TEMPLATE, templateScratchSize,
+        templateAccelSize);
+    u32 templateScratchBuildSize, templateBaseSize;
+    device->GetCLASTemplateBuildSizes(
+        CLASOpMode::ImplicitDestinations, maxNumClusters, maxNumTriangles, maxNumVertices,
+        12 * MAX_BRICKS_PER_TEMPLATE, 8 * MAX_BRICKS_PER_TEMPLATE, templateScratchBuildSize,
+        templateBaseSize);
+
+    templateScratchSize = Max(templateScratchSize, templateScratchBuildSize);
+
+    templateInfosBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+        sizeof(INSTANTIATE_CLUSTER_TEMPLATE_INFO) * maxNumClusters);
+    templateScratchBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+        templateScratchSize);
+    templateAddressesBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+        sizeof(u64) * (maxPages * MAX_CLUSTERS_PER_PAGE));
+    templateSizesBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+        sizeof(u32) * (maxPages * MAX_CLUSTERS_PER_PAGE));
+
+    TransferBuffer templateBaseInfosBuffer = cmd->SubmitBuffer(
+        infos.data, VK_BUFFER_USAGE_2_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+        sizeof(VkClusterAccelerationStructureBuildTriangleClusterTemplateInfoNV) *
+            infos.Length());
+    cmd->SubmitBuffer(&clasGlobalsBuffer, &numTemplates, sizeof(u32), 0);
+    cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                 VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                 VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                 VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+    cmd->FlushBarriers();
+
+    cmd->BuildCLASTemplates(
+        CLASOpMode::ImplicitDestinations, &templatesBuffer, &templateScratchBuffer,
+        &templateAddresses, &templateSizes, &templateBaseInfosBuffer.buffer,
+        &clasGlobalsBuffer, 0, 12 * MAX_BRICKS_PER_TEMPLATE * numTemplates,
+        8 * MAX_BRICKS_PER_TEMPLATE * numTemplates, 12 * MAX_BRICKS_PER_TEMPLATE,
+        8 * MAX_BRICKS_PER_TEMPLATE, MAX_BRICKS_PER_TEMPLATE);
+    cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                 VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                 VK_ACCESS_2_NONE);
+    cmd->FlushBarriers();
+
     u32 expectedSize = maxPages * MAX_CLUSTERS_PER_PAGE * 2000;
 
     u32 clasScratchSize, clasAccelerationStructureSize;
@@ -429,7 +556,7 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
                                                 sizeof(BLASVoxelInfo) * maxTotalClusterCount);
 
     u32 tlasScratchSize, tlasAccelSize;
-    device->GetPTLASBuildSizes(maxInstances, maxInstances, 1, 0, tlasScratchSize,
+    device->GetPTLASBuildSizes(maxInstances, maxInstances, 2, 0, tlasScratchSize,
                                tlasAccelSize);
 
     tlasScratchBuffer = device->CreateBuffer(
@@ -583,6 +710,9 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, string 
     u32 numNodes         = clusterFileHeader.numNodes;
     u32 numVoxelClusters = clusterFileHeader.numVoxelClusters;
 
+    Vec3f boundsMin = clusterFileHeader.boundsMin;
+    Vec3f boundsMax = clusterFileHeader.boundsMax;
+
     u8 *pageData = tokenizer.cursor;
 
     Advance(&tokenizer, clusterFileHeader.numPages * CLUSTER_PAGE_SIZE);
@@ -727,6 +857,8 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, string 
     meshInfo.pageToParentClusters     = pageToParentCluster;
     meshInfo.pageToParentPageGraph    = pageToParentPage;
     meshInfo.totalNumVoxelClusters    = numVoxelClusters;
+    meshInfo.boundsMin                = boundsMin;
+    meshInfo.boundsMax                = boundsMax;
 
     meshInfo.nodes    = nodes;
     meshInfo.numNodes = numNodes;
@@ -1574,6 +1706,8 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
             .Bind(&decodeClusterDataBuffer)
             .Bind(&clasGlobalsBuffer)
             .Bind(&clasPageInfoBuffer)
+            .Bind(&templateAddresses)
+            .Bind(&templateInfosBuffer)
             .Bind(&clusterPageDataBuffer)
             .PushConstants(&fillClusterTriangleInfoPush, &fillPc)
             .End();
@@ -1614,7 +1748,6 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         device->EndEvent(cmd);
     }
 
-    u32 templateOffset = maxPages * MAX_CLUSTERS_PER_PAGE;
     // Compute the CLAS addresses
     {
         device->BeginEvent(cmd, "Compute New CLAS Addresses");
@@ -1624,14 +1757,50 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
 
         cmd->ComputeCLASSizes(&buildClusterTriangleInfoBuffer, &clasScratchBuffer,
                               &clusterAccelSizes, &clasGlobalsBuffer,
-                              sizeof(u32) * GLOBALS_CLAS_COUNT_INDEX, newClasOffset,
+                              sizeof(u32) * GLOBALS_TRIANGLE_CLUSTER_COUNT, newClasOffset,
                               maxNumTriangles, maxNumVertices, maxNumClusters);
+        cmd->ComputeCLASTemplateSizes(
+            &templateInfosBuffer, &templateScratchBuffer, &templateSizesBuffer,
+            &clasGlobalsBuffer, sizeof(u32) * GLOBALS_TEMPLATE_CLUSTER_COUNT, maxNumTriangles,
+            maxNumVertices, 12 * MAX_BRICKS_PER_TEMPLATE, 8 * MAX_BRICKS_PER_TEMPLATE,
+            maxNumClusters);
 
         cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                      VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
                      VK_ACCESS_2_SHADER_READ_BIT);
         cmd->FlushBarriers();
+
+        // if (device->frameCount > 500)
+        {
+            GPUBuffer readback =
+                device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                     templateSizesBuffer.size, MemoryUsage::GPU_TO_CPU);
+
+            // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+            //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+            //              VK_ACCESS_2_TRANSFER_READ_BIT);
+            cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                         VK_ACCESS_2_TRANSFER_READ_BIT);
+            cmd->FlushBarriers();
+            cmd->CopyBuffer(&readback, &templateSizesBuffer);
+            Semaphore testSemaphore   = device->CreateSemaphore();
+            testSemaphore.signalValue = 1;
+            cmd->SignalOutsideFrame(testSemaphore);
+            device->SubmitCommandBuffer(cmd);
+            device->Wait(testSemaphore);
+
+            u32 *data = (u32 *)readback.mappedPtr;
+
+            u32 total = 0;
+            for (int i = 0; i < 1798; i++)
+            {
+                total += data[i];
+            }
+            int stop = 5;
+        }
 
         cmd->StartBindingCompute(computeClasAddressesPipeline, &computeClasAddressesLayout)
             .Bind(&evictedPagesBuffer)
@@ -1828,9 +1997,8 @@ void VirtualGeometryManager::AllocateInstances(StaticArray<GPUInstance> &gpuInst
     for (GPUInstance &instance : gpuInstances)
     {
         MeshInfo &meshInfo = meshInfos[instance.resourceID];
-        u32 numInstances   = 2000;
-        //(meshInfo.totalNumVoxelClusters ? meshInfo.numClusters : 0) + 1;
-        bool found = false;
+        u32 numInstances   = 2000; // meshInfo.totalNumVoxelClusters + 1;
+        bool found         = false;
         for (Range &range : instanceIDFreeRanges)
         {
             if (range.end - range.begin >= numInstances)
@@ -1846,8 +2014,8 @@ void VirtualGeometryManager::AllocateInstances(StaticArray<GPUInstance> &gpuInst
                     instanceIDFreeRanges.size_ -= 1;
                 }
 
-                instance.instanceIDStart = start;
-                found                    = true;
+                // instance.instanceIDStart = start;
+                found = true;
                 break;
             }
         }
@@ -1920,31 +2088,6 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstan
         device->EndEvent(cmd);
     }
 
-    if (device->frameCount > 500)
-    {
-        GPUBuffer readback =
-            device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT, voxelBlasInfosBuffer.size,
-                                 MemoryUsage::GPU_TO_CPU);
-
-        // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-        //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-        //              VK_ACCESS_2_TRANSFER_READ_BIT);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                     VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-        cmd->FlushBarriers();
-        cmd->CopyBuffer(&readback, &voxelBlasInfosBuffer);
-        Semaphore testSemaphore   = device->CreateSemaphore();
-        testSemaphore.signalValue = 1;
-        cmd->SignalOutsideFrame(testSemaphore);
-        device->SubmitCommandBuffer(cmd);
-        device->Wait(testSemaphore);
-
-        BLASVoxelInfo *data = (BLASVoxelInfo *)readback.mappedPtr;
-
-        int stop = 5;
-    }
-
     // Update command infos
     {
         PtlasPushConstant pc;
@@ -1968,7 +2111,7 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstan
 
     cmd->BuildPTLAS(&tlasAccelBuffer, &tlasScratchBuffer, &ptlasIndirectCommandBuffer,
                     &clasGlobalsBuffer, sizeof(u32) * GLOBALS_PTLAS_OP_TYPE_COUNT_INDEX,
-                    maxInstances, maxInstances, 1, 0);
+                    maxInstances, 131072, maxPartitions, 0);
 }
 
 struct GetHierarchyNode
@@ -1980,18 +2123,15 @@ struct GetHierarchyNode
     }
 };
 
-#if 0
-void VirtualGeometryManager::BuildHierarchy(ScenePrimitives *scene, BuildRef4 *bRefs,
+void VirtualGeometryManager::BuildHierarchy(ScenePrimitives *scene, PrimRef *refs,
                                             RecordAOSSplits &record,
                                             std::atomic<u32> &numPartitions,
-                                            std::atomic<u32> &instanceRefCount, bool parallel)
+                                            StaticArray<u32> &partitionIndices, bool parallel)
 {
-    typedef HeuristicPartialRebraid<GetHierarchyNode> Heuristic;
-    const u32 instancesPerPartition = 128;
+    typedef HeuristicObjectBinning<PrimRef> Heuristic;
 
-    Heuristic heuristic(scene, bRefs, 0);
+    HeuristicObjectBinning<PrimRef> heuristic(refs, 0);
 
-    Assert(record.start < maxInstances);
     Assert(record.count > 0);
 
     RecordAOSSplits childRecords[CHILDREN_PER_HIERARCHY_NODE];
@@ -1999,38 +2139,22 @@ void VirtualGeometryManager::BuildHierarchy(ScenePrimitives *scene, BuildRef4 *b
 
     Split split = heuristic.Bin(record);
 
-    f32 area     = HalfArea(record.geomBounds);
-    f32 intCost  = 1.f;
-    f32 travCost = 1.f;
-    f32 leafSAH  = intCost * area * record.count;
-    f32 splitSAH = travCost * area + intCost * split.bestSAH;
-
-    if (record.count <= instancesPerPartition) //&& leafSAH <= splitSAH)
+    if (record.count <= 1024)
     {
         u32 threadIndex = GetThreadIndex();
         heuristic.FlushState(split);
 
         u32 partitionIndex = numPartitions.fetch_add(1, std::memory_order_relaxed);
-        u32 instanceRefStartIndex =
-            instanceRefCount.fetch_add(record.Count(), std::memory_order_relaxed);
-        for (int i = record.start; i < record.End(); i++)
+
+        for (int i = 0; i < record.count; i++)
         {
-            InstanceRef ref;
-            BRef &bRef     = bRefs[i];
-            ref.instanceID = bRef.instanceID;
-            for (int j = 0; j < 3; j++)
-            {
-                ref.bounds[j]     = -bRef.min[j];
-                ref.bounds[3 + j] = bRef.max[j];
-            }
-            ref.nodeOffset = ((TempHierarchyNode *)bRef.nodePtr.GetPtr())->node -
-                             meshInfos[bRef.instanceID].nodes;
-            ref.partitionIndex                                        = partitionIndex;
-            newInstanceRefs[instanceRefStartIndex + i - record.start] = ref;
+            PrimRef &ref                 = refs[record.start + i];
+            partitionIndices[ref.primID] = partitionIndex;
         }
 
         return;
     }
+
     heuristic.Split(split, record, childRecords[0], childRecords[1]);
 
     // N - 1 splits produces N children
@@ -2041,7 +2165,7 @@ void VirtualGeometryManager::BuildHierarchy(ScenePrimitives *scene, BuildRef4 *b
         for (u32 recordIndex = 0; recordIndex < numChildren; recordIndex++)
         {
             RecordAOSSplits &childRecord = childRecords[recordIndex];
-            if (childRecord.count <= instancesPerPartition) continue;
+            if (childRecord.count <= CHILDREN_PER_HIERARCHY_NODE) continue;
 
             f32 childArea = HalfArea(childRecord.geomBounds);
             if (childArea > maxArea)
@@ -2060,12 +2184,11 @@ void VirtualGeometryManager::BuildHierarchy(ScenePrimitives *scene, BuildRef4 *b
         childRecords[bestChild] = out;
     }
 
-    // InstanceNode *nodes = PushArrayNoZero(arena, InstanceNode, numChildren);
     if (parallel)
     {
         scheduler.ScheduleAndWait(numChildren, 1, [&](u32 jobID) {
             bool childParallel = childRecords[jobID].count >= BUILD_PARALLEL_THRESHOLD;
-            BuildHierarchy(scene, bRefs, childRecords[jobID], numPartitions, instanceRefCount,
+            BuildHierarchy(scene, refs, childRecords[jobID], numPartitions, partitionIndices,
                            childParallel);
         });
     }
@@ -2073,13 +2196,14 @@ void VirtualGeometryManager::BuildHierarchy(ScenePrimitives *scene, BuildRef4 *b
     {
         for (int i = 0; i < numChildren; i++)
         {
-            BuildHierarchy(scene, bRefs, childRecords[i], numPartitions, instanceRefCount,
+            BuildHierarchy(scene, refs, childRecords[i], numPartitions, partitionIndices,
                            false);
         }
     }
 }
 
-void VirtualGeometryManager::Test(ScenePrimitives *scene)
+void VirtualGeometryManager::Test(ScenePrimitives *scene,
+                                  StaticArray<GPUInstance> &gpuInstances)
 {
     ScratchArena scratch;
     scratch.temp.arena->align = 16;
@@ -2101,9 +2225,7 @@ void VirtualGeometryManager::Test(ScenePrimitives *scene)
             nodeIndex++;
         }
     }
-    BRef *bRefs = PushArrayNoZero(scratch.temp.arena, BRef, maxInstances);
-
-    newInstanceRefs = StaticArray<InstanceRef>(scratch.temp.arena, maxInstances, maxInstances);
+    PrimRef *refs = PushArrayNoZero(scratch.temp.arena, PrimRef, maxInstances);
 
     Bounds geom;
     Bounds cent;
@@ -2111,7 +2233,7 @@ void VirtualGeometryManager::Test(ScenePrimitives *scene)
     Instance *instances = (Instance *)scene->primitives;
     for (int i = 0; i < scene->numPrimitives; i++)
     {
-        BRef &bRef         = bRefs[i];
+        PrimRef &ref       = refs[i];
         Instance &instance = instances[i];
 
         u32 sceneIndex = scene->childScenes[instance.id]->sceneIndex;
@@ -2136,17 +2258,16 @@ void VirtualGeometryManager::Test(ScenePrimitives *scene)
         AffineSpace &transform = scene->affineTransforms[instance.transformIndex];
         bounds                 = Transform(transform, bounds);
 
-        bRef.StoreBounds(bounds);
+        ref.minX   = -bounds.minP[0];
+        ref.minY   = -bounds.minP[1];
+        ref.minZ   = -bounds.minP[2];
+        ref.maxX   = bounds.maxP[0];
+        ref.maxY   = bounds.maxP[1];
+        ref.maxZ   = bounds.maxP[2];
+        ref.primID = i;
+
         geom.Extend(bounds);
         cent.Extend(bounds.minP + bounds.maxP);
-        bRef.instanceID = sceneIndex;
-
-        bRef.nodePtr = uintptr_t(child);
-        if (child->GetNumChildren() == 0)
-        {
-            bRef.nodePtr.data |= BVHNode4::tyLeaf;
-        }
-        bRef.numPrims = 0;
     }
     record.geomBounds = Lane8F32(-geom.minP, geom.maxP);
     record.centBounds = Lane8F32(-cent.minP, cent.maxP);
@@ -2154,26 +2275,22 @@ void VirtualGeometryManager::Test(ScenePrimitives *scene)
     record.count      = scene->numPrimitives;
     record.extEnd     = maxInstances;
 
-    u32 numNodes                     = 0;
-    std::atomic<u32> numPartitions   = 0;
-    std::atomic<u32> numInstanceRefs = 0;
-    bool parallel                    = scene->numPrimitives >= BUILD_PARALLEL_THRESHOLD;
+    u32 numNodes                   = 0;
+    std::atomic<u32> numPartitions = 0;
+    StaticArray<u32> partitionIndices(scratch.temp.arena, scene->numPrimitives,
+                                      scene->numPrimitives);
+    bool parallel = scene->numPrimitives >= BUILD_PARALLEL_THRESHOLD;
 
-    BuildHierarchy(scene, bRefs, record, numPartitions, numInstanceRefs, parallel);
+    BuildHierarchy(scene, refs, record, numPartitions, partitionIndices, parallel);
     Assert(numPartitions <= maxPartitions);
 
-    newInstanceRefs.size() = numInstanceRefs;
+    for (u32 i = 0; i < partitionIndices.Length(); i++)
+    {
+        GPUInstance &instance   = gpuInstances[i];
+        instance.partitionIndex = partitionIndices[i];
+    }
 
-    int stop = 5;
-    // Bounds bounds;
-    // basically:
-    // uniform voxel grid over the scene
-    // store what istances are inside each voxel
-    // secondary rays dda through the voxel grid
-    const u32 voxelX = 4096;
-    const u32 voxelY = 4096;
-    const u32 voxelZ = 8;
+    maxPartitions = numPartitions;
 }
-#endif
 
 } // namespace rt

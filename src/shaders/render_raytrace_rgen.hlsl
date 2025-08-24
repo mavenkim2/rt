@@ -158,7 +158,7 @@ void main()
                         uint bit = voxel.x + voxel.y * 4 + voxel.z * 16;
                         if (brick.bitMask & (1u << bit))
                         {
-#if 1
+#if 0
                             uint vertexOffset = GetVoxelVertexOffset(brick.vertexOffset, brick.bitMask, bit);
                             float alpha = dg.DecodeCoverage(vertexOffset);
 

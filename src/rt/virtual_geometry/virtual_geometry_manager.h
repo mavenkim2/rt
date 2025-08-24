@@ -130,7 +130,6 @@ struct VirtualGeometryManager
 
     const u32 maxInstances             = 1u << 21;
     const u32 maxInstancesPerPartition = 128;
-    const u32 maxPartitions            = 1u << 14;    // 2048;
     const u32 maxTotalClusterCount = 8 * 1024 * 1024; // MAX_CLUSTERS_PER_BLAS * maxInstances;
     const u32 maxClusterCountPerAccelerationStructure = MAX_CLUSTERS_PER_BLAS;
 
@@ -196,6 +195,9 @@ struct VirtualGeometryManager
 
         Graph<u32> pageToParentPageGraph;
         Graph<ClusterFixup> pageToParentClusters;
+
+        Vec3f boundsMin;
+        Vec3f boundsMax;
 
         // TODO: replace with filename
         u8 *pageData;
@@ -327,6 +329,15 @@ struct VirtualGeometryManager
     GPUBuffer voxelBlasInfosBuffer;
     GPUBuffer voxelCompactedBlasBuffer;
 
+    GPUBuffer templatesBuffer;
+    GPUBuffer templateAddresses;
+    GPUBuffer templateSizes;
+
+    GPUBuffer templateInfosBuffer;
+    GPUBuffer templateScratchBuffer;
+    GPUBuffer templateAddressesBuffer;
+    GPUBuffer templateSizesBuffer;
+
     // u32 requestBatchWriteIndex;
     // RingBuffer<StreamingRequestBatch> streamingRequestBatches;
     // StaticArray<StreamingRequest, maxQueueBatches * maxStreamingRequestsPerFrame>
@@ -343,6 +354,8 @@ struct VirtualGeometryManager
     StaticArray<Page> physicalPages;
     StaticArray<Range> instanceIDFreeRanges;
     StaticArray<Range> pageClusterIDRanges;
+
+    u32 maxPartitions;
 
     VirtualGeometryManager(CommandBuffer *cmd, Arena *arena);
     void EditRegistration(u32 instanceID, u32 pageIndex, bool add);
@@ -361,10 +374,10 @@ struct VirtualGeometryManager
     void UnlinkLRU(int pageIndex);
     void LinkLRU(int index);
 
-    // void Test(ScenePrimitives *scene);
-    // void BuildHierarchy(ScenePrimitives *scene, BuildRef4 *bRefs, RecordAOSSplits &record,
-    //                     std::atomic<u32> &numPartitions, std::atomic<u32> &instanceRefCount,
-    //                     bool parallel);
+    void Test(ScenePrimitives *scene, StaticArray<GPUInstance> &gpuInstances);
+    void BuildHierarchy(ScenePrimitives *scene, PrimRef *refs, RecordAOSSplits &record,
+                        std::atomic<u32> &numPartitions, StaticArray<u32> &partitionIndices,
+                        bool parallel);
 };
 
 } // namespace rt

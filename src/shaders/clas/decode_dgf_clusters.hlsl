@@ -26,33 +26,63 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
     uint numClusters = GetNumClustersInPage(basePageAddress);
     DenseGeometry header = GetDenseGeometryHeader(basePageAddress, numClusters, clusterIndex);
 
-    // Decode triangle indices
-    for (uint triangleIndex = groupIndex; triangleIndex < header.numTriangles; triangleIndex += THREAD_GROUP_SIZE)
+    if (header.numTriangles)
     {
-        // write u8 indices
-        uint3 triangleIndices = header.DecodeTriangle(triangleIndex);
-
-        uint indexBits = triangleIndices[0] | (triangleIndices[1] << 8u) | (triangleIndices[2] << 16u);
-        uint2 offset = GetAlignedAddressAndBitOffset(indexBufferOffset + triangleIndex * 3, 0);
-
-        const uint writeBitSize = 24;
-
-        // Write the uint8 indices atomically
-        if (offset[1] + writeBitSize >= 32)
+        // Decode triangle indices
+        for (uint triangleIndex = groupIndex; triangleIndex < header.numTriangles; triangleIndex += THREAD_GROUP_SIZE)
         {
-            uint mask = ~0u << ((writeBitSize + offset[1]) & 31u);
-            indexBuffer.InterlockedAnd(offset[0] + 4, mask);
-            indexBuffer.InterlockedOr(offset[0] + 4, indexBits >> (32 - offset[1]));
-        }
-        uint mask = ~(((1u << writeBitSize) - 1u) << offset[1]);
-        indexBuffer.InterlockedAnd(offset[0], mask);
-        indexBuffer.InterlockedOr(offset[0], indexBits << offset[1]);
-    }
+            // write u8 indices
+            uint3 triangleIndices = header.DecodeTriangle(triangleIndex);
 
-    // Decode vertices
-    for (uint vertexIndex = groupIndex; vertexIndex < header.numVertices; vertexIndex += THREAD_GROUP_SIZE)
+            uint indexBits = triangleIndices[0] | (triangleIndices[1] << 8u) | (triangleIndices[2] << 16u);
+            uint2 offset = GetAlignedAddressAndBitOffset(indexBufferOffset + triangleIndex * 3, 0);
+
+            const uint writeBitSize = 24;
+
+            // Write the uint8 indices atomically
+            if (offset[1] + writeBitSize >= 32)
+            {
+                uint mask = ~0u << ((writeBitSize + offset[1]) & 31u);
+                indexBuffer.InterlockedAnd(offset[0] + 4, mask);
+                indexBuffer.InterlockedOr(offset[0] + 4, indexBits >> (32 - offset[1]));
+            }
+            uint mask = ~(((1u << writeBitSize) - 1u) << offset[1]);
+            indexBuffer.InterlockedAnd(offset[0], mask);
+            indexBuffer.InterlockedOr(offset[0], indexBits << offset[1]);
+        }
+
+        // Decode vertices
+        for (uint vertexIndex = groupIndex; vertexIndex < header.numVertices; vertexIndex += THREAD_GROUP_SIZE)
+        {
+            float3 position = header.DecodePosition(vertexIndex);
+            decodeVertexBuffer[vertexBufferOffset + vertexIndex] = position;
+        }
+    }
+    else 
     {
-        float3 position = header.DecodePosition(vertexIndex);
-        decodeVertexBuffer[vertexBufferOffset + vertexIndex] = position;
+        uint numBricks = header.numBricks;
+        uint brickOffset = indexBufferOffset;
+        uint numBricksInTemplate = min(numBricks - brickOffset, MAX_BRICKS_PER_TEMPLATE);
+        for (uint brickIndex = groupIndex; brickIndex < numBricksInTemplate; brickIndex += THREAD_GROUP_SIZE)
+        {
+            Brick brick = header.DecodeBrick(brickOffset + brickIndex);
+            uint3 maxP;
+            GetBrickMax(brick.bitMask, maxP);
+            float3 boundsMin = header.DecodePosition(brickOffset + brickIndex);
+            float3 boundsMax = boundsMin + float3(maxP) * header.lodError;
+
+            uint vertexOffset = brickIndex * 8;
+            for (uint z = 0; z < 2; z++)
+            {
+                for (uint y = 0; y < 2; y++)
+                {
+                    for (uint x = 0; x < 2; x++)
+                    {
+                        float3 pos = float3(x ? boundsMax.x : boundsMin.x, y ? boundsMax.y : boundsMin.y, z ? boundsMax.z : boundsMin.z);
+                        decodeVertexBuffer[vertexBufferOffset + vertexOffset++] = pos;
+                    }
+                }
+            }
+        }
     }
 }

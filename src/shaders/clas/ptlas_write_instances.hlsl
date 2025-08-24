@@ -18,12 +18,12 @@ RWStructuredBuffer<uint> instanceRenderedBitVector : register(u8);
 RWStructuredBuffer<uint> thisFrameBitVector : register(u9);
 StructuredBuffer<AABB> aabbs : register(t10);
 
-void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint instanceID, uint instanceIndex) 
+void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint instanceID, uint instanceIndex, uint partition) 
 {
     uint2 offsets = uint2(instanceIndex >> 5u, instanceIndex & 31u);
     uint wasRendered = instanceRenderedBitVector[offsets.x] & (1u << offsets.y);
 
-    if (!wasRendered)
+    if (1)//!wasRendered)
     {
         InterlockedOr(instanceRenderedBitVector[offsets.x], 1u << offsets.y);
 
@@ -35,11 +35,11 @@ void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint instance
 
         float3 minP = float3(FLT_MAX, FLT_MAX, FLT_MAX);
         float3 maxP = float3(-FLT_MAX, -FLT_MAX, -FLT_MAX);
-        for (int z = 2; z <= 5; z += 3)
+        for (int z = 0; z < 2; z++)
         {
-            for (int y = 1; y <= 4; y += 3)
+            for (int y = 0; y < 2; y++)
             {
-                for (int x = 0; x <= 3; x += 3)
+                for (int x = 0; x < 2; x ++)
                 {
                     float3 p = float3(x ? aabb.maxX : aabb.minX, y ? aabb.maxY : aabb.minY, z ? aabb.maxZ : aabb.minZ);
                     float3 pos = mul(instance.worldFromObject, float4(p, 1.f));
@@ -63,9 +63,9 @@ void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint instance
         instanceInfo.instanceID = instanceID;
         instanceInfo.instanceMask = 0xff;
         instanceInfo.instanceContributionToHitGroupIndex = 0;
-        instanceInfo.instanceFlags = (1u << 0u);// | (1u << 4u);
+        instanceInfo.instanceFlags = (1u << 0u);//| (1u << 4u);
         instanceInfo.instanceIndex = instanceIndex;
-        instanceInfo.partitionIndex = 0;
+        instanceInfo.partitionIndex = partition;
         instanceInfo.accelerationStructure = address;
 
         ptlasInstanceWriteInfos[descriptorIndex] = instanceInfo;
@@ -104,15 +104,19 @@ void main(uint3 dtID : SV_DispatchThreadID)
             uint clusterIndex = info.clusterID & (MAX_CLUSTERS_PER_PAGE - 1);
 
             CLASPageInfo pageInfo = clasPageInfos[pageIndex];
-            uint instanceIndex = instance.instanceIDStart + 1 + pageInfo.voxelClusterOffset + clusterIndex;
+            //uint instanceIndex = instance.instanceIDStart + 1 + info.instanceIndex;
+            uint instanceIndex;
+            InterlockedAdd(globals[GLOBALS_VISIBLE_INSTANCE_COUNT], 1, instanceIndex);
 
-            WritePTLASDescriptors(instance, info.address, info.clusterID, instanceIndex);
+            WritePTLASDescriptors(instance, info.address, info.clusterID, instanceIndex, instance.partitionIndex);
         }
     }
 
     if (blasData.clusterCount) 
     {
         uint64_t address = blasAddresses[blasData.addressIndex];
-        WritePTLASDescriptors(instance, address, instance.instanceIDStart, instance.instanceIDStart);
+        uint instanceIndex;
+        InterlockedAdd(globals[GLOBALS_VISIBLE_INSTANCE_COUNT], 1, instanceIndex);
+        WritePTLASDescriptors(instance, address, 0,  instanceIndex, instance.partitionIndex);
     }
 }

@@ -282,7 +282,7 @@ struct ClusterCull
             VisibleCluster cluster;
             cluster.pageIndex = pageIndex;
             cluster.clusterIndex = clusterIndex;
-            cluster.instanceID = instanceID | (uint(isVoxel) << 31u);
+            cluster.instanceID = isVoxel ? header.id : ~0u;
             cluster.blasIndex = blasIndex;
 
             if (header.numBricks)

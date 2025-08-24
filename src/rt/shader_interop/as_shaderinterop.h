@@ -47,12 +47,15 @@ struct ClusterFileHeader
     uint numPages;
     uint numNodes;
     uint numVoxelClusters;
+    float3 boundsMin;
+    float3 boundsMax;
 };
 
 struct DecodeClusterData
 {
     uint32_t pageIndex;
     uint32_t clusterIndex;
+    // NOTE: reused as a "brick offset" for voxel clusters
     uint32_t indexBufferOffset;
     uint32_t vertexBufferOffset;
 };
@@ -82,6 +85,7 @@ struct BLASVoxelInfo
 {
     uint64_t address;
     uint clusterID;
+    uint instanceIndex;
 };
 
 struct AccelerationStructureInstance
@@ -260,7 +264,7 @@ struct GPUInstance
 #endif
     uint globalRootNodeOffset;
     uint resourceID;
-    uint instanceIDStart;
+    uint partitionIndex;
 };
 
 // struct InstanceRef
@@ -318,7 +322,12 @@ struct Brick
 #define GLOBALS_PTLAS_UPDATE_COUNT_INDEX 22
 #define GLOBALS_PTLAS_WRITE_COUNT_INDEX  23
 
-#define GLOBALS_SIZE 24
+#define GLOBALS_VISIBLE_INSTANCE_COUNT 24
+
+#define GLOBALS_TEMPLATE_CLUSTER_COUNT 25
+#define GLOBALS_TRIANGLE_CLUSTER_COUNT 26
+
+#define GLOBALS_SIZE 27
 
 #ifdef __cplusplus
 }

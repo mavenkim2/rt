@@ -21,7 +21,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
     CLASPageInfo clasPageInfo = clasPageInfos[visibleCluster.pageIndex];
 
     uint blasIndex = visibleCluster.blasIndex;
-    if (visibleCluster.instanceID >> 31u)
+    if (visibleCluster.instanceID != ~0u)
     {
         uint destIndex;
         InterlockedAdd(blasDatas[blasIndex].voxelClusterCount, 1, destIndex);
@@ -33,6 +33,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
         BLASVoxelInfo info;
         info.address = address;
         info.clusterID = (visibleCluster.pageIndex << MAX_CLUSTERS_PER_PAGE_BITS) | visibleCluster.clusterIndex;
+        info.instanceIndex = visibleCluster.instanceID;
         blasVoxelInfos[destIndex] = info;
     }
     else 

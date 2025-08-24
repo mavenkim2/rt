@@ -602,14 +602,18 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         virtualGeometryManager.AddNewMesh(sceneScratch.temp.arena, dgfTransferCmd,
                                           virtualGeoFilename);
 
-        Bounds b = scene->GetSceneBounds();
+        auto &meshInfo =
+            virtualGeometryManager.meshInfos[virtualGeometryManager.meshInfos.Length() - 1];
+        Vec3f boundsMin = meshInfo.boundsMin;
+        Vec3f boundsMax = meshInfo.boundsMax;
+
         AABB aabb;
-        aabb.minX = b.minP[0];
-        aabb.minY = b.minP[1];
-        aabb.minZ = b.minP[2];
-        aabb.maxX = b.maxP[0];
-        aabb.maxY = b.maxP[1];
-        aabb.maxZ = b.maxP[2];
+        aabb.minX = boundsMin[0];
+        aabb.minY = boundsMin[1];
+        aabb.minZ = boundsMin[2];
+        aabb.maxX = boundsMax[0];
+        aabb.maxY = boundsMax[1];
+        aabb.maxZ = boundsMax[2];
         blasSceneBounds.Push(aabb);
     }
 
@@ -718,9 +722,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         Assert(numScenes == 1);
     }
 
-    // virtualGeometryManager.Test(tlasScenes[0]);
+    virtualGeometryManager.Test(tlasScenes[0], gpuInstances);
 
-    virtualGeometryManager.AllocateInstances(gpuInstances);
+    // virtualGeometryManager.AllocateInstances(gpuInstances);
 
     TransferBuffer gpuInstancesBuffer =
         allCommandBuffer->SubmitBuffer(gpuInstances.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
