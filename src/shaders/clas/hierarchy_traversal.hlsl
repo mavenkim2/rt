@@ -158,13 +158,13 @@ struct ClusterCull
             priority = threshold == 0.f ? 0.f : threshold / edgeScales.x;
         }
 
-#if 0
+#if 1
         if (isVisible)
         {
             float3 minP = node.center[childIndex] - node.extents[childIndex];
             float3 maxP = node.center[childIndex] + node.extents[childIndex];
 
-            bool cull = FrustumCull(gpuScene.clipFromRender, instance.renderFromObject, 
+            bool cull = FrustumCull(gpuScene.clipFromRender, instance.worldFromObject, 
                 minP, maxP, gpuScene.p22, gpuScene.p23);
             isVisible &= !cull;
         }

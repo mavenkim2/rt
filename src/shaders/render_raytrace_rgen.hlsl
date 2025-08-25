@@ -138,7 +138,7 @@ void main()
                 float tEntry, tLeave;
                 float3 tMin;
 
-                IntersectAABB(boundsMin, boundsMax, objectRayOrigin, invDir, tEntry, tMin);
+                IntersectAABB(boundsMin, boundsMax, objectRayOrigin, invDir, tEntry, tLeave, tMin);
 
                 tLeave = min(tLeave, hitT);
 
@@ -193,42 +193,39 @@ void main()
 
                     float3 intersectP = objectRayOrigin + objectRayDir * tHit;
 
-                    int3 voxel = clamp((int3)floor(intersectP * rcpVoxelSize), 0, 3);
+                    int3 voxel = floor(intersectP);
 
                     float3 nextTime = tHit + ((voxel + add) - intersectP) * invDir;
-
-                    if (printDebug)
-                    {
-                        printf("%f %f %f %f\n", nextTime.x, nextTime.y, nextTime.z, tHit);
-                    }
 
                     // DDA
                     for (;;)
                     {
                         if (tHit >= maxT || any(and(objectRayDir < 0, voxel < 0)) || any(and(objectRayDir >= 0, voxel >= voxelMax))) break;
 
-                        uint bit = voxel.x + voxel.y * 4 + voxel.z * 16;
-                        if (brick.bitMask & (1u << bit))
+                        if (all(voxel >= 0) && all(voxel < voxelMax))
                         {
-#if 0
-                            uint vertexOffset = GetVoxelVertexOffset(brick.vertexOffset, brick.bitMask, bit);
-                            float alpha = dg.DecodeCoverage(vertexOffset);
-
-                            if (rng.Uniform() < alpha)
+                            uint bit = voxel.x + voxel.y * 4 + voxel.z * 16;
+                            if (brick.bitMask & (1u << bit))
                             {
-                                testColor = alpha;
+#if 0
+                                uint vertexOffset = GetVoxelVertexOffset(brick.vertexOffset, brick.bitMask, bit);
+                                float alpha = dg.DecodeCoverage(vertexOffset);
+
+                                if (rng.Uniform() < alpha)
+                                {
+                                    testColor = alpha;
+                                    hitKind = bit;
+
+                                    query.CommitProceduralPrimitiveHit(tHit);
+                                    break;
+                                }
+#else
                                 hitKind = bit;
 
                                 query.CommitProceduralPrimitiveHit(tHit);
                                 break;
-                            }
-#else
-                            hitKind = bit;
-
-                            query.CommitProceduralPrimitiveHit(tHit);
-                            break;
 #endif
-
+                            }
                         }
 
                         float nextT = min(nextTime.x, min(nextTime.y, nextTime.z));

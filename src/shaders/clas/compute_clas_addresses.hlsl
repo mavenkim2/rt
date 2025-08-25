@@ -28,21 +28,15 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
     uint pageIndex = pageIndices[groupID.x];
     uint numTriangleClusters = clasPageInfos[pageIndex].numTriangleClusters;
 
-    uint basePageAddress = GetClusterPageBaseAddress(pageIndex);
-    uint numClusters = GetNumClustersInPage(basePageAddress);
-
     if (groupIndex >= numTriangleClusters) return;
 
     DecodeClusterData clusterData = decodeClusterDatas[clasPageInfos[pageIndex].tempClusterOffset + groupIndex];
     uint clusterID = clusterData.clusterIndex;
 
-    //printf("%u %u\n", pageIndex, clusterID);
-
     uint descriptorIndex = clasPageInfos[pageIndex].addressStartIndex + clusterID;
     uint clasOldPageDataByteOffset = globals[GLOBALS_OLD_PAGE_DATA_BYTES];
     uint clasSize = clasSizes[descriptorIndex];
 
-    // TODO: perform prefix sum to order CLAS within a page
     uint clusterInPageOffset;
     InterlockedAdd(pageClusterAccelSize, clasSize, clusterInPageOffset);
     GroupMemoryBarrierWithGroupSync();

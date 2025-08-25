@@ -360,8 +360,10 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
                               clasScratchSize, clasAccelerationStructureSize);
 
     Assert(clasAccelerationStructureSize <= expectedSize);
-    clasImplicitData = device->CreateBuffer(
-        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, expectedSize);
+    clasImplicitData =
+        device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                                 VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
+                             expectedSize);
     clasScratchBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, clasScratchSize);
 
@@ -437,9 +439,9 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
     tlasAccelBuffer =
         device->CreateBuffer(VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
                                  VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                             blasSize);
+                             gigabytes(1));
     ptlasIndirectCommandBuffer = device->CreateBuffer(
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
         sizeof(PTLAS_INDIRECT_COMMAND) * 3);
 
@@ -1362,53 +1364,6 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         triangleClustersToAdd += numTriangleClusters;
     }
 
-    StaticArray<BufferToBufferCopy> voxelOffsetCopies(scratch.temp.arena,
-                                                      1 + numVoxelClusters.Length());
-    for (u32 index = 0; index < numVoxelClusters.Length(); index++)
-    {
-        u32 num = numVoxelClusters[index];
-
-        if (num == 0) continue;
-
-        PageHandle handle         = pageHandles[index];
-        VirtualPageHandle request = unloadedRequests[handle.index];
-        u32 page                  = pageIndices[index];
-
-        u32 voxelClusterOffset = ~0u;
-
-        for (Range &range : pageClusterIDRanges)
-        {
-            if (range.end - range.begin >= num)
-            {
-                voxelClusterOffset = range.begin;
-                range.begin += num;
-                break;
-            }
-        }
-
-        Assert(voxelClusterOffset != ~0u);
-
-        BufferToBufferCopy copy;
-        copy.srcOffset = voxelRangeOffset + index * sizeof(u32);
-        copy.dstOffset =
-            sizeof(CLASPageInfo) * page + OffsetOf(CLASPageInfo, voxelClusterOffset);
-        copy.size = sizeof(u32);
-
-        MemoryCopy((u8 *)uploadBuffer.mappedPtr + copy.srcOffset, &voxelClusterOffset,
-                   copy.size);
-
-        voxelOffsetCopies.Push(copy);
-    }
-
-    if (voxelOffsetCopies.Length())
-    {
-        cmd->CopyBuffer(&clasPageInfoBuffer, &uploadBuffer, voxelOffsetCopies.data,
-                        voxelOffsetCopies.Length());
-        cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-        cmd->FlushBarriers();
-    }
-
     u32 newClasOffset = currentTriangleClusterTotal;
     currentTriangleClusterTotal += triangleClustersToAdd;
 
@@ -1531,7 +1486,7 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
     u64 address = device->GetDeviceAddress(clasImplicitData.buffer);
 
     // Prepare move descriptors
-    if (pagesToUpdate && pageIndices.Length())
+    if (numEvictedPages)
     {
         Print("Prepare defrag\n");
         DefragPushConstant pc;
@@ -1563,10 +1518,7 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
                      VK_ACCESS_2_SHADER_READ_BIT);
         cmd->FlushBarriers();
         device->EndEvent(cmd);
-    }
 
-    if (numEvictedPages)
-    {
         Print("Evicting %u pages\n", numEvictedPages);
 
         device->BeginEvent(cmd, "Defrag Clas");
@@ -1665,7 +1617,7 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
 
         cmd->ComputeCLASSizes(&buildClusterTriangleInfoBuffer, &clasScratchBuffer,
                               &clusterAccelSizes, &clasGlobalsBuffer,
-                              sizeof(u32) * GLOBALS_TRIANGLE_CLUSTER_COUNT, newClasOffset,
+                              sizeof(u32) * GLOBALS_CLAS_COUNT_INDEX, newClasOffset,
                               maxNumTriangles, maxNumVertices, maxNumClusters);
 
         cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
@@ -1673,37 +1625,6 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
                      VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
                      VK_ACCESS_2_SHADER_READ_BIT);
         cmd->FlushBarriers();
-
-        // if (device->frameCount > 500)
-        // {
-        //     GPUBuffer readback =
-        //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        //                              templateSizesBuffer.size, MemoryUsage::GPU_TO_CPU);
-        //
-        //     // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-        //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //     //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-        //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-        //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     cmd->FlushBarriers();
-        //     cmd->CopyBuffer(&readback, &templateSizesBuffer);
-        //     Semaphore testSemaphore   = device->CreateSemaphore();
-        //     testSemaphore.signalValue = 1;
-        //     cmd->SignalOutsideFrame(testSemaphore);
-        //     device->SubmitCommandBuffer(cmd);
-        //     device->Wait(testSemaphore);
-        //
-        //     u32 *data = (u32 *)readback.mappedPtr;
-        //
-        //     u32 total = 0;
-        //     for (int i = 0; i < 1798; i++)
-        //     {
-        //         total += data[i];
-        //     }
-        //     int stop = 5;
-        // }
 
         cmd->StartBindingCompute(computeClasAddressesPipeline, &computeClasAddressesLayout)
             .Bind(&evictedPagesBuffer)
@@ -2014,7 +1935,7 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstan
 
     cmd->BuildPTLAS(&tlasAccelBuffer, &tlasScratchBuffer, &ptlasIndirectCommandBuffer,
                     &clasGlobalsBuffer, sizeof(u32) * GLOBALS_PTLAS_OP_TYPE_COUNT_INDEX,
-                    maxInstances, 131072, maxPartitions, 0);
+                    (1u << 22) - 1u, maxInstances / maxPartitions, maxPartitions, 0);
 }
 
 struct GetHierarchyNode

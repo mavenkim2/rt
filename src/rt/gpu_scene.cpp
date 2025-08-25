@@ -652,7 +652,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     // Build the TLAS over BLAS
     StaticArray<GPUInstance> gpuInstances(sceneScratch.temp.arena, numInstances);
 
-#if 1
+#if 0
     GPUBuffer tlasBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
@@ -722,7 +722,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         Assert(numScenes == 1);
     }
 
-    // virtualGeometryManager.Test(tlasScenes[0], gpuInstances);
+    virtualGeometryManager.Test(tlasScenes[0], gpuInstances);
 
     // virtualGeometryManager.AllocateInstances(gpuInstances);
 
@@ -754,8 +754,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     int envMapBindlessIndex;
 
     ViewCamera camera = {};
-    camera.position   = Vec3f(0);
-    camera.forward    = Normalize(params->look - params->pCamera);
+    // camera.position   = Vec3f(0);
+    camera.position = Vec3f(5128.51562f, 1104.60583f, -6173.79395f);
+    camera.forward  = Normalize(params->look - params->pCamera);
     // camera.forward = Vec3f(-.290819466f, .091174677f, .9524323811f);
     camera.right = Normalize(Cross(camera.forward, params->up));
 
@@ -787,6 +788,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     GPUBuffer nvapiBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 256);
 
     Semaphore frameSemaphore = device->CreateSemaphore();
+
+    GPUBuffer readback = device->CreateBuffer(
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT, virtualGeometryManager.clusterAccelAddresses.size,
+        MemoryUsage::GPU_TO_CPU);
 
     for (;;)
     {
@@ -906,7 +911,13 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         if (!device->BeginFrame(false))
         {
+            PTLAS_WRITE_INSTANCE_INFO *data = (PTLAS_WRITE_INSTANCE_INFO *)readback.mappedPtr;
             Assert(0);
+        }
+
+        if (device->frameCount > 0)
+        {
+            int stop = 5;
         }
 
         Print("frame: %u\n", device->frameCount);
@@ -972,6 +983,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     .Bind(&queueBuffer)
                     .Bind(&virtualGeometryManager.blasDataBuffer)
                     .Bind(&sceneTransferBuffers[currentBuffer].buffer)
+                    // .Bind(&virtualGeometryManager.ptlasIndirectCommandBuffer)
+                    // .Bind(&virtualGeometryManager.ptlasUpdateInfosBuffer)
+                    // .Bind(&virtualGeometryManager.ptlasInstanceBitVectorBuffer)
                     .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
                     .End();
 
@@ -1064,7 +1078,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     .Bind(&workItemQueueBuffer, 0, sizeof(Vec4u) * MAX_CANDIDATE_NODES)
                     .Bind(&queueBuffer)
                     .Bind(&virtualGeometryManager.blasDataBuffer)
+                    // .Bind(&virtualGeometryManager.instanceRefBuffer)
                     .Bind(&sceneTransferBuffers[currentBuffer].buffer)
+                    // .Bind(&virtualGeometryManager.ptlasIndirectCommandBuffer)
+                    // .Bind(&virtualGeometryManager.ptlasUpdateInfosBuffer)
+                    // .Bind(&virtualGeometryManager.ptlasInstanceBitVectorBuffer)
                     .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
                     .End();
 
@@ -1082,7 +1100,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             }
 
             // Hierarchy traversal
-
             {
                 virtualGeometryManager.HierarchyTraversal(
                     cmd, &queueBuffer, &sceneTransferBuffers[currentBuffer].buffer,
@@ -1112,15 +1129,70 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
             virtualGeometryManager.BuildClusterBLAS(cmd, &visibleClustersBuffer);
 
-            // virtualGeometryManager.BuildPTLAS(cmd, &gpuInstancesBuffer.buffer,
-            //                                   &aabbBuffer.buffer);
-            // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-            //              VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-            //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-            //              VK_ACCESS_2_SHADER_READ_BIT);
-            // cmd->FlushBarriers();
+            virtualGeometryManager.BuildPTLAS(cmd, &gpuInstancesBuffer.buffer,
+                                              &aabbBuffer.buffer);
 
-#if 1
+            // if (1) // device->frameCount > 500)
+            // {
+            //     GPUBuffer readback =
+            //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            //                              visibleClustersBuffer.size,
+            //                              MemoryUsage::GPU_TO_CPU);
+            //
+            //     // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+            //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            //     //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+            //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
+            //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+            //                  VK_ACCESS_2_TRANSFER_READ_BIT);
+            //     cmd->FlushBarriers();
+            //     cmd->CopyBuffer(&readback, &visibleClustersBuffer);
+            //     Semaphore testSemaphore   = device->CreateSemaphore();
+            //     testSemaphore.signalValue = 1;
+            //     cmd->SignalOutsideFrame(testSemaphore);
+            //     device->SubmitCommandBuffer(cmd);
+            //     device->Wait(testSemaphore);
+            //
+            //     VisibleCluster *data = (VisibleCluster *)readback.mappedPtr;
+            //
+            //     int stop = 5;
+            // }
+
+            cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                         VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                         VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                         VK_ACCESS_2_SHADER_READ_BIT);
+            cmd->FlushBarriers();
+
+            // if (1) // device->frameCount > 500)
+            {
+                // GPUBuffer readback =
+                //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                //                          virtualGeometryManager.clusterAccelAddresses.size,
+                //                          MemoryUsage::GPU_TO_CPU);
+
+                // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                //              VK_ACCESS_2_TRANSFER_READ_BIT);
+                cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                             VK_ACCESS_2_TRANSFER_READ_BIT);
+                cmd->FlushBarriers();
+                cmd->CopyBuffer(&readback, &virtualGeometryManager.ptlasWriteInfosBuffer);
+                // Semaphore testSemaphore   = device->CreateSemaphore();
+                // testSemaphore.signalValue = 1;
+                // cmd->SignalOutsideFrame(testSemaphore);
+                // device->SubmitCommandBuffer(cmd);
+                // device->Wait(testSemaphore);
+
+                // u64 *data = (u64 *)readback.mappedPtr;
+
+                int stop = 5;
+            }
+
+#if 0
 
             {
                 // Prepare instance descriptors for TLAS build
@@ -1186,8 +1258,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             device->GetDeviceAddress(virtualGeometryManager.tlasAccelBuffer.buffer);
         DescriptorSet descriptorSet = layout.CreateDescriptorSet();
         descriptorSet
-            .Bind(&tlas.as)
-            // .Bind(&ptlasAddress)
+            // .Bind(&tlas.as)
+            .Bind(&ptlasAddress)
             .Bind(image)
             .Bind(&sceneTransferBuffers[currentBuffer].buffer)
             .Bind(&materialBuffer)

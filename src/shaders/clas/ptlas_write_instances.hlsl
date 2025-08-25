@@ -24,6 +24,7 @@ void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint instance
     uint wasRendered = instanceRenderedBitVector[offsets.x] & (1u << offsets.y);
 
     if (1)//!wasRendered)
+    //if (wasRendered)
     {
         InterlockedOr(instanceRenderedBitVector[offsets.x], 1u << offsets.y);
 

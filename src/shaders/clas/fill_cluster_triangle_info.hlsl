@@ -13,7 +13,7 @@ RWStructuredBuffer<CLASPageInfo> clasPageInfos : register(u4);
 [[vk::push_constant]] FillClusterTriangleInfoPushConstant pc;
 
 groupshared uint clusterStartIndex;
-groupshared uint numClusterAddresses;
+groupshared uint numTriangleClusters;
 
 [numthreads(MAX_CLUSTERS_PER_PAGE, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupID, uint groupIndex : SV_GroupIndex)
@@ -30,7 +30,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
 
     if (groupIndex == 0)
     {
-        numClusterAddresses = 0;
+        numTriangleClusters = 0;
     }
     GroupMemoryBarrierWithGroupSync();
 
@@ -44,22 +44,20 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
     DenseGeometry header = GetDenseGeometryHeader(basePageAddress, numClusters, clusterID);
 
     uint addressOffset = 0;
-    uint voxelAddressOffset = 0;
     if (header.numTriangles)
     {
-        InterlockedAdd(numClusterAddresses, 1, addressOffset);
-        InterlockedAdd(globals[GLOBALS_TRIANGLE_CLUSTER_COUNT], 1);
+        InterlockedAdd(numTriangleClusters, 1, addressOffset);
     }
     GroupMemoryBarrierWithGroupSync();
 
     if (groupIndex == 0)
     {
-        InterlockedAdd(globals[GLOBALS_CLAS_COUNT_INDEX], numClusterAddresses, clusterStartIndex);
+        InterlockedAdd(globals[GLOBALS_CLAS_COUNT_INDEX], numTriangleClusters, clusterStartIndex);
 
         clasPageInfos[pageIndex].addressStartIndex = pc.clusterOffset + clusterStartIndex;
         clasPageInfos[pageIndex].tempClusterOffset = clusterStartIndex;
         clasPageInfos[pageIndex].clasSize = 0;
-        //clasPageInfos[pageIndex].numTriangleClusters = numTriangleClusters;
+        clasPageInfos[pageIndex].numTriangleClusters = numTriangleClusters;
     }
     GroupMemoryBarrierWithGroupSync();
 
@@ -67,9 +65,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
     {
         uint vertexBufferOffset, indexBufferOffset;
 
-        uint decodeIndex = clusterStartIndex + addressOffset;
-        // TODO: this is wrong
-        uint buildIndex = clusterStartIndex + addressOffset;
+        uint descriptorIndex = clusterStartIndex + addressOffset;
         //uint instantiateIndex = voxelClusterStartIndex + voxelAddressOffset;
 
         InterlockedAdd(globals[GLOBALS_VERTEX_BUFFER_OFFSET_INDEX], header.numVertices, vertexBufferOffset);
@@ -94,7 +90,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
         desc.opacityMicromapArray = 0;
         desc.opacityMicromapIndexBuffer = 0;
 
-        buildClusterTriangleInfos[buildIndex] = desc;
+        buildClusterTriangleInfos[descriptorIndex] = desc;
 
         DecodeClusterData clusterData;
         clusterData.pageIndex = pageIndex;
@@ -102,6 +98,6 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
         clusterData.indexBufferOffset = indexBufferOffset;
         clusterData.vertexBufferOffset = vertexBufferOffset;
 
-        decodeClusterDatas[decodeIndex] = clusterData;
+        decodeClusterDatas[descriptorIndex] = clusterData;
     }
 }
