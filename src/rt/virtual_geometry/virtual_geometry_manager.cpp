@@ -113,7 +113,7 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
     fillClusterTriangleInfoPush.size   = sizeof(FillClusterTriangleInfoPushConstant);
     fillClusterTriangleInfoPush.offset = 0;
 
-    for (int i = 0; i <= 6; i++)
+    for (int i = 0; i <= 4; i++)
     {
         fillClusterTriangleInfoLayout.AddBinding(i, DescriptorType::StorageBuffer,
                                                  VK_SHADER_STAGE_COMPUTE_BIT);
@@ -349,133 +349,6 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
             VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
         sizeof(u32) * GLOBALS_SIZE);
-
-    // Templates
-    const u32 cubeTable[] = {
-        // Front Face
-        0, 1, 2, // Triangle 1
-        1, 3, 2, // Triangle 2
-
-        // Back Face
-        4, 6, 5, // Triangle 3
-        5, 6, 7, // Triangle 4
-
-        // Left Face
-        4, 0, 6, // Triangle 5
-        0, 2, 6, // Triangle 6
-
-        // Right Face
-        1, 5, 3, // Triangle 7
-        5, 7, 3, // Triangle 8
-
-        // Top Face
-        2, 3, 6, // Triangle 9
-        3, 7, 6, // Triangle 10
-
-        // Bottom Face
-        4, 5, 0, // Triangle 11
-        5, 1, 0  // Triangle 12;
-    };
-
-    ScratchArena scratch;
-
-    StaticArray<VkClusterAccelerationStructureBuildTriangleClusterTemplateInfoNV> infos(
-        scratch.temp.arena, MAX_BRICKS_PER_TEMPLATE);
-    StaticArray<u8> templateIndexBuffer(scratch.temp.arena, 36 * MAX_BRICKS_PER_TEMPLATE);
-    for (int i = 0; i < MAX_BRICKS_PER_TEMPLATE; i++)
-    {
-        for (int j = 0; j < ArrayLength(cubeTable); j++)
-        {
-            templateIndexBuffer.Push(8 * i + cubeTable[j]);
-        }
-    }
-
-    TransferBuffer templateIndexBufferBuffer = cmd->SubmitBuffer(
-        templateIndexBuffer.data,
-        VK_BUFFER_USAGE_2_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        templateIndexBuffer.Length());
-    u64 templateIndexBufferDeviceAddress =
-        device->GetDeviceAddress(&templateIndexBufferBuffer.buffer);
-
-    for (int i = 1; i <= MAX_BRICKS_PER_TEMPLATE; i++)
-    {
-        VkClusterAccelerationStructureBuildTriangleClusterTemplateInfoNV info = {};
-        info.triangleCount                                                    = 12 * i;
-        info.vertexCount                                                      = 8 * i;
-        info.indexType                                                        = 1;
-        info.indexBuffer = templateIndexBufferDeviceAddress;
-        infos.Push(info);
-    }
-
-    u32 numTemplates = MAX_BRICKS_PER_TEMPLATE;
-    templatesBuffer  = device->CreateBuffer(
-        VK_BUFFER_USAGE_2_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, kilobytes(100));
-    templateAddresses = device->CreateBuffer(
-        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        sizeof(u64) * numTemplates);
-    templateSizes = device->CreateBuffer(
-        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        sizeof(u32) * numTemplates);
-
-    u32 templateScratchSize, templateAccelSize;
-    device->GetCLASTemplateInstantiateSizes(
-        CLASOpMode::ExplicitDestinations, maxNumClusters, maxNumTriangles, maxNumVertices,
-        12 * MAX_BRICKS_PER_TEMPLATE, 8 * MAX_BRICKS_PER_TEMPLATE, templateScratchSize,
-        templateAccelSize);
-    u32 templateScratchBuildSize, templateBaseSize;
-    device->GetCLASTemplateBuildSizes(
-        CLASOpMode::ImplicitDestinations, maxNumClusters, maxNumTriangles, maxNumVertices,
-        12 * MAX_BRICKS_PER_TEMPLATE, 8 * MAX_BRICKS_PER_TEMPLATE, templateScratchBuildSize,
-        templateBaseSize);
-
-    templateScratchSize = Max(templateScratchSize, templateScratchBuildSize);
-
-    templateInfosBuffer = device->CreateBuffer(
-        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        sizeof(INSTANTIATE_CLUSTER_TEMPLATE_INFO) * maxNumClusters);
-    templateScratchBuffer = device->CreateBuffer(
-        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        templateScratchSize);
-    templateAddressesBuffer = device->CreateBuffer(
-        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        sizeof(u64) * (maxPages * MAX_CLUSTERS_PER_PAGE));
-    templateSizesBuffer = device->CreateBuffer(
-        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        sizeof(u32) * (maxPages * MAX_CLUSTERS_PER_PAGE));
-
-    TransferBuffer templateBaseInfosBuffer = cmd->SubmitBuffer(
-        infos.data, VK_BUFFER_USAGE_2_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        sizeof(VkClusterAccelerationStructureBuildTriangleClusterTemplateInfoNV) *
-            infos.Length());
-    cmd->SubmitBuffer(&clasGlobalsBuffer, &numTemplates, sizeof(u32), 0);
-    cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                 VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                 VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                 VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
-    cmd->FlushBarriers();
-
-    cmd->BuildCLASTemplates(
-        CLASOpMode::ImplicitDestinations, &templatesBuffer, &templateScratchBuffer,
-        &templateAddresses, &templateSizes, &templateBaseInfosBuffer.buffer,
-        &clasGlobalsBuffer, 0, 12 * MAX_BRICKS_PER_TEMPLATE * numTemplates,
-        8 * MAX_BRICKS_PER_TEMPLATE * numTemplates, 12 * MAX_BRICKS_PER_TEMPLATE,
-        8 * MAX_BRICKS_PER_TEMPLATE, MAX_BRICKS_PER_TEMPLATE);
-    cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                 VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                 VK_ACCESS_2_NONE);
-    cmd->FlushBarriers();
 
     u32 expectedSize = maxPages * MAX_CLUSTERS_PER_PAGE * 2000;
 
@@ -1339,8 +1212,8 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
     }
 
     // Voxel acceleration structures
-    StaticArray<AABB> aabbs(scratch.temp.arena,
-                            pagesToInstall * MAX_CLUSTERS_PER_PAGE * MAX_CLUSTER_TRIANGLES);
+    StaticArray<AABB> aabbs(scratch.temp.arena, pagesToInstall * MAX_CLUSTERS_PER_PAGE *
+                                                    MAX_CLUSTER_TRIANGLES * 64);
     StaticArray<BLASBuildInfo> buildInfos(scratch.temp.arena,
                                           pagesToInstall * MAX_CLUSTERS_PER_PAGE);
     struct VoxelBLASInfo
@@ -1351,7 +1224,6 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
     StaticArray<VoxelBLASInfo> voxelBlasInfos(scratch.temp.arena,
                                               pagesToInstall * MAX_CLUSTERS_PER_PAGE);
 
-    u32 totalNumBricks        = 0;
     u32 triangleClustersToAdd = 0;
     StaticArray<u32> numVoxelClusters(scratch.temp.arena, pagesToInstall);
 
@@ -1407,10 +1279,12 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
             {
                 u32 vertexBitWidth = posBitWidths.x + posBitWidths.y + posBitWidths.z;
                 u32 brickOffset = geoBaseAddress + ((numBricks * vertexBitWidth + 7u) >> 3u);
+
+                u32 voxelCount            = 0;
                 BLASBuildInfo buildInfo   = {};
-                buildInfo.primitiveOffset = sizeof(AABB) * totalNumBricks;
-                buildInfo.primitiveCount  = numBricks;
-                totalNumBricks += numBricks;
+                buildInfo.primitiveOffset = sizeof(AABB) * aabbs.Length();
+                // buildInfo.primitiveCount  = numBricks * 64;
+                buildInfo.primitiveCount = numBricks;
 
                 buildInfos.Push(buildInfo);
 
@@ -1431,6 +1305,41 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
                     Vec3u maxP;
                     GetBrickMax(brick.bitMask, maxP);
 
+#if 0
+                    u32 numAABBs = PopCount(brick.bitMask) + PopCount(brick.bitMask >> 32u);
+
+                    u64 bitMask = brick.bitMask;
+
+                    while (bitMask)
+                    {
+                        u32 bit       = LeadingZeroCount64(bitMask);
+                        u32 x         = bit & 3u;
+                        u32 y         = (bit >> 2u) & 3u;
+                        u32 z         = bit >> 4u;
+                        Vec3f aabbMin = position + Vec3f(x, y, z) * lodError;
+                        Vec3f aabbMax = aabbMin + Vec3f(lodError);
+
+                        AABB aabb;
+                        aabb.minX = aabbMin.x;
+                        aabb.minY = aabbMin.y;
+                        aabb.minZ = aabbMin.z;
+                        aabb.maxX = aabbMax.x;
+                        aabb.maxY = aabbMax.y;
+                        aabb.maxZ = aabbMax.z;
+
+                        aabbs.Push(aabb);
+
+                        bitMask &= bitMask - 1;
+                    }
+
+                    for (u32 extra = numAABBs; extra < 64; extra++)
+                    {
+                        AABB aabb = {};
+                        aabb.minX = f32(NaN);
+                        aabbs.Push(aabb);
+                    }
+
+#else
                     Vec3f aabbMin = position;
                     Vec3f aabbMax = position + Vec3f(maxP) * lodError;
 
@@ -1443,6 +1352,7 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
                     aabb.maxZ = aabbMax.z;
 
                     aabbs.Push(aabb);
+#endif
                 }
             }
         }
@@ -1706,8 +1616,6 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
             .Bind(&decodeClusterDataBuffer)
             .Bind(&clasGlobalsBuffer)
             .Bind(&clasPageInfoBuffer)
-            .Bind(&templateAddresses)
-            .Bind(&templateInfosBuffer)
             .Bind(&clusterPageDataBuffer)
             .PushConstants(&fillClusterTriangleInfoPush, &fillPc)
             .End();
@@ -1759,11 +1667,6 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
                               &clusterAccelSizes, &clasGlobalsBuffer,
                               sizeof(u32) * GLOBALS_TRIANGLE_CLUSTER_COUNT, newClasOffset,
                               maxNumTriangles, maxNumVertices, maxNumClusters);
-        cmd->ComputeCLASTemplateSizes(
-            &templateInfosBuffer, &templateScratchBuffer, &templateSizesBuffer,
-            &clasGlobalsBuffer, sizeof(u32) * GLOBALS_TEMPLATE_CLUSTER_COUNT, maxNumTriangles,
-            maxNumVertices, 12 * MAX_BRICKS_PER_TEMPLATE, 8 * MAX_BRICKS_PER_TEMPLATE,
-            maxNumClusters);
 
         cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -1772,35 +1675,35 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         cmd->FlushBarriers();
 
         // if (device->frameCount > 500)
-        {
-            GPUBuffer readback =
-                device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                     templateSizesBuffer.size, MemoryUsage::GPU_TO_CPU);
-
-            // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-            //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-            //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-            //              VK_ACCESS_2_TRANSFER_READ_BIT);
-            cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                         VK_ACCESS_2_TRANSFER_READ_BIT);
-            cmd->FlushBarriers();
-            cmd->CopyBuffer(&readback, &templateSizesBuffer);
-            Semaphore testSemaphore   = device->CreateSemaphore();
-            testSemaphore.signalValue = 1;
-            cmd->SignalOutsideFrame(testSemaphore);
-            device->SubmitCommandBuffer(cmd);
-            device->Wait(testSemaphore);
-
-            u32 *data = (u32 *)readback.mappedPtr;
-
-            u32 total = 0;
-            for (int i = 0; i < 1798; i++)
-            {
-                total += data[i];
-            }
-            int stop = 5;
-        }
+        // {
+        //     GPUBuffer readback =
+        //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        //                              templateSizesBuffer.size, MemoryUsage::GPU_TO_CPU);
+        //
+        //     // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        //     //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+        //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
+        //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+        //                  VK_ACCESS_2_TRANSFER_READ_BIT);
+        //     cmd->FlushBarriers();
+        //     cmd->CopyBuffer(&readback, &templateSizesBuffer);
+        //     Semaphore testSemaphore   = device->CreateSemaphore();
+        //     testSemaphore.signalValue = 1;
+        //     cmd->SignalOutsideFrame(testSemaphore);
+        //     device->SubmitCommandBuffer(cmd);
+        //     device->Wait(testSemaphore);
+        //
+        //     u32 *data = (u32 *)readback.mappedPtr;
+        //
+        //     u32 total = 0;
+        //     for (int i = 0; i < 1798; i++)
+        //     {
+        //         total += data[i];
+        //     }
+        //     int stop = 5;
+        // }
 
         cmd->StartBindingCompute(computeClasAddressesPipeline, &computeClasAddressesLayout)
             .Bind(&evictedPagesBuffer)

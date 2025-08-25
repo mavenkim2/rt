@@ -2952,11 +2952,11 @@ static void WriteClustersToOBJ(ArrayView<ClusterGroup> &clusterGroups,
 void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndices,
                     string filename)
 {
-    // if (OS_FileExists(filename))
-    // {
-    //     Print("%S skipped\n", filename);
-    //     return;
-    // }
+    if (OS_FileExists(filename))
+    {
+        Print("%S skipped\n", filename);
+        return;
+    }
 
     const u32 minGroupSize = 8;
     const u32 maxGroupSize = 32;

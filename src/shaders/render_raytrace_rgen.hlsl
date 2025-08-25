@@ -37,6 +37,20 @@ RWStructuredBuffer<uint> feedbackBuffer : register(u12);
 
 [[vk::push_constant]] RayPushConstant push;
 
+void IntersectAABB(float3 boundsMin, float3 boundsMax, float3 o, float3 invDir, out float tEntry, out float tLeave, out float3 tMin)
+{
+    float3 tIntersectMin = (boundsMin - o) * invDir;
+    float3 tIntersectMax = (boundsMax - o) * invDir;
+
+    tMin = min(tIntersectMin, tIntersectMax);
+    float3 tMax = max(tIntersectMin, tIntersectMax);
+
+    tEntry = max(tMin.x, max(tMin.y, tMin.z));
+    tLeave = min(tMax.x, min(tMax.y, tMax.z));
+}
+
+#define TRACE_BRICKS
+
 [shader("raygeneration")]
 void main()
 {
@@ -88,13 +102,52 @@ void main()
         query.TraceRayInline(accel, RAY_FLAG_NONE, 0xff, desc);
 
         uint hitKind = 0;
-        float3 hitP;
 
         float testColor = 0;
+        float hitT = FLT_MAX;
         while (query.Proceed())
         {
             if (query.CandidateType() == CANDIDATE_PROCEDURAL_PRIMITIVE)
             {
+#ifndef TRACE_BRICKS
+                uint clusterID = query.CandidateInstanceID();
+                uint primIndex = query.CandidatePrimitiveIndex();
+
+                uint brickIndex = primIndex >> 6;
+                uint voxelIndex = primIndex & 63;
+
+                uint pageIndex = GetPageIndexFromClusterID(clusterID); 
+                uint clusterIndex = GetClusterIndexFromClusterID(clusterID);
+
+                uint basePageAddress = GetClusterPageBaseAddress(pageIndex);
+                uint numClusters = GetNumClustersInPage(basePageAddress);
+                DenseGeometry dg = GetDenseGeometryHeader(basePageAddress, numClusters, clusterIndex);
+
+                float3 position = dg.DecodePosition(brickIndex);
+                float voxelSize = dg.lodError;
+
+                uint x         = voxelIndex & 3u;
+                uint y         = (voxelIndex >> 2u) & 3u;
+                uint z         = voxelIndex >> 4u;
+                float3 boundsMin = position + float3(x, y, z) * voxelSize; 
+                float3 boundsMax = boundsMin + voxelSize;
+
+                float3 objectRayOrigin = query.CandidateObjectRayOrigin();
+                float3 objectRayDir = query.CandidateObjectRayDirection();
+                float3 invDir = rcp(objectRayDir);
+                float tEntry, tLeave;
+                float3 tMin;
+
+                IntersectAABB(boundsMin, boundsMax, objectRayOrigin, invDir, tEntry, tMin);
+
+                tLeave = min(tLeave, hitT);
+
+                if (tEntry <= tLeave)
+                {
+                    hitT = tEntry;
+                    query.CommitProceduralPrimitiveHit(tEntry);
+                }
+#else
                 uint clusterID = query.CandidateInstanceID();
                 uint brickIndex = query.CandidatePrimitiveIndex();
 
@@ -113,21 +166,16 @@ void main()
 
                 uint3 voxelMax;
                 GetBrickMax(brick.bitMask, voxelMax);
-                float3 boundsMin = position; 
-                float3 boundsMax = position + float3(voxelMax) * voxelSize; 
+                //float3 boundsMin = position * rcpVoxelSize; 
+                //float3 boundsMax = boundsMin + float3(voxelMax);
 
-                float3 objectRayOrigin = query.CandidateObjectRayOrigin();
-                float3 objectRayDir = query.CandidateObjectRayDirection();
+                float3 objectRayOrigin = (query.CandidateObjectRayOrigin() - position) * rcpVoxelSize;
+                float3 objectRayDir = query.CandidateObjectRayDirection() * rcpVoxelSize;
                 float3 invDir = rcp(objectRayDir);
 
-                float3 tIntersectMin = (boundsMin - objectRayOrigin) * invDir;
-                float3 tIntersectMax = (boundsMax - objectRayOrigin) * invDir;
-
-                float3 tMin = min(tIntersectMin, tIntersectMax);
-                float3 tMax = max(tIntersectMin, tIntersectMax);
-
-                float tEntry = max(tMin.x, max(tMin.y, tMin.z));
-                float tLeave = min(tMax.x, min(tMax.y, tMax.z));
+                float tEntry, tLeave;
+                float3 tMin;
+                IntersectAABB(float3(0, 0, 0), float3(voxelMax), objectRayOrigin, invDir, tEntry, tLeave, tMin);
 
                 if (tEntry <= tLeave)
                 {
@@ -141,14 +189,18 @@ void main()
                     int3 add = int3(objectRayDir.x >= 0 ? 1 : 0, objectRayDir.y >= 0 ? 1 : 0,
                                     objectRayDir.z >= 0 ? 1 : 0);
 
-                    float3 stepT = abs(invDir) * voxelSize; 
+                    float3 stepT = abs(invDir);
 
-                    float3 intersectP = objectRayOrigin + objectRayDir * tHit - boundsMin;
+                    float3 intersectP = objectRayOrigin + objectRayDir * tHit;
 
-                    hitP = intersectP + boundsMin;
                     int3 voxel = clamp((int3)floor(intersectP * rcpVoxelSize), 0, 3);
 
-                    float3 nextTime = tHit + ((voxel + add) * voxelSize - intersectP) * invDir;
+                    float3 nextTime = tHit + ((voxel + add) - intersectP) * invDir;
+
+                    if (printDebug)
+                    {
+                        printf("%f %f %f %f\n", nextTime.x, nextTime.y, nextTime.z, tHit);
+                    }
 
                     // DDA
                     for (;;)
@@ -187,6 +239,7 @@ void main()
                         tHit = nextT;
                     }
                 }
+#endif
             }
         }
 
@@ -347,7 +400,13 @@ void main()
         }
         else if (query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
         {
+#ifndef TRACE_BRICKS
+            uint primIndex = query.CommittedPrimitiveIndex();
+            uint brickIndex = primIndex >> 6u;
+            hitKind = primIndex & 63u;
+#else
             uint brickIndex = query.CommittedPrimitiveIndex();
+#endif
             uint clusterID = query.CommittedInstanceID();
 
             uint pageIndex = GetPageIndexFromClusterID(clusterID); 

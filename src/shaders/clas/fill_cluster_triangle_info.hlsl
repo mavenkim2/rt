@@ -10,15 +10,10 @@ RWStructuredBuffer<DecodeClusterData> decodeClusterDatas : register(u2);
 RWStructuredBuffer<uint> globals : register(u3);
 RWStructuredBuffer<CLASPageInfo> clasPageInfos : register(u4);
 
-StructuredBuffer<uint64_t> templateAddresses : register(t5);
-RWStructuredBuffer<INSTANTIATE_CLUSTER_TEMPLATE_INFO> instantiateInfos : register(u6);
-
 [[vk::push_constant]] FillClusterTriangleInfoPushConstant pc;
 
 groupshared uint clusterStartIndex;
 groupshared uint numClusterAddresses;
-groupshared uint numVoxelClusterAddresses;
-groupshared uint voxelClusterStartIndex;
 
 [numthreads(MAX_CLUSTERS_PER_PAGE, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupID, uint groupIndex : SV_GroupIndex)
@@ -36,7 +31,6 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
     if (groupIndex == 0)
     {
         numClusterAddresses = 0;
-        numVoxelClusterAddresses = 0;
     }
     GroupMemoryBarrierWithGroupSync();
 
@@ -56,18 +50,11 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
         InterlockedAdd(numClusterAddresses, 1, addressOffset);
         InterlockedAdd(globals[GLOBALS_TRIANGLE_CLUSTER_COUNT], 1);
     }
-    else 
-    {
-        uint numAddresses = (header.numBricks + MAX_BRICKS_PER_TEMPLATE - 1) / MAX_BRICKS_PER_TEMPLATE;
-        InterlockedAdd(numClusterAddresses, numAddresses, addressOffset);
-        InterlockedAdd(numVoxelClusterAddresses, numAddresses, voxelAddressOffset);
-    }
     GroupMemoryBarrierWithGroupSync();
 
     if (groupIndex == 0)
     {
         InterlockedAdd(globals[GLOBALS_CLAS_COUNT_INDEX], numClusterAddresses, clusterStartIndex);
-        InterlockedAdd(globals[GLOBALS_TEMPLATE_CLUSTER_COUNT], numVoxelClusterAddresses, voxelClusterStartIndex);
 
         clasPageInfos[pageIndex].addressStartIndex = pc.clusterOffset + clusterStartIndex;
         clasPageInfos[pageIndex].tempClusterOffset = clusterStartIndex;
@@ -116,34 +103,5 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
         clusterData.vertexBufferOffset = vertexBufferOffset;
 
         decodeClusterDatas[decodeIndex] = clusterData;
-    }
-    else
-    {
-        uint decodeIndex = clusterStartIndex + addressOffset;
-        uint instantiateIndex = voxelClusterStartIndex + voxelAddressOffset;
-
-        for (uint i = 0; i < header.numBricks; i+= MAX_BRICKS_PER_TEMPLATE)
-        {
-            uint numBricksInTemplate = min(header.numBricks - i, MAX_BRICKS_PER_TEMPLATE);
-            uint vertexBufferOffset;
-
-            InterlockedAdd(globals[GLOBALS_VERTEX_BUFFER_OFFSET_INDEX], numBricksInTemplate * 8, vertexBufferOffset);
-
-            INSTANTIATE_CLUSTER_TEMPLATE_INFO instantiateInfo = (INSTANTIATE_CLUSTER_TEMPLATE_INFO)0;
-            instantiateInfo.clusterIdOffset =  pageIndex * MAX_CLUSTERS_PER_PAGE + clusterID;
-            instantiateInfo.clusterTemplateAddress = templateAddresses[numBricksInTemplate - 1];
-            instantiateInfo.vertexBuffer.startAddress = vertexBufferBaseAddress + vertexBufferOffset * 12;
-            instantiateInfo.vertexBuffer.strideInBytes = 12;
-
-            instantiateInfos[instantiateIndex++] = instantiateInfo;
-
-            DecodeClusterData clusterData;
-            clusterData.pageIndex = pageIndex;
-            clusterData.clusterIndex = clusterID;
-            clusterData.indexBufferOffset = i;
-            clusterData.vertexBufferOffset = vertexBufferOffset;
-
-            decodeClusterDatas[decodeIndex++] = clusterData;
-        }
     }
 }

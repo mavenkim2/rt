@@ -329,15 +329,6 @@ struct VirtualGeometryManager
     GPUBuffer voxelBlasInfosBuffer;
     GPUBuffer voxelCompactedBlasBuffer;
 
-    GPUBuffer templatesBuffer;
-    GPUBuffer templateAddresses;
-    GPUBuffer templateSizes;
-
-    GPUBuffer templateInfosBuffer;
-    GPUBuffer templateScratchBuffer;
-    GPUBuffer templateAddressesBuffer;
-    GPUBuffer templateSizesBuffer;
-
     // u32 requestBatchWriteIndex;
     // RingBuffer<StreamingRequestBatch> streamingRequestBatches;
     // StaticArray<StreamingRequest, maxQueueBatches * maxStreamingRequestsPerFrame>

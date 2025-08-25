@@ -6,7 +6,6 @@ RWStructuredBuffer<float3> decodeVertexBuffer : register(u1);
 
 StructuredBuffer<DecodeClusterData> decodeClusterDatas : register(t2);
 StructuredBuffer<uint> globals : register(t3);
-RWStructuredBuffer<AABB> voxelClusterAABBs : register(u4);
 
 #define THREAD_GROUP_SIZE 32
 [numthreads(THREAD_GROUP_SIZE, 1, 1)] 
@@ -56,33 +55,6 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
         {
             float3 position = header.DecodePosition(vertexIndex);
             decodeVertexBuffer[vertexBufferOffset + vertexIndex] = position;
-        }
-    }
-    else 
-    {
-        uint numBricks = header.numBricks;
-        uint brickOffset = indexBufferOffset;
-        uint numBricksInTemplate = min(numBricks - brickOffset, MAX_BRICKS_PER_TEMPLATE);
-        for (uint brickIndex = groupIndex; brickIndex < numBricksInTemplate; brickIndex += THREAD_GROUP_SIZE)
-        {
-            Brick brick = header.DecodeBrick(brickOffset + brickIndex);
-            uint3 maxP;
-            GetBrickMax(brick.bitMask, maxP);
-            float3 boundsMin = header.DecodePosition(brickOffset + brickIndex);
-            float3 boundsMax = boundsMin + float3(maxP) * header.lodError;
-
-            uint vertexOffset = brickIndex * 8;
-            for (uint z = 0; z < 2; z++)
-            {
-                for (uint y = 0; y < 2; y++)
-                {
-                    for (uint x = 0; x < 2; x++)
-                    {
-                        float3 pos = float3(x ? boundsMax.x : boundsMin.x, y ? boundsMax.y : boundsMin.y, z ? boundsMax.z : boundsMin.z);
-                        decodeVertexBuffer[vertexBufferOffset + vertexOffset++] = pos;
-                    }
-                }
-            }
         }
     }
 }

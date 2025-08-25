@@ -652,7 +652,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     // Build the TLAS over BLAS
     StaticArray<GPUInstance> gpuInstances(sceneScratch.temp.arena, numInstances);
 
-#if 0
+#if 1
     GPUBuffer tlasBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
@@ -722,7 +722,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         Assert(numScenes == 1);
     }
 
-    virtualGeometryManager.Test(tlasScenes[0], gpuInstances);
+    // virtualGeometryManager.Test(tlasScenes[0], gpuInstances);
 
     // virtualGeometryManager.AllocateInstances(gpuInstances);
 
@@ -972,9 +972,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     .Bind(&queueBuffer)
                     .Bind(&virtualGeometryManager.blasDataBuffer)
                     .Bind(&sceneTransferBuffers[currentBuffer].buffer)
-                    // .Bind(&virtualGeometryManager.ptlasIndirectCommandBuffer)
-                    // .Bind(&virtualGeometryManager.ptlasUpdateInfosBuffer)
-                    // .Bind(&virtualGeometryManager.ptlasInstanceBitVectorBuffer)
                     .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
                     .End();
 
@@ -1067,11 +1064,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     .Bind(&workItemQueueBuffer, 0, sizeof(Vec4u) * MAX_CANDIDATE_NODES)
                     .Bind(&queueBuffer)
                     .Bind(&virtualGeometryManager.blasDataBuffer)
-                    // .Bind(&virtualGeometryManager.instanceRefBuffer)
                     .Bind(&sceneTransferBuffers[currentBuffer].buffer)
-                    // .Bind(&virtualGeometryManager.ptlasIndirectCommandBuffer)
-                    // .Bind(&virtualGeometryManager.ptlasUpdateInfosBuffer)
-                    // .Bind(&virtualGeometryManager.ptlasInstanceBitVectorBuffer)
                     .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
                     .End();
 
@@ -1119,15 +1112,15 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
             virtualGeometryManager.BuildClusterBLAS(cmd, &visibleClustersBuffer);
 
-            virtualGeometryManager.BuildPTLAS(cmd, &gpuInstancesBuffer.buffer,
-                                              &aabbBuffer.buffer);
-            cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                         VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                         VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                         VK_ACCESS_2_SHADER_READ_BIT);
-            cmd->FlushBarriers();
+            // virtualGeometryManager.BuildPTLAS(cmd, &gpuInstancesBuffer.buffer,
+            //                                   &aabbBuffer.buffer);
+            // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+            //              VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+            //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+            //              VK_ACCESS_2_SHADER_READ_BIT);
+            // cmd->FlushBarriers();
 
-#if 0
+#if 1
 
             {
                 // Prepare instance descriptors for TLAS build
@@ -1193,8 +1186,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             device->GetDeviceAddress(virtualGeometryManager.tlasAccelBuffer.buffer);
         DescriptorSet descriptorSet = layout.CreateDescriptorSet();
         descriptorSet
-            // .Bind(&tlas.as)
-            .Bind(&ptlasAddress)
+            .Bind(&tlas.as)
+            // .Bind(&ptlasAddress)
             .Bind(image)
             .Bind(&sceneTransferBuffers[currentBuffer].buffer)
             .Bind(&materialBuffer)
