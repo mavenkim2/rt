@@ -723,8 +723,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     }
 
     virtualGeometryManager.Test(tlasScenes[0], gpuInstances);
-
-    // virtualGeometryManager.AllocateInstances(gpuInstances);
+    virtualGeometryManager.AllocateInstances(gpuInstances);
 
     TransferBuffer gpuInstancesBuffer =
         allCommandBuffer->SubmitBuffer(gpuInstances.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -754,9 +753,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     int envMapBindlessIndex;
 
     ViewCamera camera = {};
-    // camera.position   = Vec3f(0);
-    camera.position = Vec3f(5128.51562f, 1104.60583f, -6173.79395f);
-    camera.forward  = Normalize(params->look - params->pCamera);
+    camera.position   = Vec3f(0);
+    // camera.position = Vec3f(5128.51562f, 1104.60583f, -6173.79395f);
+    camera.forward = Normalize(params->look - params->pCamera);
     // camera.forward = Vec3f(-.290819466f, .091174677f, .9524323811f);
     camera.right = Normalize(Cross(camera.forward, params->up));
 
@@ -790,7 +789,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     Semaphore frameSemaphore = device->CreateSemaphore();
 
     GPUBuffer readback = device->CreateBuffer(
-        VK_BUFFER_USAGE_TRANSFER_DST_BIT, virtualGeometryManager.clusterAccelAddresses.size,
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT, virtualGeometryManager.ptlasUpdateInfosBuffer.size,
         MemoryUsage::GPU_TO_CPU);
 
     for (;;)
@@ -911,7 +910,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         if (!device->BeginFrame(false))
         {
-            PTLAS_WRITE_INSTANCE_INFO *data = (PTLAS_WRITE_INSTANCE_INFO *)readback.mappedPtr;
+            PTLAS_UPDATE_INSTANCE_INFO *data =
+                (PTLAS_UPDATE_INSTANCE_INFO *)readback.mappedPtr;
             Assert(0);
         }
 
@@ -958,7 +958,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             computeCmd->ClearBuffer(&virtualGeometryManager.clasGlobalsBuffer);
             computeCmd->ClearBuffer(&virtualGeometryManager.streamingRequestsBuffer);
             computeCmd->ClearBuffer(&virtualGeometryManager.blasDataBuffer);
-            computeCmd->ClearBuffer(&virtualGeometryManager.ptlasInstanceBitVectorBuffer);
+            computeCmd->ClearBuffer(&virtualGeometryManager.virtualInstanceTableBuffer, ~0u);
             computeCmd->ClearBuffer(
                 &virtualGeometryManager.ptlasInstanceFrameBitVectorBuffer0);
             computeCmd->ClearBuffer(
@@ -1130,67 +1130,13 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             virtualGeometryManager.BuildClusterBLAS(cmd, &visibleClustersBuffer);
 
             virtualGeometryManager.BuildPTLAS(cmd, &gpuInstancesBuffer.buffer,
-                                              &aabbBuffer.buffer);
-
-            // if (1) // device->frameCount > 500)
-            // {
-            //     GPUBuffer readback =
-            //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            //                              visibleClustersBuffer.size,
-            //                              MemoryUsage::GPU_TO_CPU);
-            //
-            //     // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-            //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-            //     //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-            //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-            //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-            //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-            //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-            //     cmd->FlushBarriers();
-            //     cmd->CopyBuffer(&readback, &visibleClustersBuffer);
-            //     Semaphore testSemaphore   = device->CreateSemaphore();
-            //     testSemaphore.signalValue = 1;
-            //     cmd->SignalOutsideFrame(testSemaphore);
-            //     device->SubmitCommandBuffer(cmd);
-            //     device->Wait(testSemaphore);
-            //
-            //     VisibleCluster *data = (VisibleCluster *)readback.mappedPtr;
-            //
-            //     int stop = 5;
-            // }
+                                              &aabbBuffer.buffer, &readback);
 
             cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                          VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
                          VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
                          VK_ACCESS_2_SHADER_READ_BIT);
             cmd->FlushBarriers();
-
-            // if (1) // device->frameCount > 500)
-            {
-                // GPUBuffer readback =
-                //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                //                          virtualGeometryManager.clusterAccelAddresses.size,
-                //                          MemoryUsage::GPU_TO_CPU);
-
-                // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                //              VK_ACCESS_2_TRANSFER_READ_BIT);
-                cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                             VK_ACCESS_2_TRANSFER_READ_BIT);
-                cmd->FlushBarriers();
-                cmd->CopyBuffer(&readback, &virtualGeometryManager.ptlasWriteInfosBuffer);
-                // Semaphore testSemaphore   = device->CreateSemaphore();
-                // testSemaphore.signalValue = 1;
-                // cmd->SignalOutsideFrame(testSemaphore);
-                // device->SubmitCommandBuffer(cmd);
-                // device->Wait(testSemaphore);
-
-                // u64 *data = (u64 *)readback.mappedPtr;
-
-                int stop = 5;
-            }
 
 #if 0
 

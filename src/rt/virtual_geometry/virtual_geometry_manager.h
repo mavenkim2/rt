@@ -266,6 +266,9 @@ struct VirtualGeometryManager
     DescriptorSetLayout clusterFixupLayout = {};
     VkPipeline clusterFixupPipeline;
 
+    DescriptorSetLayout initializeFreeListLayout = {};
+    VkPipeline initializeFreeListPipeline;
+
     GPUBuffer evictedPagesBuffer;
     GPUBuffer hierarchyNodeBuffer;
     GPUBuffer clusterPageDataBuffer;
@@ -319,7 +322,10 @@ struct VirtualGeometryManager
     GPUBuffer ptlasWriteInfosBuffer;
     GPUBuffer ptlasUpdateInfosBuffer;
 
-    GPUBuffer ptlasInstanceBitVectorBuffer;
+    GPUBuffer virtualInstanceTableBuffer;
+    GPUBuffer instanceIDFreeListBuffer;
+
+    // GPUBuffer ptlasInstanceBitVectorBuffer;
     GPUBuffer ptlasInstanceFrameBitVectorBuffer0;
     GPUBuffer ptlasInstanceFrameBitVectorBuffer1;
 
@@ -344,7 +350,7 @@ struct VirtualGeometryManager
     StaticArray<VirtualPage> virtualTable;
     StaticArray<Page> physicalPages;
     StaticArray<Range> instanceIDFreeRanges;
-    StaticArray<Range> pageClusterIDRanges;
+    u32 virtualInstanceOffset;
 
     u32 maxPartitions;
 
@@ -361,7 +367,8 @@ struct VirtualGeometryManager
                             GPUBuffer *gpuInstancesBuffer, GPUBuffer *visibleClustersBuffer);
     void BuildClusterBLAS(CommandBuffer *cmd, GPUBuffer *visibleClustersBuffer);
     void AllocateInstances(StaticArray<GPUInstance> &gpuInstances);
-    void BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstances, GPUBuffer *blasSceneBounds);
+    void BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstances, GPUBuffer *blasSceneBounds,
+                    GPUBuffer *debugReadback);
     void UnlinkLRU(int pageIndex);
     void LinkLRU(int index);
 

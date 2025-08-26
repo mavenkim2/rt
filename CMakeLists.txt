@@ -279,6 +279,7 @@ set(SHADER_FILES "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl"
     "${SHADER_SRC_DIR}/clas/cluster_fixup.hlsl"
     "${SHADER_SRC_DIR}/clas/ptlas_update_unused_instances.hlsl"
     "${SHADER_SRC_DIR}/clas/ptlas_write_command_infos.hlsl"
+    "${SHADER_SRC_DIR}/clas/initialize_instance_freelist.hlsl"
 )
 set_property(SOURCE 
     "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl" 
@@ -307,6 +308,7 @@ set_property(SOURCE
     "${SHADER_SRC_DIR}/clas/cluster_fixup.hlsl"
     "${SHADER_SRC_DIR}/clas/ptlas_update_unused_instances.hlsl"
     "${SHADER_SRC_DIR}/clas/ptlas_write_command_infos.hlsl"
+    "${SHADER_SRC_DIR}/clas/initialize_instance_freelist.hlsl"
     PROPERTY name "cs")
 
 file(GLOB_RECURSE SHADER_INCLUDES "${SHADER_SRC_DIR}/*.hlsl" "${SHADER_SRC_DIR}/*.hlsli")

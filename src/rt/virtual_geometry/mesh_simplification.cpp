@@ -4620,30 +4620,30 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
             Cluster &cluster = clusters[clusterIndex];
             if (cluster.compressedVoxels.Length())
             {
-                ClusterGroup &childGroup = clusterGroups[cluster.childGroupIndex];
-                // u32 newID                    = id++;
-                // clusterIndices[clusterIndex] = newID;
-                if (!childGroup.hasVoxels)
-                {
-                    u32 dataIndex =
-                        clusterVoxelOffsets[groupIndex] + clusterVoxelCounts[groupIndex]++;
-                    u32 newID                    = id++;
-                    clusterVoxelData[dataIndex]  = newID;
-                    clusterIndices[clusterIndex] = newID;
-                }
-                else
-                {
-                    u32 offset = clusterVoxelOffsets[cluster.childGroupIndex]++;
-                    Assert(offset < clusterVoxelOffsets[cluster.childGroupIndex + 1]);
-                    Assert(clusterVoxelCounts[cluster.childGroupIndex]);
-                    u32 newID = clusterVoxelData[offset];
-                    clusterVoxelCounts[cluster.childGroupIndex]++;
-
-                    u32 dataIndex =
-                        clusterVoxelOffsets[groupIndex] + clusterVoxelCounts[groupIndex]++;
-                    clusterVoxelData[dataIndex]  = newID;
-                    clusterIndices[clusterIndex] = newID;
-                }
+                ClusterGroup &childGroup     = clusterGroups[cluster.childGroupIndex];
+                u32 newID                    = id++;
+                clusterIndices[clusterIndex] = newID;
+                // if (!childGroup.hasVoxels)
+                // {
+                //     u32 dataIndex =
+                //         clusterVoxelOffsets[groupIndex] + clusterVoxelCounts[groupIndex]++;
+                //     u32 newID                    = id++;
+                //     clusterVoxelData[dataIndex]  = newID;
+                //     clusterIndices[clusterIndex] = newID;
+                // }
+                // else
+                // {
+                //     u32 offset = clusterVoxelOffsets[cluster.childGroupIndex]++;
+                //     Assert(offset < clusterVoxelOffsets[cluster.childGroupIndex + 1]);
+                //     Assert(clusterVoxelCounts[cluster.childGroupIndex]);
+                //     u32 newID = clusterVoxelData[offset];
+                //     clusterVoxelCounts[cluster.childGroupIndex]++;
+                //
+                //     u32 dataIndex =
+                //         clusterVoxelOffsets[groupIndex] + clusterVoxelCounts[groupIndex]++;
+                //     clusterVoxelData[dataIndex]  = newID;
+                //     clusterIndices[clusterIndex] = newID;
+                // }
             }
         }
     }
@@ -4723,6 +4723,16 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                 MemoryCopy(ptr + currentPageOffset + 4 * soaStride, &flags, sizeof(u32));
                 MemoryCopy(ptr + currentPageOffset + 4 * soaStride + sizeof(u32),
                            &clusterIndices[clusterIndex], sizeof(u32));
+
+                float3 boundsMin = ToVec3f(cluster.bounds.minP);
+                float3 boundsMax = ToVec3f(cluster.bounds.maxP);
+                MemoryCopy(ptr + currentPageOffset + 4 * soaStride + 2 * sizeof(u32),
+                           &boundsMin.x, sizeof(f32));
+                MemoryCopy(ptr + currentPageOffset + 4 * soaStride + 3 * sizeof(u32),
+                           &boundsMin.y, sizeof(f32));
+                MemoryCopy(ptr + currentPageOffset + 5 * soaStride, &boundsMin.z, sizeof(f32));
+                MemoryCopy(ptr + currentPageOffset + 5 * soaStride + sizeof(f32), &boundsMax,
+                           sizeof(f32));
                 currentPageOffset += sizeof(Vec4u);
 
                 currentGeoOffset += GetGeoByteSize(headerIndex, buildDataIndex);

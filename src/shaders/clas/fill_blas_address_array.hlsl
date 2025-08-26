@@ -20,6 +20,17 @@ void main(uint3 dtID : SV_DispatchThreadID)
     VisibleCluster visibleCluster = visibleClusters[dtID.x];
     CLASPageInfo clasPageInfo = clasPageInfos[visibleCluster.pageIndex];
 
+    // ideas: 
+    // 1. hash table... i feel like this doesn't scale.
+    // 2. allocate an offset into an array (aka some virtual system?)
+    // 3. yeah i think it just has to be a virtual table 
+    // 4. it's a virtual table per instance. 
+    // 5. actualyl it's not that simple 
+    // 6. because the allocation has to be done on the gpu ....
+    // 7. so we would need a free list or something during the ptlas write phase
+    // 8. and then in the update unused we append to the free list...
+    // 9. it could work?
+
     uint blasIndex = visibleCluster.blasIndex;
     if (visibleCluster.instanceID != ~0u)
     {

@@ -18,6 +18,9 @@ struct DenseGeometry
     float4 lodBounds;
     float lodError;
 
+    float3 boundsMin;
+    float3 boundsMax;
+
     int3 anchor;
     uint2 octBase;
 
@@ -443,6 +446,14 @@ DenseGeometry GetDenseGeometryHeader(uint4 packed[NUM_CLUSTER_HEADER_FLOAT4S], u
 
     result.flags = packed[4].x;
     result.id = packed[4].y;
+
+    result.boundsMin.x = asfloat(packed[4].z);
+    result.boundsMin.y = asfloat(packed[4].w);
+    result.boundsMin.z = asfloat(packed[5].x);
+
+    result.boundsMax.x = asfloat(packed[5].y);
+    result.boundsMax.y = asfloat(packed[5].z);
+    result.boundsMax.z = asfloat(packed[5].w);
 
     // Size of vertex buffer and normal buffer
     const uint vertexBitWidth = result.posBitWidths[0] + result.posBitWidths[1] + result.posBitWidths[2];

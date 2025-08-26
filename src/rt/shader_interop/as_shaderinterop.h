@@ -24,7 +24,7 @@ namespace rt
 
 #define CLUSTER_FILE_MAGIC 0x6A697975
 
-#define NUM_CLUSTER_HEADER_FLOAT4S 5
+#define NUM_CLUSTER_HEADER_FLOAT4S 6
 
 #define MAX_CANDIDATE_NODES    (1u << 21u)
 #define MAX_CANDIDATE_CLUSTERS (1u << 24)
@@ -265,6 +265,7 @@ struct GPUInstance
     uint globalRootNodeOffset;
     uint resourceID;
     uint partitionIndex;
+    uint virtualInstanceIDOffset;
 };
 
 // struct InstanceRef
