@@ -21,64 +21,60 @@ StructuredBuffer<AABB> aabbs : register(t10);
 RWStructuredBuffer<uint> virtualInstanceTable : register(u11);
 RWStructuredBuffer<int> instanceIDFreeList : register(u12);
 
-void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint virtualInstanceID, uint instanceID, AABB aabb)
+void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint virtualInstanceID, uint instanceID, AABB aabb, bool update)
 {
     uint partition = instance.partitionIndex;
 
-    //uint instanceIndex = virtualInstanceTable[virtualInstanceID];
-    uint instanceIndex = virtualInstanceID;
-    if (1)//instanceIndex == ~0u)
+    uint instanceIndex = virtualInstanceTable[virtualInstanceID];
+    if (instanceIndex == ~0u)
     {
-        //uint instanceIDIndex;
-        //InterlockedAdd(instanceIDFreeList[0], -1, instanceIDIndex);
+        uint instanceIDIndex;
+        InterlockedAdd(instanceIDFreeList[0], -1, instanceIDIndex);
 
-        //if (instanceIDIndex == ~0u || instanceIDIndex == 0u) return;
-        //instanceIndex = instanceIDFreeList[instanceIDIndex];
-        //virtualInstanceTable[virtualInstanceID] = instanceIndex;
+        if (instanceIDIndex == ~0u || instanceIDIndex == 0u) return;
+        instanceIndex = instanceIDFreeList[instanceIDIndex];
+        virtualInstanceTable[virtualInstanceID] = instanceIndex;
 
         uint descriptorIndex;
         InterlockedAdd(globals[GLOBALS_PTLAS_WRITE_COUNT_INDEX], 1, descriptorIndex);
 
-#if 1
-        float3 minP = float3(FLT_MAX, FLT_MAX, FLT_MAX);
-        float3 maxP = float3(-FLT_MAX, -FLT_MAX, -FLT_MAX);
-        for (int z = 0; z < 2; z++)
+        PTLAS_WRITE_INSTANCE_INFO instanceInfo = (PTLAS_WRITE_INSTANCE_INFO)0;
+        if (update)
         {
-            for (int y = 0; y < 2; y++)
+            float3 minP = float3(FLT_MAX, FLT_MAX, FLT_MAX);
+            float3 maxP = float3(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+            for (int z = 0; z < 2; z++)
             {
-                for (int x = 0; x < 2; x ++)
+                for (int y = 0; y < 2; y++)
                 {
-                    float3 p = float3(x ? aabb.maxX : aabb.minX, y ? aabb.maxY : aabb.minY, z ? aabb.maxZ : aabb.minZ);
-                    float3 pos = mul(instance.worldFromObject, float4(p, 1.f));
-                    minP = min(minP, pos);
-                    maxP = max(maxP, pos);
+                    for (int x = 0; x < 2; x ++)
+                    {
+                        float3 p = float3(x ? aabb.maxX : aabb.minX, y ? aabb.maxY : aabb.minY, z ? aabb.maxZ : aabb.minZ);
+                        float3 pos = mul(instance.worldFromObject, float4(p, 1.f));
+                        minP = min(minP, pos);
+                        maxP = max(maxP, pos);
+                    }
                 }
             }
+            for (int i = 0; i < 3; i++)
+            {
+                instanceInfo.explicitAABB[i] = minP[i];
+                instanceInfo.explicitAABB[3 + i] = maxP[i];
+            }
+            instanceInfo.instanceFlags |= 0x10u;
         }
-#endif
 
-
-        PTLAS_WRITE_INSTANCE_INFO instanceInfo = (PTLAS_WRITE_INSTANCE_INFO)0;
         instanceInfo.transform = instance.worldFromObject;
-
-#if 1
-        for (int i = 0; i < 3; i++)
-        {
-            instanceInfo.explicitAABB[i] = minP[i];
-            instanceInfo.explicitAABB[3 + i] = maxP[i];
-        }
-#endif
         instanceInfo.instanceID = instanceID;
         instanceInfo.instanceMask = 0xff;
         instanceInfo.instanceContributionToHitGroupIndex = 0;
-        instanceInfo.instanceFlags = 0x10u;//(1u << 0u);// | (1u << 4u);
         instanceInfo.instanceIndex = instanceIndex;
         instanceInfo.partitionIndex = partition;
         instanceInfo.accelerationStructure = address;
 
         ptlasInstanceWriteInfos[descriptorIndex] = instanceInfo;
     }
-    else 
+    else if (update)
     {
         uint descriptorIndex;
         InterlockedAdd(globals[GLOBALS_PTLAS_UPDATE_COUNT_INDEX], 1, descriptorIndex);
@@ -124,13 +120,13 @@ void main(uint3 dtID : SV_DispatchThreadID)
             aabb.maxY = header.boundsMax.y;
             aabb.maxZ = header.boundsMax.z;
 
+        //AABB aabb = aabbs[instance.resourceID];
+
             CLASPageInfo pageInfo = clasPageInfos[pageIndex];
 
-            uint instanceIndex;
-            InterlockedAdd(globals[GLOBALS_VISIBLE_CLUSTER_COUNT_INDEX], 1, instanceIndex);
-            //uint virtualInstanceID = instance.virtualInstanceIDOffset + info.instanceIndex;
+            uint virtualInstanceID = instance.virtualInstanceIDOffset + 1 + info.instanceIndex;
 
-            WritePTLASDescriptors(instance, info.address, instanceIndex, info.clusterID, aabb);
+            WritePTLASDescriptors(instance, info.address, virtualInstanceID, info.clusterID, aabb, false);
         }
     }
 
@@ -139,8 +135,6 @@ void main(uint3 dtID : SV_DispatchThreadID)
         uint64_t address = blasAddresses[blasData.addressIndex];
 
         AABB aabb = aabbs[instance.resourceID];
-            uint instanceIndex;
-            InterlockedAdd(globals[GLOBALS_VISIBLE_CLUSTER_COUNT_INDEX], 1, instanceIndex);
-        WritePTLASDescriptors(instance, address, instanceIndex, 0, aabb);
+        WritePTLASDescriptors(instance, address, instance.virtualInstanceIDOffset, 0, aabb, true);
     }
 }

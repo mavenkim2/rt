@@ -269,6 +269,9 @@ struct VirtualGeometryManager
     DescriptorSetLayout initializeFreeListLayout = {};
     VkPipeline initializeFreeListPipeline;
 
+    DescriptorSetLayout buildInstanceTlasLayout = {};
+    VkPipeline buildInstanceTlasPipeline;
+
     GPUBuffer evictedPagesBuffer;
     GPUBuffer hierarchyNodeBuffer;
     GPUBuffer clusterPageDataBuffer;
@@ -315,9 +318,6 @@ struct VirtualGeometryManager
     GPUBuffer blasAccelAddresses;
     GPUBuffer blasAccelSizes;
 
-    GPUBuffer tlasScratchBuffer;
-    GPUBuffer tlasAccelBuffer;
-
     GPUBuffer ptlasIndirectCommandBuffer;
     GPUBuffer ptlasWriteInfosBuffer;
     GPUBuffer ptlasUpdateInfosBuffer;
@@ -334,6 +334,13 @@ struct VirtualGeometryManager
     GPUBuffer voxelAddressTable;
     GPUBuffer voxelBlasInfosBuffer;
     GPUBuffer voxelCompactedBlasBuffer;
+
+    GPUBuffer tlasAccelBuffer;
+    GPUBuffer tlasScratchBuffer;
+    GPUBuffer tlasLevel2AccelBuffer;
+    GPUBuffer tlasDescriptors;
+    GPUBuffer tlasOffsetsAndCountsBuffer;
+    GPUBuffer tlasReadbackBuffer;
 
     // u32 requestBatchWriteIndex;
     // RingBuffer<StreamingRequestBatch> streamingRequestBatches;
@@ -353,6 +360,7 @@ struct VirtualGeometryManager
     u32 virtualInstanceOffset;
 
     u32 maxPartitions;
+    u32 numInstances;
 
     VirtualGeometryManager(CommandBuffer *cmd, Arena *arena);
     void EditRegistration(u32 instanceID, u32 pageIndex, bool add);

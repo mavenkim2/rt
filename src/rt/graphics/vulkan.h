@@ -342,23 +342,7 @@ struct GPUBuffer
     VkAccessFlags2 lastAccess;
 };
 
-// struct BLASBuildInfo {
-//     GPUBuffer *buffer;
-//     VkAccelerationStructureKHR as;
-//     uint64_t scratchDataDeviceAddress;
-//
-//     uint64_t asDeviceAddress;
-//
-//     uint32_t accelSize;
-//     uint32_t scratchSize;
-//
-//     uint32_t bufferOffset;
-//
-//     uint32_t rangeStart;
-//     uint32_t rangeCount;
-// };
-
-struct BLASBuildInfo
+struct AccelBuildInfo
 {
     VkAccelerationStructureKHR as;
 
@@ -844,11 +828,13 @@ struct CommandBuffer
     GPUAccelerationStructurePayload BuildTLAS(GPUBuffer *instanceData, u32 numInstances);
     VkAccelerationStructureKHR BuildTLAS(GPUBuffer *accelBuffer, GPUBuffer *scratchBuffer,
                                          GPUBuffer *instanceData, u32 numInstances);
+    void BuildTLAS(GPUBuffer *accelBuffer, GPUBuffer *scratchBuffer, GPUBuffer *instanceData,
+                   StaticArray<AccelBuildInfo> &buildInfos, u32 numTlas);
     VkAccelerationStructureKHR BuildTLAS(GPUBuffer *accelBuffer, GPUBuffer *scratchBuffer,
                                          GPUBuffer *instanceData, GPUBuffer *buildRangeBuffer,
                                          u32 maxInstances);
     GPUAccelerationStructurePayload BuildCustomBLAS(GPUBuffer *aabbsBuffer, u32 numAabbs);
-    void BuildCustomBLAS(StaticArray<BLASBuildInfo> &blasBuildInfos);
+    void BuildCustomBLAS(StaticArray<AccelBuildInfo> &blasBuildInfos);
     void ClearBuffer(GPUBuffer *b, u32 val = 0);
     void ClearImage(GPUImage *image, u32 value, u32 baseMip = 0,
                     u32 numMips = VK_REMAINING_MIP_LEVELS, u32 baseLayer = 0,
@@ -1123,7 +1109,9 @@ struct Vulkan
                             u32 &scratchSize, u32 &accelSize);
     VkAccelerationStructureKHR CreatePTLAS(GPUBuffer *tlasData);
     StaticArray<AccelerationStructureSizes>
-    GetBuildSizes(Arena *inArena, StaticArray<BLASBuildInfo> &blasBuildInfos);
+    GetBLASBuildSizes(Arena *inArena, StaticArray<AccelBuildInfo> &blasBuildInfos);
+    StaticArray<AccelerationStructureSizes>
+    GetTLASBuildSizes(Arena *inArena, StaticArray<AccelBuildInfo> &tlasBuildInfos);
     void GetBuildSizes(VkAccelerationStructureTypeKHR accelType,
                        VkAccelerationStructureGeometryKHR *geometries, int count,
                        VkAccelerationStructureBuildRangeInfoKHR *buildRanges,

@@ -16,12 +16,13 @@ void main(uint dtID : SV_DispatchThreadID)
     uint unusedMask = lastFrameBits & ~frameBits;
     while (unusedMask)
     {
-        uint instanceIndex = 32 * dtID.x + firstbitlow(unusedMask);
-        //uint virtualInstanceIndex = 32 * dtID.x + firstbitlow(unusedMask);
+        //uint instanceIndex = 32 * dtID.x + firstbitlow(unusedMask);
+        uint virtualInstanceIndex = 32 * dtID.x + firstbitlow(unusedMask);
         uint descriptorIndex;
         InterlockedAdd(globals[GLOBALS_PTLAS_UPDATE_COUNT_INDEX], 1, descriptorIndex);
+        //InterlockedAdd(globals[GLOBALS_PTLAS_WRITE_COUNT_INDEX], 1, descriptorIndex);
 
-#if 0
+#if 1
         uint instanceIndex = virtualInstanceTable[virtualInstanceIndex];
         virtualInstanceTable[virtualInstanceIndex] = ~0u;
 
@@ -30,12 +31,16 @@ void main(uint dtID : SV_DispatchThreadID)
         instanceIDFreeList[freeListIndex] = instanceIndex;
 #endif
 
+        //PTLAS_WRITE_INSTANCE_INFO instanceInfo = (PTLAS_WRITE_INSTANCE_INFO)0;
+        //instanceInfo.instanceIndex = instanceIndex;
+#if 1
         PTLAS_UPDATE_INSTANCE_INFO instanceInfo;
         instanceInfo.instanceIndex = instanceIndex;
         instanceInfo.instanceContributionToHitGroupIndex = 0;
         instanceInfo.accelerationStructure = 0;
 
         ptlasInstanceUpdateInfos[descriptorIndex] = instanceInfo;
+#endif
 
         unusedMask &= unusedMask - 1;
     }

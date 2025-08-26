@@ -910,8 +910,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         if (!device->BeginFrame(false))
         {
-            PTLAS_UPDATE_INSTANCE_INFO *data =
-                (PTLAS_UPDATE_INSTANCE_INFO *)readback.mappedPtr;
+            PTLAS_INDIRECT_COMMAND *data = (PTLAS_INDIRECT_COMMAND *)readback.mappedPtr;
             Assert(0);
         }
 
@@ -1127,7 +1126,12 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 device->EndEvent(cmd);
             }
 
+            CommandBuffer *tlasReadbackCmd =
+                device->BeginCommandBuffer(QueueType_Copy, "Tlas readback");
+
             virtualGeometryManager.BuildClusterBLAS(cmd, &visibleClustersBuffer);
+
+            device->SubmitCommandBuffer(tlasReadbackCmd);
 
             virtualGeometryManager.BuildPTLAS(cmd, &gpuInstancesBuffer.buffer,
                                               &aabbBuffer.buffer, &readback);
