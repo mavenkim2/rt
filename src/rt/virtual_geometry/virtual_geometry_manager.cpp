@@ -497,6 +497,7 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
                                  VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                              gigabytes(1));
     tlasLevel2AccelBuffer = {};
+    tlasAddressBuffer     = {};
     totalNumBytes += tlasAccelBuffer.size;
     totalNumBytes += tlasScratchBuffer.size;
     ptlasIndirectCommandBuffer = device->CreateBuffer(
@@ -1805,7 +1806,10 @@ void VirtualGeometryManager::HierarchyTraversal(CommandBuffer *cmd, GPUBuffer *q
 void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd,
                                               GPUBuffer *visibleClustersBuffer)
 {
-    // TODO: set offset and count to 0
+    cmd->ClearBuffer(&tlasOffsetsAndCountsBuffer);
+    cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                 VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+    cmd->FlushBarriers();
     {
         device->BeginEvent(cmd, "Get BLAS Address Offset");
         // Calculate where clas addresses should be written for each blas
@@ -1989,134 +1993,128 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstan
     // Build the TLAS
     Vec2u *offsetsAndCounts = (Vec2u *)tlasReadbackBuffer.mappedPtr;
     u32 numTlas             = offsetsAndCounts[0].x;
-    offsetsAndCounts++;
 
-    int stop = 5;
-
-    ScratchArena scratch;
-    StaticArray<AccelBuildInfo> buildInfos(scratch.temp.arena, numTlas);
-    u32 total = 0;
-    for (u32 i = 0; i < numTlas; i++)
+    if (0)
     {
-        Vec2u &offsetAndCount     = offsetsAndCounts[i];
-        AccelBuildInfo buildInfo  = {};
-        buildInfo.primitiveOffset = sizeof(AccelerationStructureInstance) * offsetAndCount.x;
-        buildInfo.primitiveCount  = offsetAndCount.y;
-        total += buildInfo.primitiveCount;
+        offsetsAndCounts++;
 
-        buildInfos.Push(buildInfo);
-    }
+        int stop = 5;
 
-    StaticArray<AccelerationStructureSizes> sizes =
-        device->GetTLASBuildSizes(scratch.temp.arena, buildInfos);
-    StaticArray<AccelerationStructureCreate> creates(scratch.temp.arena, numTlas);
-    u32 totalScratch = 0;
-    u32 totalAccel   = 0;
-    for (AccelerationStructureSizes sizeInfo : sizes)
-    {
-        totalAccel = AlignPow2(totalAccel, 256);
-
-        AccelerationStructureCreate create = {};
-        create.accelSize                   = sizeInfo.accelSize;
-        create.bufferOffset                = totalAccel;
-        create.type                        = AccelerationStructureType::Top;
-
-        creates.Push(create);
-
-        totalAccel += sizeInfo.accelSize;
-        totalScratch += sizeInfo.scratchSize;
-    }
-
-    if (tlasScratchBuffer.size < totalScratch)
-    {
-        if (tlasScratchBuffer.size)
+        ScratchArena scratch;
+        StaticArray<AccelBuildInfo> buildInfos(scratch.temp.arena, numTlas);
+        u32 total = 0;
+        for (u32 i = 0; i < numTlas; i++)
         {
-            device->DestroyBuffer(&tlasScratchBuffer);
+            Vec2u &offsetAndCount    = offsetsAndCounts[i];
+            AccelBuildInfo buildInfo = {};
+            buildInfo.primitiveOffset =
+                sizeof(AccelerationStructureInstance) * offsetAndCount.x;
+            buildInfo.primitiveCount = offsetAndCount.y;
+            total += buildInfo.primitiveCount;
+
+            buildInfos.Push(buildInfo);
         }
 
-        tlasScratchBuffer = device->CreateBuffer(
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-            totalScratch);
-    }
-    if (tlasLevel2AccelBuffer.size < totalAccel)
-    {
-        if (tlasLevel2AccelBuffer.size)
+        StaticArray<AccelerationStructureSizes> sizes =
+            device->GetTLASBuildSizes(scratch.temp.arena, buildInfos);
+        StaticArray<AccelerationStructureCreate> creates(scratch.temp.arena, numTlas);
+        u32 totalScratch = 0;
+        u32 totalAccel   = 0;
+        for (AccelerationStructureSizes sizeInfo : sizes)
         {
-            device->DestroyBuffer(&tlasLevel2AccelBuffer);
+            totalAccel = AlignPow2(totalAccel, 256);
+
+            AccelerationStructureCreate create = {};
+            create.accelSize                   = sizeInfo.accelSize;
+            create.bufferOffset                = totalAccel;
+            create.type                        = AccelerationStructureType::Top;
+
+            creates.Push(create);
+
+            totalAccel += sizeInfo.accelSize;
+            totalScratch += sizeInfo.scratchSize;
         }
 
-        tlasLevel2AccelBuffer = device->CreateBuffer(
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, totalAccel);
+        if (tlasScratchBuffer.size < totalScratch)
+        {
+            if (tlasScratchBuffer.size)
+            {
+                device->DestroyBuffer(&tlasScratchBuffer);
+            }
+
+            tlasScratchBuffer = device->CreateBuffer(
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+                totalScratch);
+        }
+        if (tlasLevel2AccelBuffer.size < totalAccel)
+        {
+            if (tlasLevel2AccelBuffer.size)
+            {
+                device->DestroyBuffer(&tlasLevel2AccelBuffer);
+            }
+
+            tlasLevel2AccelBuffer = device->CreateBuffer(
+                VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
+                totalAccel);
+        }
+        if (tlasAddressBuffer.size < sizeof(u64) * creates.Length())
+        {
+            if (tlasAddressBuffer.size)
+            {
+                device->DestroyBuffer(&tlasAddressBuffer);
+            }
+
+            tlasAddressBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                     sizeof(u64) * creates.Length());
+        }
+
+        for (AccelerationStructureCreate &create : creates)
+        {
+            create.buffer = &tlasLevel2AccelBuffer;
+        }
+
+        device->CreateAccelerationStructures(creates);
+
+        uint64_t scratchDataDeviceAddress = device->GetDeviceAddress(&tlasScratchBuffer);
+        uint64_t tlasDescriptorAddress    = device->GetDeviceAddress(&tlasDescriptors);
+        totalScratch                      = 0;
+        totalAccel                        = 0;
+        for (u32 sizeIndex = 0; sizeIndex < sizes.Length(); sizeIndex++)
+        {
+            AccelerationStructureSizes &sizeInfo = sizes[sizeIndex];
+            AccelerationStructureCreate &create  = creates[sizeIndex];
+
+            AccelBuildInfo &buildInfo          = buildInfos[sizeIndex];
+            buildInfo.scratchDataDeviceAddress = scratchDataDeviceAddress + totalScratch;
+            buildInfo.dataDeviceAddress        = tlasDescriptorAddress;
+            buildInfo.as                       = create.as;
+
+            totalScratch += sizeInfo.scratchSize;
+        }
+
+        StaticArray<u64> newTlasAddresses(scratch.temp.arena, creates.Length());
+        for (u32 createIndex = 0; createIndex < creates.Length(); createIndex++)
+        {
+            AccelerationStructureCreate &create = creates[createIndex];
+            Assert(sizeof(create.asDeviceAddress) == sizeof(u64));
+            newTlasAddresses.Push(create.asDeviceAddress);
+        }
+
+        BufferToBufferCopy copy;
+        copy.srcOffset = tlasAddressOffset;
+        copy.dstOffset = 0;
+        copy.size      = sizeof(u64) * newTlasAddresses.Length();
+
+        MemoryCopy((u8 *)uploadBuffer.mappedPtr + copy.srcOffset, newTlasAddresses.data,
+                   copy.size);
+
+        cmd->CopyBuffer(&tlasAddressBuffer, &uploadBuffer, &copy, 1);
+        cmd->BuildTLAS(&tlasLevel2AccelBuffer, &tlasScratchBuffer, &tlasDescriptors,
+                       buildInfos, numTlas);
     }
-
-    for (AccelerationStructureCreate &create : creates)
-    {
-        create.buffer = &tlasLevel2AccelBuffer;
-    }
-
-    device->CreateAccelerationStructures(creates);
-
-    uint64_t scratchDataDeviceAddress = device->GetDeviceAddress(&tlasScratchBuffer);
-    uint64_t tlasDescriptorAddress    = device->GetDeviceAddress(&tlasDescriptors);
-    totalScratch                      = 0;
-    totalAccel                        = 0;
-    for (u32 sizeIndex = 0; sizeIndex < sizes.Length(); sizeIndex++)
-    {
-        AccelerationStructureSizes &sizeInfo = sizes[sizeIndex];
-        AccelerationStructureCreate &create  = creates[sizeIndex];
-
-        AccelBuildInfo &buildInfo          = buildInfos[sizeIndex];
-        buildInfo.scratchDataDeviceAddress = scratchDataDeviceAddress + totalScratch;
-        buildInfo.dataDeviceAddress        = tlasDescriptorAddress;
-        buildInfo.as                       = create.as;
-
-        totalScratch += sizeInfo.scratchSize;
-    }
-
-    StaticArray<u64> newTlasAddresses(scratch.temp.arena, creates.Length());
-    for (u32 createIndex = 0; createIndex < creates.Length(); createIndex++)
-    {
-        AccelerationStructureCreate &create = creates[createIndex];
-        Assert(sizeof(create.asDeviceAddress) == sizeof(u64));
-        newTlasAddresses.Push(create.asDeviceAddress);
-    }
-
-    BufferToBufferCopy copy;
-    copy.srcOffset = tlasAddressOffset;
-    copy.dstOffset = 0;
-    copy.size      = sizeof(u64) * newTlasAddresses.Length();
-
-    MemoryCopy((u8 *)uploadBuffer.mappedPtr + copy.srcOffset, newTlasAddresses.data,
-               copy.size);
-
-    cmd->CopyBuffer(&tlasAddressBuffer, &uploadBuffer, &copy, 1);
-    cmd->BuildTLAS(&tlasLevel2AccelBuffer, &tlasScratchBuffer, &tlasDescriptors, buildInfos,
-                   numTlas);
-
-    // if (device->frameCount > 100)
-    // {
-    //     GPUBuffer readback =
-    //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-    //         ptlasWriteInfosBuffer.size,
-    //                              MemoryUsage::GPU_TO_CPU);
-    //     cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-    //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-    //                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-    //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-    //     // cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-    //     // VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-    //     //              VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-    //     cmd->FlushBarriers();
-    //     cmd->CopyBuffer(debugReadback, &ptlasWriteInfosBuffer);
-    //     Semaphore testSemaphore   = device->CreateSemaphore();
-    //     testSemaphore.signalValue = 1;
-    //     cmd->SignalOutsideFrame(testSemaphore);
-    //     device->SubmitCommandBuffer(cmd);
-    //     device->Wait(testSemaphore);
-    //
-    //     int stop = 5;
-    // }
 
     uint buffer = device->frameCount & 1;
 
@@ -2195,14 +2193,19 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstan
             .PushConstants(&ptlasWriteCommandInfosPush, &pc)
             .End();
         cmd->Dispatch(1, 1, 1);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                     VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
-                         VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
-        cmd->FlushBarriers();
         device->EndEvent(cmd);
     }
+
+    cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                 VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                 VK_ACCESS_2_SHADER_WRITE_BIT,
+                 VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                     VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+    cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                 VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                 VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                 VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+    cmd->FlushBarriers();
 
     cmd->BuildPTLAS(&tlasAccelBuffer, &tlasScratchBuffer, &ptlasIndirectCommandBuffer,
                     &clasGlobalsBuffer, sizeof(u32) * GLOBALS_PTLAS_OP_TYPE_COUNT_INDEX,

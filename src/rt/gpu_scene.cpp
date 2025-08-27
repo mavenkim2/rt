@@ -753,9 +753,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     int envMapBindlessIndex;
 
     ViewCamera camera = {};
-    // camera.position   = Vec3f(0);
-    camera.position = Vec3f(5128.51562f, 1104.60583f, -6173.79395f);
-    camera.forward  = Normalize(params->look - params->pCamera);
+    camera.position   = Vec3f(0);
+    // camera.position = Vec3f(5128.51562f, 1104.60583f, -6173.79395f);
+    camera.forward = Normalize(params->look - params->pCamera);
     // camera.forward = Vec3f(-.290819466f, .091174677f, .9524323811f);
     camera.right = Normalize(Cross(camera.forward, params->up));
 
@@ -1047,6 +1047,44 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         cmd->ClearBuffer(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
 
+        // if (device->frameCount > 0)
+        // {
+        //     // GPUBuffer readback =
+        //     //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        //     //     blasDataBuffer.size,
+        //     //                          MemoryUsage::GPU_TO_CPU);
+        //     // GPUBuffer readback2 = device->CreateBuffer(
+        //     //     VK_BUFFER_USAGE_TRANSFER_DST_BIT, blasDataBuffer.size,
+        //     //     MemoryUsage::GPU_TO_CPU);
+        //     // GPUBuffer readback3 =
+        //     //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        //     //     ptlasWriteInfosBuffer.size,
+        //     //                          MemoryUsage::GPU_TO_CPU);
+        //     cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        //                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+        //                  VK_ACCESS_2_TRANSFER_READ_BIT);
+        //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+        //                  VK_ACCESS_2_TRANSFER_READ_BIT);
+        //     cmd->FlushBarriers();
+        //     // cmd->CopyBuffer(&readback, &blasDataBuffer);
+        //     // cmd->CopyBuffer(&readback2, &blasDataBuffer);
+        //     // cmd->CopyBuffer(&readback3, &ptlasWriteInfosBuffer);
+        //     Semaphore testSemaphore   = device->CreateSemaphore();
+        //     testSemaphore.signalValue = 1;
+        //     cmd->SignalOutsideFrame(testSemaphore);
+        //     device->SubmitCommandBuffer(cmd);
+        //     device->Wait(testSemaphore);
+        //
+        //     BLASData *data = (BLASData *)readback.mappedPtr;
+        //     // u64 *data = (u64 *)readback.mappedPtr;
+        //     // BLASData *data2                  = (BLASData *)readback2.mappedPtr;
+        //     // PTLAS_WRITE_INSTANCE_INFO *data3 = (PTLAS_WRITE_INSTANCE_INFO
+        //     // *)readback3.mappedPtr;
+        //     int stop = 5;
+        // }
+
         // Virtual geometry pass
         {
             cmd->ClearBuffer(&visibleClustersBuffer, ~0u);
@@ -1129,16 +1167,17 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             }
 
             virtualGeometryManager.BuildClusterBLAS(cmd, &visibleClustersBuffer);
-            Semaphore readbackSem   = device->CreateSemaphore();
-            readbackSem.signalValue = 1;
-            cmd->SignalOutsideFrame(readbackSem);
-            debugState.EndFrame(cmd);
-            device->SubmitCommandBuffer(cmd);
+            // Semaphore readbackSem   = device->CreateSemaphore();
+            // readbackSem.signalValue = 1;
+            // cmd->SignalOutsideFrame(readbackSem);
+            // debugState.EndFrame(cmd);
+            // device->SubmitCommandBuffer(cmd);
 
-            CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Graphics, cmdBufferName);
+            // CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Graphics,
+            // cmdBufferName);
 
             // sigh....
-            device->Wait(readbackSem);
+            // device->Wait(readbackSem);
             virtualGeometryManager.BuildPTLAS(cmd, &gpuInstancesBuffer.buffer,
                                               &aabbBuffer.buffer, &readback);
 
@@ -1229,10 +1268,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         cmd->BindDescriptorSets(bindPoint, &descriptorSet, rts.layout);
         cmd->PushConstants(&pushConstant, &pc, rts.layout);
 
-        int beginIndex = TIMED_GPU_RANGE_BEGIN(cmd, "ray trace");
+        // int beginIndex = TIMED_GPU_RANGE_BEGIN(cmd, "ray trace");
         // cmd->Dispatch(dispatchDimX, dispatchDimY, 1);
         cmd->TraceRays(&rts, params->width, params->height, 1);
-        TIMED_RANGE_END(beginIndex);
+        // TIMED_RANGE_END(beginIndex);
 
         // Copy feedback from device to host
         CommandBuffer *transferCmd =

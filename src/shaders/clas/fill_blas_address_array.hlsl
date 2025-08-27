@@ -32,7 +32,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
 
         if (blasDatas[blasIndex].tlasIndex == ~0u)
         {
-            blasDatas[blasIndex].addressIndex = (1u << 31u) | addressIndex;
+            blasDatas[blasIndex].addressIndex = addressIndex;
         }
         else 
         {
@@ -46,7 +46,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
             instanceDescriptor.blasDeviceAddress = address;
 
             uint descriptorIndex;
-            uint tlasIndex = blasDatas[blasIndex].tlasIndex + 1;
+            uint tlasIndex = blasDatas[blasIndex].tlasIndex;
             InterlockedAdd(offsetsAndCounts[tlasIndex].y, 1, descriptorIndex);
             descriptorIndex += offsetsAndCounts[tlasIndex].x;
             instanceDescriptors[descriptorIndex] = instanceDescriptor;
