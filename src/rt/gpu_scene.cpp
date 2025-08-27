@@ -926,7 +926,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         string cmdBufferName =
             PushStr8F(frameScratch.temp.arena, "Graphics Cmd %u", device->frameCount);
         CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Graphics, cmdBufferName);
-        debugState.BeginFrame(cmd);
+        // debugState.BeginFrame(cmd);
 
         if (device->frameCount == 0)
         {
@@ -1047,145 +1047,103 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         cmd->ClearBuffer(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
 
-        // if (device->frameCount > 0)
-        // {
-        //     // GPUBuffer readback =
-        //     //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        //     //     blasDataBuffer.size,
-        //     //                          MemoryUsage::GPU_TO_CPU);
-        //     // GPUBuffer readback2 = device->CreateBuffer(
-        //     //     VK_BUFFER_USAGE_TRANSFER_DST_BIT, blasDataBuffer.size,
-        //     //     MemoryUsage::GPU_TO_CPU);
-        //     // GPUBuffer readback3 =
-        //     //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        //     //     ptlasWriteInfosBuffer.size,
-        //     //                          MemoryUsage::GPU_TO_CPU);
-        //     cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-        //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-        //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-        //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     cmd->FlushBarriers();
-        //     // cmd->CopyBuffer(&readback, &blasDataBuffer);
-        //     // cmd->CopyBuffer(&readback2, &blasDataBuffer);
-        //     // cmd->CopyBuffer(&readback3, &ptlasWriteInfosBuffer);
-        //     Semaphore testSemaphore   = device->CreateSemaphore();
-        //     testSemaphore.signalValue = 1;
-        //     cmd->SignalOutsideFrame(testSemaphore);
-        //     device->SubmitCommandBuffer(cmd);
-        //     device->Wait(testSemaphore);
-        //
-        //     BLASData *data = (BLASData *)readback.mappedPtr;
-        //     // u64 *data = (u64 *)readback.mappedPtr;
-        //     // BLASData *data2                  = (BLASData *)readback2.mappedPtr;
-        //     // PTLAS_WRITE_INSTANCE_INFO *data3 = (PTLAS_WRITE_INSTANCE_INFO
-        //     // *)readback3.mappedPtr;
-        //     int stop = 5;
-        // }
-
         // Virtual geometry pass
+        cmd->ClearBuffer(&visibleClustersBuffer, ~0u);
+        cmd->ClearBuffer(&workItemQueueBuffer, ~0u);
+        cmd->ClearBuffer(&queueBuffer);
+        cmd->ClearBuffer(&virtualGeometryManager.clasGlobalsBuffer);
+        cmd->ClearBuffer(&virtualGeometryManager.streamingRequestsBuffer);
+        cmd->ClearBuffer(&virtualGeometryManager.blasDataBuffer);
+        // cmd->ClearBuffer(&tlasBuffer);
+        cmd->ClearBuffer(&virtualGeometryManager.ptlasIndirectCommandBuffer);
+
+        cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                     VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                     VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
+        cmd->FlushBarriers();
+
+        // Streaming
+        virtualGeometryManager.ProcessRequests(cmd);
+
+        // Instance culling
         {
-            cmd->ClearBuffer(&visibleClustersBuffer, ~0u);
-            cmd->ClearBuffer(&workItemQueueBuffer, ~0u);
-            cmd->ClearBuffer(&queueBuffer);
-            cmd->ClearBuffer(&virtualGeometryManager.clasGlobalsBuffer);
-            cmd->ClearBuffer(&virtualGeometryManager.streamingRequestsBuffer);
-            cmd->ClearBuffer(&virtualGeometryManager.blasDataBuffer);
-            // cmd->ClearBuffer(&tlasBuffer);
-            cmd->ClearBuffer(&virtualGeometryManager.ptlasIndirectCommandBuffer);
+            NumPushConstant instanceCullingPushConstant;
+            instanceCullingPushConstant.num = gpuInstances.Length();
+            device->BeginEvent(cmd, "Instance Culling");
 
-            cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                         VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                         VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
-            cmd->FlushBarriers();
+            cmd->StartBindingCompute(instanceCullingPipeline, &instanceCullingLayout)
+                .Bind(&gpuInstancesBuffer.buffer)
+                .Bind(&virtualGeometryManager.clasGlobalsBuffer)
+                .Bind(&workItemQueueBuffer, 0, sizeof(Vec4u) * MAX_CANDIDATE_NODES)
+                .Bind(&queueBuffer)
+                .Bind(&virtualGeometryManager.blasDataBuffer)
+                // .Bind(&virtualGeometryManager.instanceRefBuffer)
+                .Bind(&sceneTransferBuffers[currentBuffer].buffer)
+                // .Bind(&virtualGeometryManager.ptlasIndirectCommandBuffer)
+                // .Bind(&virtualGeometryManager.ptlasUpdateInfosBuffer)
+                // .Bind(&virtualGeometryManager.ptlasInstanceBitVectorBuffer)
+                .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
+                .End();
 
-            // Streaming
-            virtualGeometryManager.ProcessRequests(cmd);
-
-            // Instance culling
-            {
-                NumPushConstant instanceCullingPushConstant;
-                instanceCullingPushConstant.num = gpuInstances.Length();
-                device->BeginEvent(cmd, "Instance Culling");
-
-                cmd->StartBindingCompute(instanceCullingPipeline, &instanceCullingLayout)
-                    .Bind(&gpuInstancesBuffer.buffer)
-                    .Bind(&virtualGeometryManager.clasGlobalsBuffer)
-                    .Bind(&workItemQueueBuffer, 0, sizeof(Vec4u) * MAX_CANDIDATE_NODES)
-                    .Bind(&queueBuffer)
-                    .Bind(&virtualGeometryManager.blasDataBuffer)
-                    // .Bind(&virtualGeometryManager.instanceRefBuffer)
-                    .Bind(&sceneTransferBuffers[currentBuffer].buffer)
-                    // .Bind(&virtualGeometryManager.ptlasIndirectCommandBuffer)
-                    // .Bind(&virtualGeometryManager.ptlasUpdateInfosBuffer)
-                    // .Bind(&virtualGeometryManager.ptlasInstanceBitVectorBuffer)
-                    .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
-                    .End();
-
-                cmd->Dispatch((gpuInstances.Length() + 63) / 64, 1, 1);
-                cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                             VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-                cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
-                                 VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
-                             VK_ACCESS_2_SHADER_WRITE_BIT,
-                             VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
-                cmd->FlushBarriers();
-                device->EndEvent(cmd);
-            }
-
-            // Hierarchy traversal
-            {
-                virtualGeometryManager.HierarchyTraversal(
-                    cmd, &queueBuffer, &sceneTransferBuffers[currentBuffer].buffer,
-                    &workItemQueueBuffer, &gpuInstancesBuffer.buffer, &visibleClustersBuffer);
-            }
-
-            {
-                // Prepare indirect args
-                device->BeginEvent(cmd, "Prepare indirect");
-                cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, prepareIndirectPipeline);
-                DescriptorSet ds = prepareIndirectLayout.CreateDescriptorSet();
-                ds.Bind(&virtualGeometryManager.clasGlobalsBuffer);
-
-                cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
-                                        prepareIndirectLayout.pipelineLayout);
-                cmd->Dispatch(1, 1, 1);
-                cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                             VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-                cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
-                             VK_ACCESS_2_SHADER_WRITE_BIT,
-                             VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
-                cmd->FlushBarriers();
-                device->EndEvent(cmd);
-            }
-
-            virtualGeometryManager.BuildClusterBLAS(cmd, &visibleClustersBuffer);
-            // Semaphore readbackSem   = device->CreateSemaphore();
-            // readbackSem.signalValue = 1;
-            // cmd->SignalOutsideFrame(readbackSem);
-            // debugState.EndFrame(cmd);
-            // device->SubmitCommandBuffer(cmd);
-
-            // CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Graphics,
-            // cmdBufferName);
-
-            // sigh....
-            // device->Wait(readbackSem);
-            virtualGeometryManager.BuildPTLAS(cmd, &gpuInstancesBuffer.buffer,
-                                              &aabbBuffer.buffer, &readback);
-
-            cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                         VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                         VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+            cmd->Dispatch((gpuInstances.Length() + 63) / 64, 1, 1);
+            cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
                          VK_ACCESS_2_SHADER_READ_BIT);
+            cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                             VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+                         VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
             cmd->FlushBarriers();
+            device->EndEvent(cmd);
+        }
+
+        // Hierarchy traversal
+        {
+            virtualGeometryManager.HierarchyTraversal(
+                cmd, &queueBuffer, &sceneTransferBuffers[currentBuffer].buffer,
+                &workItemQueueBuffer, &gpuInstancesBuffer.buffer, &visibleClustersBuffer);
+        }
+
+        {
+            // Prepare indirect args
+            device->BeginEvent(cmd, "Prepare indirect");
+            cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, prepareIndirectPipeline);
+            DescriptorSet ds = prepareIndirectLayout.CreateDescriptorSet();
+            ds.Bind(&virtualGeometryManager.clasGlobalsBuffer);
+
+            cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
+                                    prepareIndirectLayout.pipelineLayout);
+            cmd->Dispatch(1, 1, 1);
+            cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                         VK_ACCESS_2_SHADER_READ_BIT);
+            cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                         VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+            cmd->FlushBarriers();
+            device->EndEvent(cmd);
+        }
+
+        virtualGeometryManager.BuildClusterBLAS(cmd, &visibleClustersBuffer);
+        Semaphore readbackSem   = device->CreateSemaphore();
+        readbackSem.signalValue = 1;
+        cmd->SignalOutsideFrame(readbackSem);
+        // debugState.EndFrame(cmd);
+        device->SubmitCommandBuffer(cmd);
+
+        cmd = device->BeginCommandBuffer(QueueType_Graphics, cmdBufferName);
+
+        // sigh....
+        device->Wait(readbackSem);
+        cmd->Wait(readbackSem);
+        virtualGeometryManager.BuildPTLAS(cmd, &gpuInstancesBuffer.buffer, &aabbBuffer.buffer,
+                                          &readback);
+
+        cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                     VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                     VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                     VK_ACCESS_2_SHADER_READ_BIT);
+        cmd->FlushBarriers();
 
 #if 0
 
@@ -1229,7 +1187,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 device->EndEvent(cmd);
             }
 #endif
-        }
 
         RayPushConstant pc;
         pc.envMap   = envMapBindlessIndex;
@@ -1287,7 +1244,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         device->CopyFrameBuffer(&swapchain, cmd, image);
         device->EndFrame(QueueFlag_Copy | QueueFlag_Graphics);
 
-        debugState.PrintDebugRecords();
+        // debugState.PrintDebugRecords();
 
         // Wait until new update
         f32 endWorkFrameTime = OS_NowSeconds();

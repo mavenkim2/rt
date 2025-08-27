@@ -25,7 +25,7 @@ void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint instance
     uint2 offsets = uint2(instanceID >> 5u, instanceID & 31u);
     bool wasRendered = renderedBitVector[offsets.x] & (1u << offsets.y);
 
-    if (1)//!wasRendered)
+    if (!wasRendered)
     {
         uint descriptorIndex;
         InterlockedAdd(globals[GLOBALS_PTLAS_WRITE_COUNT_INDEX], 1, descriptorIndex);
@@ -100,7 +100,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
     {
         address = tlasAddresses[blasData.tlasIndex];
         instanceID = 2;
-        return;
+        //return;
     }
     // Singular voxel BLAS
     else if (blasData.voxelClusterCount == 1)
@@ -108,7 +108,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
         uint clusterID = blasData.addressIndex;
         address = blasVoxelAddressTable[clusterID];
         instanceID = clusterID;
-        return;
+        //return;
     }
     // Singular cluster BLAS
     else
@@ -118,7 +118,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
     }
 
     AABB aabb = aabbs[instance.resourceID];
-    WritePTLASDescriptors(instance, address, blasData.instanceID, blasIndex, /*instanceID, */aabb, true);
+    WritePTLASDescriptors(instance, address, blasData.instanceID, instanceID, aabb, true);
 #if 0
     if (blasData.voxelClusterCount) 
     {

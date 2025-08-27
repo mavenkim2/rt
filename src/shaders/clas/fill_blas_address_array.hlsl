@@ -46,7 +46,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
             instanceDescriptor.blasDeviceAddress = address;
 
             uint descriptorIndex;
-            uint tlasIndex = blasDatas[blasIndex].tlasIndex;
+            uint tlasIndex = blasDatas[blasIndex].tlasIndex + 1;
             InterlockedAdd(offsetsAndCounts[tlasIndex].y, 1, descriptorIndex);
             descriptorIndex += offsetsAndCounts[tlasIndex].x;
             instanceDescriptors[descriptorIndex] = instanceDescriptor;

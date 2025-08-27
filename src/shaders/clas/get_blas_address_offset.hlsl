@@ -25,7 +25,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
         uint instanceOffset;
         InterlockedAdd(globals[GLOBALS_VISIBLE_INSTANCE_COUNT], numInstances, instanceOffset);
         offsetsAndCounts[instanceIndex + 1] = uint2(instanceOffset, 0);
-        blasDatas[blasIndex].tlasIndex = instanceIndex + 1;
+        blasDatas[blasIndex].tlasIndex = instanceIndex;
     }
     else 
     {

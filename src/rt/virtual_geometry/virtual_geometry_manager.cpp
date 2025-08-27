@@ -1994,8 +1994,10 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstan
     Vec2u *offsetsAndCounts = (Vec2u *)tlasReadbackBuffer.mappedPtr;
     u32 numTlas             = offsetsAndCounts[0].x;
 
-    if (0)
+    bool now = false;
+    if (numTlas)
     {
+        now = true;
         offsetsAndCounts++;
 
         int stop = 5;
@@ -2160,6 +2162,42 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstan
                      VK_ACCESS_2_SHADER_READ_BIT);
         cmd->FlushBarriers();
         device->EndEvent(cmd);
+    }
+
+    if (device->frameCount > 100)
+    {
+        GPUBuffer readback =
+            device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT, ptlasUpdateInfosBuffer.size,
+                                 MemoryUsage::GPU_TO_CPU);
+        // GPUBuffer readback2 = device->CreateBuffer(
+        //     VK_BUFFER_USAGE_TRANSFER_DST_BIT, blasDataBuffer.size,
+        //     MemoryUsage::GPU_TO_CPU);
+        // GPUBuffer readback3 =
+        //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        //     ptlasWriteInfosBuffer.size,
+        //                          MemoryUsage::GPU_TO_CPU);
+        cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                     VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                     VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                     VK_ACCESS_2_TRANSFER_READ_BIT);
+        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                     VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+        cmd->FlushBarriers();
+        cmd->CopyBuffer(&readback, &ptlasUpdateInfosBuffer);
+        // cmd->CopyBuffer(&readback2, &blasDataBuffer);
+        // cmd->CopyBuffer(&readback3, &ptlasWriteInfosBuffer);
+        Semaphore testSemaphore   = device->CreateSemaphore();
+        testSemaphore.signalValue = 1;
+        cmd->SignalOutsideFrame(testSemaphore);
+        device->SubmitCommandBuffer(cmd);
+        device->Wait(testSemaphore);
+
+        PTLAS_UPDATE_INSTANCE_INFO *data = (PTLAS_UPDATE_INSTANCE_INFO *)readback.mappedPtr;
+        // u64 *data = (u64 *)readback.mappedPtr;
+        // BLASData *data2                  = (BLASData *)readback2.mappedPtr;
+        // PTLAS_WRITE_INSTANCE_INFO *data3 = (PTLAS_WRITE_INSTANCE_INFO
+        // *)readback3.mappedPtr;
+        int stop = 5;
     }
 
     // Update unused instances
