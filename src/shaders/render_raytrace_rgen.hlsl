@@ -532,6 +532,7 @@ void main()
     }
     image[swizzledThreadID] = float4(radiance, 1);
 
+#if 0
     // Write virtual texture feedback back to main memory
     uint4 mask = WaveMatch(feedbackRequest.x);
     int4 highLanes = (int4)(firstbithigh(mask) | uint4(0, 0x20, 0x40, 0x60));
@@ -545,4 +546,5 @@ void main()
         feedbackBuffer[index + 1] = feedbackRequest.x;
         feedbackBuffer[index + 2] = feedbackRequest.y;
     }
+#endif
 }

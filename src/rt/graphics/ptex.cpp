@@ -1471,6 +1471,8 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *tra
     transferCmd->SignalOutsideFrame(uploadSemaphores[currentBuffer]);
     computeCmd->Wait(uploadSemaphores[currentBuffer]);
 
+
+#if 0
     // Write last frame's feedback buffer
     if (device->frameCount >= 2)
     {
@@ -1581,6 +1583,7 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *tra
 
     // Make sure all memory writes are visible
     readSubmission.store(readIndex + 1, std::memory_order_release);
+#endif
 }
 
 void VirtualTextureManager::UnlinkLRU(int pageIndex)

@@ -63,5 +63,4 @@ void main(uint3 dtID : SV_DispatchThreadID)
         uint addressIndex = clasPageInfo.addressStartIndex + clusterIndex;
         blasAddressArray[destIndex] = inputAddressArray[addressIndex];
     }
-
 }

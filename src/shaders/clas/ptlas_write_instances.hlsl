@@ -53,7 +53,7 @@ void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint instance
                 instanceInfo.explicitAABB[i] = minP[i];
                 instanceInfo.explicitAABB[3 + i] = maxP[i];
             }
-            //instanceInfo.instanceFlags |= 0x10u;
+            instanceInfo.instanceFlags |= 0x10u;
         }
 
         instanceInfo.transform = instance.worldFromObject;
@@ -90,6 +90,8 @@ void main(uint3 dtID : SV_DispatchThreadID)
     if (blasIndex >= globals[GLOBALS_BLAS_COUNT_INDEX]) return;
 
     BLASData blasData = blasDatas[blasIndex];
+    if (blasData.clusterCount == 0 && blasData.voxelClusterCount == 0) return;
+
     GPUInstance instance = gpuInstances[blasData.instanceID];
 
     uint64_t address = 0;
