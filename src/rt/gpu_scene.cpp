@@ -753,9 +753,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     int envMapBindlessIndex;
 
     ViewCamera camera = {};
-    camera.position   = Vec3f(0);
-    // camera.position = Vec3f(5128.51562f, 1104.60583f, -6173.79395f);
-    camera.forward = Normalize(params->look - params->pCamera);
+    // camera.position   = Vec3f(0);
+    camera.position = Vec3f(5128.51562f, 1104.60583f, -6173.79395f);
+    camera.forward  = Normalize(params->look - params->pCamera);
     // camera.forward = Vec3f(-.290819466f, .091174677f, .9524323811f);
     camera.right = Normalize(Cross(camera.forward, params->up));
 
@@ -957,7 +957,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             computeCmd->ClearBuffer(&virtualGeometryManager.clasGlobalsBuffer);
             computeCmd->ClearBuffer(&virtualGeometryManager.streamingRequestsBuffer);
             computeCmd->ClearBuffer(&virtualGeometryManager.blasDataBuffer);
-            computeCmd->ClearBuffer(&virtualGeometryManager.virtualInstanceTableBuffer, ~0u);
+            // computeCmd->ClearBuffer(&virtualGeometryManager.virtualInstanceTableBuffer,
+            // ~0u);
+            computeCmd->ClearBuffer(&virtualGeometryManager.ptlasInstanceBitVectorBuffer);
             computeCmd->ClearBuffer(
                 &virtualGeometryManager.ptlasInstanceFrameBitVectorBuffer0);
             computeCmd->ClearBuffer(
@@ -1126,13 +1128,17 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 device->EndEvent(cmd);
             }
 
-            CommandBuffer *tlasReadbackCmd =
-                device->BeginCommandBuffer(QueueType_Copy, "Tlas readback");
-
             virtualGeometryManager.BuildClusterBLAS(cmd, &visibleClustersBuffer);
+            Semaphore readbackSem   = device->CreateSemaphore();
+            readbackSem.signalValue = 1;
+            cmd->SignalOutsideFrame(readbackSem);
+            debugState.EndFrame(cmd);
+            device->SubmitCommandBuffer(cmd);
 
-            device->SubmitCommandBuffer(tlasReadbackCmd);
+            CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Graphics, cmdBufferName);
 
+            // sigh....
+            device->Wait(readbackSem);
             virtualGeometryManager.BuildPTLAS(cmd, &gpuInstancesBuffer.buffer,
                                               &aabbBuffer.buffer, &readback);
 
@@ -1238,8 +1244,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         transferCmd->CopyBuffer(&virtualGeometryManager.readbackBuffer,
                                 &virtualGeometryManager.streamingRequestsBuffer);
         device->SubmitCommandBuffer(transferCmd, true);
-
-        debugState.EndFrame(cmd);
 
         device->CopyFrameBuffer(&swapchain, cmd, image);
         device->EndFrame(QueueFlag_Copy | QueueFlag_Graphics);

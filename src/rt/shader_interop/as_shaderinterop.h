@@ -60,25 +60,17 @@ struct DecodeClusterData
     uint32_t vertexBufferOffset;
 };
 
-struct VoxelClusterData
-{
-    uint32_t pageIndex;
-    uint32_t clusterIndex;
-    uint32_t aabbOffset;
-    uint32_t buildSize;
-};
-
 struct BLASData
 {
     uint instanceID;
     uint clusterStartIndex;
     uint clusterCount;
 
-    uint voxelClusterStartIndex;
+    // uint voxelClusterStartIndex;
     uint voxelClusterCount;
 
     uint addressIndex;
-    uint instanceIndex;
+    uint tlasIndex;
 };
 
 struct BLASVoxelInfo

@@ -14,6 +14,7 @@ ConstantBuffer<GPUScene> gpuScene : register(b6);
 [numthreads(32, 1, 1)]
 void main(uint3 DTid : SV_DispatchThreadID)
 {
+#if 0
     uint blasIndex = DTid.x;
     if (blasIndex >= globals[GLOBALS_BLAS_COUNT_INDEX]) return;
 
@@ -50,4 +51,5 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
         instanceDescriptors[descriptorIndex] = instanceDescriptor;
     }
+#endif
 }

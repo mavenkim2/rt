@@ -47,8 +47,15 @@ struct AccelerationStructureSizes
     u32 accelSize;
 };
 
+enum class AccelerationStructureType
+{
+    Top,
+    Bottom,
+};
+
 struct AccelerationStructureCreate
 {
+    AccelerationStructureType type;
     GPUBuffer *buffer;
     uint32_t bufferOffset;
     uint32_t accelSize;

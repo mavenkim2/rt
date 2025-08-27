@@ -13,28 +13,20 @@ RWStructuredBuffer<GPUInstance> gpuInstances : register(u3);
 RWStructuredBuffer<PTLAS_WRITE_INSTANCE_INFO> ptlasInstanceWriteInfos : register(u4);
 RWStructuredBuffer<PTLAS_UPDATE_INSTANCE_INFO> ptlasInstanceUpdateInfos : register(u5);
 
-StructuredBuffer<BLASVoxelInfo> blasVoxelInfos : register(t6);
-StructuredBuffer<CLASPageInfo> clasPageInfos : register(t7);
-RWStructuredBuffer<uint> thisFrameBitVector : register(u9);
-StructuredBuffer<AABB> aabbs : register(t10);
+RWStructuredBuffer<uint> renderedBitVector : register(u6);
+RWStructuredBuffer<uint> thisFrameBitVector : register(u7);
+StructuredBuffer<AABB> aabbs : register(t9);
+StructuredBuffer<uint64_t> tlasAddresses : register(t10);
+StructuredBuffer<uint64_t> blasVoxelAddressTable : register(t11);
 
-RWStructuredBuffer<uint> virtualInstanceTable : register(u11);
-RWStructuredBuffer<int> instanceIDFreeList : register(u12);
-
-void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint virtualInstanceID, uint instanceID, AABB aabb, bool update)
+void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint instanceIndex, uint instanceID, AABB aabb, bool update)
 {
     uint partition = instance.partitionIndex;
+    uint2 offsets = uint2(instanceID >> 5u, instanceID & 31u);
+    bool wasRendered = renderedBitVector[offsets.x] & (1u << offsets.y);
 
-    uint instanceIndex = virtualInstanceTable[virtualInstanceID];
-    if (instanceIndex == ~0u)
+    if (!wasRendered)
     {
-        uint instanceIDIndex;
-        InterlockedAdd(instanceIDFreeList[0], -1, instanceIDIndex);
-
-        if (instanceIDIndex == ~0u || instanceIDIndex == 0u) return;
-        instanceIndex = instanceIDFreeList[instanceIDIndex];
-        virtualInstanceTable[virtualInstanceID] = instanceIndex;
-
         uint descriptorIndex;
         InterlockedAdd(globals[GLOBALS_PTLAS_WRITE_COUNT_INDEX], 1, descriptorIndex);
 
@@ -73,6 +65,7 @@ void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint virtualI
         instanceInfo.accelerationStructure = address;
 
         ptlasInstanceWriteInfos[descriptorIndex] = instanceInfo;
+        InterlockedOr(renderedBitVector[offsets.x], (1u << offsets.y));
     }
     else if (update)
     {
@@ -87,7 +80,6 @@ void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint virtualI
         ptlasInstanceUpdateInfos[descriptorIndex] = instanceInfo;
     }
 
-    uint2 offsets = uint2(virtualInstanceID >> 5u, virtualInstanceID & 31u);
     InterlockedOr(thisFrameBitVector[offsets.x], 1u << offsets.y);
 }
 
@@ -100,6 +92,30 @@ void main(uint3 dtID : SV_DispatchThreadID)
     BLASData blasData = blasDatas[blasIndex];
     GPUInstance instance = gpuInstances[blasData.instanceID];
 
+    uint64_t address = 0;
+    uint instanceID = 0;
+    uint instanceIndex = blasData.instanceID;
+    // TLAS built over cluster BLAS and voxel BLAS
+    if (blasData.tlasIndex != ~0u)
+    {
+        address = tlasAddresses[blasData.tlasIndex];
+    }
+    // Singular voxel BLAS
+    else if (blasData.addressIndex >> 31)
+    {
+        uint clusterID = blasData.addressIndex & 0x7fffffffu;
+        address = blasVoxelAddressTable[clusterID];
+        instanceID = clusterID;
+    }
+    // Singular cluster BLAS
+    else
+    {
+        address = blasAddresses[blasData.addressIndex];
+    }
+
+    AABB aabb = aabbs[instance.resourceID];
+    WritePTLASDescriptors(instance, address, blasData.instanceID, instanceID, aabb, true);
+#if 0
     if (blasData.voxelClusterCount) 
     {
         for (int index = 0; index < blasData.voxelClusterCount; index++)
@@ -137,4 +153,5 @@ void main(uint3 dtID : SV_DispatchThreadID)
         AABB aabb = aabbs[instance.resourceID];
         WritePTLASDescriptors(instance, address, instance.virtualInstanceIDOffset, 0, aabb, true);
     }
+#endif
 }

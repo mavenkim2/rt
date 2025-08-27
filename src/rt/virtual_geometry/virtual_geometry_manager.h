@@ -140,7 +140,7 @@ struct VirtualGeometryManager
     const u32 clusterFixupOffset = evictedPagesOffset + sizeof(u32) * maxPageInstallsPerFrame;
     const u32 voxelBlasOffset =
         clusterFixupOffset + maxClusterFixupsPerFrame * sizeof(GPUClusterFixup);
-    const u32 voxelRangeOffset =
+    const u32 tlasAddressOffset =
         voxelBlasOffset + MAX_CLUSTERS_PER_PAGE * sizeof(u64) * maxPageInstallsPerFrame;
 
     enum class PageFlag
@@ -322,17 +322,17 @@ struct VirtualGeometryManager
     GPUBuffer ptlasWriteInfosBuffer;
     GPUBuffer ptlasUpdateInfosBuffer;
 
-    GPUBuffer virtualInstanceTableBuffer;
-    GPUBuffer instanceIDFreeListBuffer;
+    // GPUBuffer virtualInstanceTableBuffer;
+    // GPUBuffer instanceIDFreeListBuffer;
 
-    // GPUBuffer ptlasInstanceBitVectorBuffer;
+    GPUBuffer ptlasInstanceBitVectorBuffer;
     GPUBuffer ptlasInstanceFrameBitVectorBuffer0;
     GPUBuffer ptlasInstanceFrameBitVectorBuffer1;
 
     GPUBuffer voxelAABBBuffer;
     GPUBuffer voxelBlasBuffer;
     GPUBuffer voxelAddressTable;
-    GPUBuffer voxelBlasInfosBuffer;
+    // GPUBuffer voxelBlasInfosBuffer;
     GPUBuffer voxelCompactedBlasBuffer;
 
     GPUBuffer tlasAccelBuffer;
@@ -341,6 +341,7 @@ struct VirtualGeometryManager
     GPUBuffer tlasDescriptors;
     GPUBuffer tlasOffsetsAndCountsBuffer;
     GPUBuffer tlasReadbackBuffer;
+    GPUBuffer tlasAddressBuffer;
 
     // u32 requestBatchWriteIndex;
     // RingBuffer<StreamingRequestBatch> streamingRequestBatches;

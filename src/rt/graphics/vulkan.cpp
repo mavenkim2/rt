@@ -3443,7 +3443,9 @@ void Vulkan::CreateAccelerationStructures(
         accelCreateInfo.buffer = createInfo.buffer->buffer;
         accelCreateInfo.offset = createInfo.bufferOffset;
         accelCreateInfo.size   = createInfo.accelSize;
-        accelCreateInfo.type   = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+        accelCreateInfo.type   = createInfo.type == AccelerationStructureType::Top
+                                     ? VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR
+                                     : VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
 
         vkCreateAccelerationStructureKHR(device, &accelCreateInfo, 0, &createInfo.as);
 

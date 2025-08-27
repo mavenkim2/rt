@@ -280,9 +280,7 @@ struct ClusterCull
         {
             bool isVoxel = (bool)header.numBricks;
             VisibleCluster cluster;
-            cluster.pageIndex = pageIndex;
-            cluster.clusterIndex = clusterIndex;
-            cluster.instanceID = isVoxel ? header.id : ~0u;
+            cluster.isVoxel_pageIndex_clusterIndex = (isVoxel << (MAX_CLUSTERS_PER_PAGE_BITS + 12)) | (pageIndex << MAX_CLUSTERS_PER_PAGE_BITS) | clusterIndex;
             cluster.blasIndex = blasIndex;
 
             if (header.numBricks)

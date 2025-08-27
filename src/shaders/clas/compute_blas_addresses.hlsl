@@ -3,17 +3,12 @@
 StructuredBuffer<uint> blasSizes : register(t0);
 RWStructuredBuffer<uint64_t> blasAddresses : register(u1);
 RWStructuredBuffer<uint> globals : register(u2);
-RWStructuredBuffer<uint2> offsetAndCount : register(u3);
 
 [[vk::push_constant]] AddressPushConstant pc;
 
 [numthreads(32, 1, 1)]
 void main(uint3 dtID : SV_DispatchThreadID)
 {
-    if (dtID.x == 0)
-    {
-        offsetAndCount[0] = uint2(0, 0);
-    }
     uint blasIndex = dtID.x;
     if (blasIndex >= globals[GLOBALS_BLAS_FINAL_COUNT_INDEX]) return;
 

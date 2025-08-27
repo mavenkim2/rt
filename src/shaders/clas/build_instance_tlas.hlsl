@@ -2,7 +2,7 @@
 #include "../../rt/shader_interop/hierarchy_traversal_shaderinterop.h"
 
 StructuredBuffer<BLASVoxelInfo> blasVoxelInfos : register(t0);
-StructuredBuffer<BLASData> blasDatas : register(t1);
+RWStructuredBuffer<BLASData> blasDatas : register(u1);
 StructuredBuffer<uint64_t> blasAddresses : register(t2);
 RWStructuredBuffer<AccelerationStructureInstance> instanceDescriptors : register(u3);
 RWStructuredBuffer<uint> globals : register(u4);
@@ -11,6 +11,7 @@ RWStructuredBuffer<uint2> offsetAndCount : register(u5);
 [numthreads(32, 1, 1)]
 void main(uint dtID : SV_DispatchThreadID) 
 {
+#if 0
     uint blasIndex = dtID.x;
     if (blasIndex >= globals[GLOBALS_BLAS_COUNT_INDEX]) return;
     if (blasDatas[blasIndex].clusterCount == 0 && blasDatas[blasIndex].voxelClusterCount == 0) return;
@@ -51,4 +52,8 @@ void main(uint dtID : SV_DispatchThreadID)
     uint instanceIndex;
     InterlockedAdd(offsetAndCount[0].x, 1, instanceIndex);
     offsetAndCount[instanceIndex + 1] = uint2(instanceOffset, numInstances);
+
+    blasDatas[blasIndex].addressIndex = instanceIndex;
+
+#endif
 }

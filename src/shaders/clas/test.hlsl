@@ -11,6 +11,7 @@ groupshared uint clusterStartIndex;
 [numthreads(MAX_CLUSTERS_PER_PAGE, 1, 1)]
 void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
 {
+#if 0
     uint pageIndex = groupID.x;
     uint basePageAddress = GetClusterPageBaseAddress(pageIndex);
     uint numClusters = GetNumClustersInPage(basePageAddress);
@@ -33,4 +34,5 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
     cluster.blasIndex = 0;//blasIndex;
 
     visibleClusters[descriptorIndex] = cluster;
+#endif
 }
