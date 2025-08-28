@@ -369,7 +369,7 @@ struct VirtualGeometryManager
                                  u32 pageIndex, u32 priority);
     bool VerifyPageDependencies(u32 virtualOffset, u32 startPage, u32 numPages);
     bool CheckDuplicatedFixup(u32 virtualOffset, u32 pageIndex, u32 startPage, u32 numPages);
-    void ProcessRequests(CommandBuffer *cmd);
+    void ProcessRequests(CommandBuffer *cmd, GPUBuffer *debugReadback);
     u32 AddNewMesh(Arena *arena, CommandBuffer *cmd, string filename);
     void HierarchyTraversal(CommandBuffer *cmd, GPUBuffer *queueBuffer,
                             GPUBuffer *gpuSceneBuffer, GPUBuffer *workItemQueueBuffer,
