@@ -11,18 +11,14 @@ StructuredBuffer<BLASData> blasDatas : register(t3);
 void main(uint3 dtID : SV_DispatchThreadID)
 {
     uint blasIndex = dtID.x;
-    if (blasIndex >= globals[GLOBALS_BLAS_COUNT_INDEX]) return;
+    if (blasIndex >= globals[GLOBALS_BLAS_FINAL_COUNT_INDEX]) return;
 
-    BLASData blasData = blasDatas[blasIndex];
-    if (blasData.clusterCount == 0) return;
-
-    uint addressIndex = blasData.addressIndex;
-    uint blasSize = blasSizes[addressIndex];
+    uint blasSize = blasSizes[blasIndex];
     uint blasByteOffset;
     InterlockedAdd(globals[GLOBALS_BLAS_BYTES], blasSize, blasByteOffset);
 
     uint64_t blasBaseAddress = ((uint64_t)pc.addressHighBits << 32u) | (uint64_t)pc.addressLowBits;
     uint64_t blasAddress = blasBaseAddress + blasByteOffset;
 
-    blasAddresses[addressIndex] = blasAddress;
+    blasAddresses[blasIndex] = blasAddress;
 }

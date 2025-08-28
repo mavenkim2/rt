@@ -234,7 +234,7 @@ struct ClusterCull
                 uint requestIndex;
                 InterlockedAdd(requests[0].pageIndex_numPages, 1, requestIndex);
                 const uint maxNumRequests = 1u << 18u;
-                if (requestIndex < maxNumRequests)
+                if (requestIndex < maxNumRequests - 1u)
                 {
                     requests[requestIndex + 1] = request;
                 }

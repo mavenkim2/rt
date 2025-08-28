@@ -908,13 +908,13 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         gpuScene.dispatchDimX = dispatchDimX;
         gpuScene.dispatchDimY = dispatchDimY;
 
+        Vec2u *data = (Vec2u *)readback.mappedPtr;
         if (!device->BeginFrame(false))
         {
-            PTLAS_INDIRECT_COMMAND *data = (PTLAS_INDIRECT_COMMAND *)readback.mappedPtr;
             Assert(0);
         }
 
-        if (device->frameCount > 0)
+        if (device->frameCount > 250)
         {
             int stop = 5;
         }
@@ -957,8 +957,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             computeCmd->ClearBuffer(&virtualGeometryManager.clasGlobalsBuffer);
             computeCmd->ClearBuffer(&virtualGeometryManager.streamingRequestsBuffer);
             computeCmd->ClearBuffer(&virtualGeometryManager.blasDataBuffer);
-            // computeCmd->ClearBuffer(&virtualGeometryManager.virtualInstanceTableBuffer,
-            // ~0u);
+            computeCmd->ClearBuffer(&virtualGeometryManager.virtualInstanceTableBuffer, ~0u);
             computeCmd->ClearBuffer(&virtualGeometryManager.ptlasInstanceBitVectorBuffer);
             computeCmd->ClearBuffer(
                 &virtualGeometryManager.ptlasInstanceFrameBitVectorBuffer0);
@@ -1126,8 +1125,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             device->EndEvent(cmd);
         }
 
-        virtualGeometryManager.BuildClusterBLAS(cmd, &visibleClustersBuffer,
-                                                &gpuInstancesBuffer.buffer);
+        virtualGeometryManager.BuildClusterBLAS(
+            cmd, &visibleClustersBuffer, &gpuInstancesBuffer.buffer, &aabbBuffer.buffer);
 
         virtualGeometryManager.BuildPTLAS(cmd, &gpuInstancesBuffer.buffer, &aabbBuffer.buffer,
                                           &readback);

@@ -269,8 +269,8 @@ struct VirtualGeometryManager
     DescriptorSetLayout initializeFreeListLayout = {};
     VkPipeline initializeFreeListPipeline;
 
-    DescriptorSetLayout buildInstanceTlasLayout = {};
-    VkPipeline buildInstanceTlasPipeline;
+    DescriptorSetLayout ptlasUpdatePartitionsLayout = {};
+    VkPipeline ptlasUpdatePartitionsPipeline;
 
     GPUBuffer evictedPagesBuffer;
     GPUBuffer hierarchyNodeBuffer;
@@ -322,8 +322,9 @@ struct VirtualGeometryManager
     GPUBuffer ptlasWriteInfosBuffer;
     GPUBuffer ptlasUpdateInfosBuffer;
 
-    // GPUBuffer virtualInstanceTableBuffer;
-    // GPUBuffer instanceIDFreeListBuffer;
+    GPUBuffer virtualInstanceTableBuffer;
+    GPUBuffer instanceIDFreeListBuffer;
+    GPUBuffer debugBuffer;
 
     GPUBuffer ptlasInstanceBitVectorBuffer;
     GPUBuffer ptlasInstanceFrameBitVectorBuffer0;
@@ -369,7 +370,7 @@ struct VirtualGeometryManager
                             GPUBuffer *gpuSceneBuffer, GPUBuffer *workItemQueueBuffer,
                             GPUBuffer *gpuInstancesBuffer, GPUBuffer *visibleClustersBuffer);
     void BuildClusterBLAS(CommandBuffer *cmd, GPUBuffer *visibleClustersBuffer,
-                          GPUBuffer *gpuInstancesBuffer);
+                          GPUBuffer *gpuInstancesBuffer, GPUBuffer *aabbBuffer);
     void AllocateInstances(StaticArray<GPUInstance> &gpuInstances);
     void BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstances, GPUBuffer *blasSceneBounds,
                     GPUBuffer *debugReadback);

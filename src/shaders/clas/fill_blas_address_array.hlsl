@@ -4,15 +4,16 @@
 #include "../dense_geometry.hlsli"
 #include "ptlas_write_instances.hlsli"
 
-StructuredBuffer<VisibleCluster> visibleClusters : register(t5);
-RWStructuredBuffer<BLASData> blasDatas : register(u6);
+StructuredBuffer<VisibleCluster> visibleClusters : register(t7);
+RWStructuredBuffer<BLASData> blasDatas : register(u9);
 
-StructuredBuffer<uint64_t> inputAddressArray : register(t7);
-RWStructuredBuffer<uint64_t> blasAddressArray : register(u9);
+StructuredBuffer<uint64_t> inputAddressArray : register(t10);
+RWStructuredBuffer<uint64_t> blasAddressArray : register(u11);
 
-StructuredBuffer<CLASPageInfo> clasPageInfos : register(t10);
-StructuredBuffer<uint64_t> blasVoxelAddressTable : register(t11);
-StructuredBuffer<GPUInstance> gpuInstances : register(t12);
+StructuredBuffer<CLASPageInfo> clasPageInfos : register(t12);
+StructuredBuffer<uint64_t> blasVoxelAddressTable : register(t13);
+StructuredBuffer<GPUInstance> gpuInstances : register(t14);
+StructuredBuffer<AABB> aabbs : register(t15);
 
 [numthreads(32, 1, 1)]
 void main(uint3 dtID : SV_DispatchThreadID)
@@ -36,15 +37,20 @@ void main(uint3 dtID : SV_DispatchThreadID)
         DenseGeometry header = GetDenseGeometryHeader(basePageAddress, numClusters, clusterIndex);
         uint virtualInstanceID = instance.virtualInstanceIDOffset + 1 + header.id;
 
+        //AABB aabb = aabbs[instance.resourceID];
         AABB aabb;
+#if 0
         aabb.minX = header.boundsMin.x;
         aabb.minY = header.boundsMin.y;
         aabb.minZ = header.boundsMin.z;
         aabb.maxX = header.boundsMax.x;
         aabb.maxY = header.boundsMax.y;
         aabb.maxZ = header.boundsMax.z;
+#endif
 
-        WritePTLASDescriptors(instance, address, virtualInstanceID, addressIndex, aabb, true);
+        //printf("%f %f %f %f %f %f\n", aabb.minX, aabb.minY, aabb.minZ, aabb.maxX, aabb.maxY, aabb.maxZ);
+
+        WritePTLASDescriptors(instance, address, virtualInstanceID, addressIndex, aabb, false, 0u);
     }
     else 
     {

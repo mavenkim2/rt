@@ -125,27 +125,56 @@ void main()
 
                 float3 position = dg.DecodePosition(brickIndex);
                 float voxelSize = dg.lodError;
+                float rcpVoxelSize = 1.f / voxelSize;
 
                 uint x         = voxelIndex & 3u;
                 uint y         = (voxelIndex >> 2u) & 3u;
                 uint z         = voxelIndex >> 4u;
-                float3 boundsMin = position + float3(x, y, z) * voxelSize; 
-                float3 boundsMax = boundsMin + voxelSize;
 
-                float3 objectRayOrigin = query.CandidateObjectRayOrigin();
-                float3 objectRayDir = query.CandidateObjectRayDirection();
-                float3 invDir = rcp(objectRayDir);
+                position += float3(x, y, z) * voxelSize;
+                //float3 boundsMin = position + float3(x, y, z) * voxelSize; 
+                //float3 boundsMax = boundsMin + voxelSize;
+
+                //float3 objectRayOrigin = query.CandidateObjectRayOrigin();
+                //float3 objectRayDir = query.CandidateObjectRayDirection();
+                //float3 invDir = rcp(objectRayDir);
+                //float tEntry, tLeave;
+                //float3 tMin;
+
+                //IntersectAABB(boundsMin, boundsMax, objectRayOrigin, invDir, tEntry, tLeave, tMin);
+
+                float3 objectRayOrigin = (query.CandidateObjectRayOrigin() - position) * rcpVoxelSize;
+                float3 objectRayDir = query.CandidateObjectRayDirection() * rcpVoxelSize;
+                float3 invDir =
+                    float3(abs(objectRayDir.x) < 1e-8f ? 0.f : 1.f / objectRayDir.x, 
+                           abs(objectRayDir.y) < 1e-8f ? 0.f : 1.f / objectRayDir.y, 
+                           abs(objectRayDir.z) < 1e-8f ? 0.f : 1.f / objectRayDir.z);
+
                 float tEntry, tLeave;
                 float3 tMin;
-
-                IntersectAABB(boundsMin, boundsMax, objectRayOrigin, invDir, tEntry, tLeave, tMin);
+                IntersectAABB(float3(0, 0, 0), float3(1, 1, 1), objectRayOrigin, invDir, tEntry, tLeave, tMin);
 
                 tLeave = min(tLeave, hitT);
+                tEntry = max(tEntry, 0);
 
                 if (tEntry <= tLeave)
                 {
+#if 0
+                    Brick brick = dg.DecodeBrick(brickIndex);
+                    uint vertexOffset = GetVoxelVertexOffset(brick.vertexOffset, brick.bitMask, voxelIndex);
+                    float alpha = dg.DecodeCoverage(vertexOffset);
+
+                    if (rng.Uniform() < alpha)
+                    {
+                        hitT = tEntry;
+
+                        query.CommitProceduralPrimitiveHit(tEntry);
+                        break;
+                    }
+#else
                     hitT = tEntry;
                     query.CommitProceduralPrimitiveHit(tEntry);
+#endif
                 }
 #else
                 uint clusterID = query.CandidateInstanceID();

@@ -5,10 +5,10 @@
 #include "../bit_twiddling.hlsli"
 #include "ptlas_write_instances.hlsli"
 
-StructuredBuffer<uint64_t> blasAddresses : register(t5);
-StructuredBuffer<BLASData> blasDatas : register(t6);
-RWStructuredBuffer<GPUInstance> gpuInstances : register(u7);
-StructuredBuffer<AABB> aabbs : register(t8);
+StructuredBuffer<uint64_t> blasAddresses : register(t7);
+StructuredBuffer<BLASData> blasDatas : register(t8);
+RWStructuredBuffer<GPUInstance> gpuInstances : register(u9);
+StructuredBuffer<AABB> aabbs : register(t10);
 
 [numthreads(32, 1, 1)] 
 void main(uint3 dtID : SV_DispatchThreadID)
@@ -24,5 +24,5 @@ void main(uint3 dtID : SV_DispatchThreadID)
     uint64_t address = blasAddresses[blasData.addressIndex];
 
     AABB aabb = aabbs[instance.resourceID];
-    WritePTLASDescriptors(instance, address, instance.virtualInstanceIDOffset, 0, aabb, true);
+    WritePTLASDescriptors(instance, address, instance.virtualInstanceIDOffset, 0, aabb, true, 0x10u);
 }
