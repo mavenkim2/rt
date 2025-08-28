@@ -23,7 +23,7 @@ struct Vec4
     };
 
     Vec4() {}                      //: e{zero, zero, zero, zero} {}
-    Vec4(f32 x) : e{x, x, x, x} {} //: e{zero, zero, zero, zero} {}
+    Vec4(T x) : e{x, x, x, x} {} //: e{zero, zero, zero, zero} {}
     __forceinline Vec4(ZeroTy) : e{zero, zero, zero, zero} {}
     Vec4(T e0, T e1, T e2, T e3) : e{e0, e1, e2, e3} {}
     Vec4(const Vec3<T> &v, T e3) : e{v[0], v[1], v[2], e3} {}

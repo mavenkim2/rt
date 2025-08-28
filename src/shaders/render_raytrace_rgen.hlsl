@@ -49,7 +49,7 @@ void IntersectAABB(float3 boundsMin, float3 boundsMax, float3 o, float3 invDir, 
     tLeave = min(tMax.x, min(tMax.y, tMax.z));
 }
 
-#define TRACE_BRICKS
+//#define TRACE_BRICKS
 
 [shader("raygeneration")]
 void main()

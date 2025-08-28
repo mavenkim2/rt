@@ -92,12 +92,28 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
 
         buildClusterTriangleInfos[descriptorIndex] = desc;
 
+        uint decodeIndex;
+        InterlockedAdd(globals[GLOBALS_ALL_CLUSTER_COUNT_INDEX], 1, decodeIndex);
+
         DecodeClusterData clusterData;
         clusterData.pageIndex = pageIndex;
         clusterData.clusterIndex = clusterID;
         clusterData.indexBufferOffset = indexBufferOffset;
         clusterData.vertexBufferOffset = vertexBufferOffset;
 
-        decodeClusterDatas[descriptorIndex] = clusterData;
+        decodeClusterDatas[decodeIndex] = clusterData;
+    }
+    else if (header.numBricks)
+    {
+        uint decodeIndex;
+        InterlockedAdd(globals[GLOBALS_ALL_CLUSTER_COUNT_INDEX], 1, decodeIndex);
+
+        DecodeClusterData clusterData;
+        clusterData.pageIndex = pageIndex;
+        clusterData.clusterIndex = clusterID;
+        clusterData.indexBufferOffset = ~0u;
+        clusterData.vertexBufferOffset = ~0u;
+
+        decodeClusterDatas[decodeIndex] = clusterData;
     }
 }

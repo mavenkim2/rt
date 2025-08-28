@@ -50,6 +50,7 @@ struct DenseGeometry
     uint flags;
     uint id;
 
+    uint aabbOffset;
     uint numBricks;
     uint brickOffset;
 
@@ -425,7 +426,8 @@ DenseGeometry GetDenseGeometryHeader(uint4 packed[NUM_CLUSTER_HEADER_FLOAT4S], u
     }
     else 
     {
-        result.numBricks = BitFieldExtractU32(packed[2].w, 14, 0);
+        result.numBricks = BitFieldExtractU32(packed[2].w, 8, 0);
+        result.aabbOffset = BitFieldExtractU32(packed[2].w, 20, 8);
     }
 
     result.octBitWidths[0]                = BitFieldExtractU32(packed[3].x, 5, 0);

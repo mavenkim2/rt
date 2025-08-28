@@ -455,7 +455,7 @@ void DenseGeometryBuildData::WriteVoxelData(StaticArray<CompressedVoxel> &voxels
     packed.z                          = shadingBaseAddress;
     packed.a                          = geoBaseAddress;
 
-    Assert(numCompressedVoxels < (1u << 14u));
+    Assert(numCompressedVoxels < (1u << 8u));
     packed.g = numCompressedVoxels | (1u << 31u);
 
     headers.AddBack() = packed;

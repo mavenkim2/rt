@@ -181,6 +181,7 @@ void DebugState::PrintDebugRecords()
         f64 avg            = 0;
         f32 avgInvocations = 0;
         u64 num            = Min(size, record->count);
+        f32 time           = record->totalTimes[record->count % size];
         for (u32 timeIndex = 0; timeIndex < num; timeIndex++)
         {
             avg += record->totalTimes[timeIndex];
@@ -188,8 +189,8 @@ void DebugState::PrintDebugRecords()
         }
         avg /= num;
         avgInvocations /= num;
-        Print("%s | Avg Total Time: %f ms | Avg Invocations: %f\n", record->functionName, avg,
-              avgInvocations);
+        Print("%s | Total Time: %f ms | Avg Total Time: %f ms | Avg Invocations: %f\n",
+              record->functionName, time, avg, avgInvocations);
     }
 
     // u64 triangleCount      = 0;

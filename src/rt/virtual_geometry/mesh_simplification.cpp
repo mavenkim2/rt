@@ -3088,6 +3088,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     scene.BuildTriangleBVH(arenas);
 
     Bounds sceneBounds = scene.GetBounds();
+    Print("%f %f %f\n %f %f %f", sceneBounds.minP[0], sceneBounds.minP[1], sceneBounds.minP[2],
+          sceneBounds.maxP[0], sceneBounds.maxP[1], sceneBounds.maxP[2]);
 
     StaticArray<u32> triangleGeomIDs(scratch.temp.arena, totalNumTriangles);
 
@@ -4011,7 +4013,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
                         if (compressedVoxels.Length())
                         {
-                            RecordAOSSplits record;
+                            RecordAOSSplits record(neg_inf);
                             PrimRef *newPrimRefs = PushArrayNoZero(scratch.temp.arena, PrimRef,
                                                                    compressedVoxels.Length());
 
