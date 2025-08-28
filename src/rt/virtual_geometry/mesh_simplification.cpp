@@ -2697,11 +2697,11 @@ static void GenerateVoxelRefs(PrimRef *out, StaticArray<CompressedVoxel> &voxels
         Vec3f voxelMax = voxelMin + Vec3f(maxP) * voxelSize;
 
         PrimRef ref;
+        ref.primID = voxelIndex;
         for (int axis = 0; axis < 3; axis++)
         {
             ref.min[axis] = -voxelMin[axis];
             ref.max[axis] = voxelMax[axis];
-            ref.primID    = voxelIndex;
 
             record.geomMin[axis] = Max(-voxelMin[axis], record.geomMin[axis]);
             record.geomMax[axis] = Max(voxelMax[axis], record.geomMax[axis]);

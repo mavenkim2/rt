@@ -66,11 +66,9 @@ struct BLASData
     uint clusterStartIndex;
     uint clusterCount;
 
-    // uint voxelClusterStartIndex;
     uint voxelClusterCount;
 
     uint addressIndex;
-    uint tlasIndex;
 };
 
 struct BLASVoxelInfo

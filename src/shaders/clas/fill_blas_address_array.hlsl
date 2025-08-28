@@ -1,18 +1,18 @@
 #include "../bit_twiddling.hlsli"
 #include "../../rt/shader_interop/as_shaderinterop.h"
 #include "../../rt/shader_interop/hierarchy_traversal_shaderinterop.h"
+#include "../dense_geometry.hlsli"
+#include "ptlas_write_instances.hlsli"
 
-StructuredBuffer<uint> globals : register(t0);
-StructuredBuffer<VisibleCluster> visibleClusters : register(t1);
-RWStructuredBuffer<BLASData> blasDatas : register(u2);
+StructuredBuffer<VisibleCluster> visibleClusters : register(t5);
+RWStructuredBuffer<BLASData> blasDatas : register(u6);
 
-StructuredBuffer<uint64_t> inputAddressArray : register(t3);
-RWStructuredBuffer<uint64_t> blasAddressArray : register(u4);
+StructuredBuffer<uint64_t> inputAddressArray : register(t7);
+RWStructuredBuffer<uint64_t> blasAddressArray : register(u9);
 
-StructuredBuffer<CLASPageInfo> clasPageInfos : register(t5);
-StructuredBuffer<uint64_t> blasVoxelAddressTable : register(t6);
-RWStructuredBuffer<uint2> offsetsAndCounts : register(u7);
-RWStructuredBuffer<AccelerationStructureInstance> instanceDescriptors : register(u8);
+StructuredBuffer<CLASPageInfo> clasPageInfos : register(t10);
+StructuredBuffer<uint64_t> blasVoxelAddressTable : register(t11);
+StructuredBuffer<GPUInstance> gpuInstances : register(t12);
 
 [numthreads(32, 1, 1)]
 void main(uint3 dtID : SV_DispatchThreadID)
@@ -29,28 +29,22 @@ void main(uint3 dtID : SV_DispatchThreadID)
     {
         uint addressIndex = pageIndex * MAX_CLUSTERS_PER_PAGE + clusterIndex;
         uint64_t address = blasVoxelAddressTable[addressIndex];
+        GPUInstance instance = gpuInstances[blasDatas[blasIndex].instanceID];
 
-        if (blasDatas[blasIndex].tlasIndex == ~0u)
-        {
-            blasDatas[blasIndex].addressIndex = addressIndex;
-        }
-        else 
-        {
-            float3x4 transform = float3x4(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0);
-            AccelerationStructureInstance instanceDescriptor;
-            instanceDescriptor.transform = transform;
-            instanceDescriptor.instanceID = addressIndex;
-            instanceDescriptor.instanceMask = 0xff;
-            instanceDescriptor.instanceContributionToHitGroupIndex = 0;
-            instanceDescriptor.flags = 0;
-            instanceDescriptor.blasDeviceAddress = address;
+        uint basePageAddress = GetClusterPageBaseAddress(pageIndex);
+        uint numClusters = GetNumClustersInPage(basePageAddress);
+        DenseGeometry header = GetDenseGeometryHeader(basePageAddress, numClusters, clusterIndex);
+        uint virtualInstanceID = instance.virtualInstanceIDOffset + 1 + header.id;
 
-            uint descriptorIndex;
-            uint tlasIndex = blasDatas[blasIndex].tlasIndex + 1;
-            InterlockedAdd(offsetsAndCounts[tlasIndex].y, 1, descriptorIndex);
-            descriptorIndex += offsetsAndCounts[tlasIndex].x;
-            instanceDescriptors[descriptorIndex] = instanceDescriptor;
-        }
+        AABB aabb;
+        aabb.minX = header.boundsMin.x;
+        aabb.minY = header.boundsMin.y;
+        aabb.minZ = header.boundsMin.z;
+        aabb.maxX = header.boundsMax.x;
+        aabb.maxY = header.boundsMax.y;
+        aabb.maxZ = header.boundsMax.z;
+
+        WritePTLASDescriptors(instance, address, virtualInstanceID, addressIndex, aabb, true);
     }
     else 
     {

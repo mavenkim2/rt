@@ -926,7 +926,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         string cmdBufferName =
             PushStr8F(frameScratch.temp.arena, "Graphics Cmd %u", device->frameCount);
         CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Graphics, cmdBufferName);
-        // debugState.BeginFrame(cmd);
+        debugState.BeginFrame(cmd);
 
         if (device->frameCount == 0)
         {
@@ -1063,7 +1063,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         cmd->FlushBarriers();
 
         // Streaming
+        int cpuIndex = TIMED_CPU_RANGE_BEGIN();
         virtualGeometryManager.ProcessRequests(cmd);
+        TIMED_RANGE_END(cpuIndex);
 
         // Instance culling
         {
@@ -1124,18 +1126,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             device->EndEvent(cmd);
         }
 
-        virtualGeometryManager.BuildClusterBLAS(cmd, &visibleClustersBuffer);
-        Semaphore readbackSem   = device->CreateSemaphore();
-        readbackSem.signalValue = 1;
-        cmd->SignalOutsideFrame(readbackSem);
-        // debugState.EndFrame(cmd);
-        device->SubmitCommandBuffer(cmd);
+        virtualGeometryManager.BuildClusterBLAS(cmd, &visibleClustersBuffer,
+                                                &gpuInstancesBuffer.buffer);
 
-        cmd = device->BeginCommandBuffer(QueueType_Graphics, cmdBufferName);
-
-        // sigh....
-        device->Wait(readbackSem);
-        cmd->Wait(readbackSem);
         virtualGeometryManager.BuildPTLAS(cmd, &gpuInstancesBuffer.buffer, &aabbBuffer.buffer,
                                           &readback);
 
@@ -1225,10 +1218,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         cmd->BindDescriptorSets(bindPoint, &descriptorSet, rts.layout);
         cmd->PushConstants(&pushConstant, &pc, rts.layout);
 
-        // int beginIndex = TIMED_GPU_RANGE_BEGIN(cmd, "ray trace");
-        // cmd->Dispatch(dispatchDimX, dispatchDimY, 1);
+        int beginIndex = TIMED_GPU_RANGE_BEGIN(cmd, "ray trace");
+        cmd->Dispatch(dispatchDimX, dispatchDimY, 1);
         cmd->TraceRays(&rts, params->width, params->height, 1);
-        // TIMED_RANGE_END(beginIndex);
+        TIMED_RANGE_END(beginIndex);
 
         // Copy feedback from device to host
         CommandBuffer *transferCmd =
@@ -1242,9 +1235,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         device->SubmitCommandBuffer(transferCmd, true);
 
         device->CopyFrameBuffer(&swapchain, cmd, image);
+        debugState.EndFrame(cmd);
         device->EndFrame(QueueFlag_Copy | QueueFlag_Graphics);
 
-        // debugState.PrintDebugRecords();
+        debugState.PrintDebugRecords();
 
         // Wait until new update
         f32 endWorkFrameTime = OS_NowSeconds();

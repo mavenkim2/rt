@@ -140,7 +140,7 @@ struct VirtualGeometryManager
     const u32 clusterFixupOffset = evictedPagesOffset + sizeof(u32) * maxPageInstallsPerFrame;
     const u32 voxelBlasOffset =
         clusterFixupOffset + maxClusterFixupsPerFrame * sizeof(GPUClusterFixup);
-    const u32 tlasAddressOffset =
+    const u32 clusterAABBOffset =
         voxelBlasOffset + MAX_CLUSTERS_PER_PAGE * sizeof(u64) * maxPageInstallsPerFrame;
 
     enum class PageFlag
@@ -332,16 +332,10 @@ struct VirtualGeometryManager
     GPUBuffer voxelAABBBuffer;
     GPUBuffer voxelBlasBuffer;
     GPUBuffer voxelAddressTable;
-    // GPUBuffer voxelBlasInfosBuffer;
     GPUBuffer voxelCompactedBlasBuffer;
 
     GPUBuffer tlasAccelBuffer;
     GPUBuffer tlasScratchBuffer;
-    GPUBuffer tlasLevel2AccelBuffer;
-    GPUBuffer tlasDescriptors;
-    GPUBuffer tlasOffsetsAndCountsBuffer;
-    GPUBuffer tlasReadbackBuffer;
-    GPUBuffer tlasAddressBuffer;
 
     // u32 requestBatchWriteIndex;
     // RingBuffer<StreamingRequestBatch> streamingRequestBatches;
@@ -369,12 +363,13 @@ struct VirtualGeometryManager
                                  u32 pageIndex, u32 priority);
     bool VerifyPageDependencies(u32 virtualOffset, u32 startPage, u32 numPages);
     bool CheckDuplicatedFixup(u32 virtualOffset, u32 pageIndex, u32 startPage, u32 numPages);
-    void ProcessRequests(CommandBuffer *cmd, GPUBuffer *debugReadback);
+    void ProcessRequests(CommandBuffer *cmd);
     u32 AddNewMesh(Arena *arena, CommandBuffer *cmd, string filename);
     void HierarchyTraversal(CommandBuffer *cmd, GPUBuffer *queueBuffer,
                             GPUBuffer *gpuSceneBuffer, GPUBuffer *workItemQueueBuffer,
                             GPUBuffer *gpuInstancesBuffer, GPUBuffer *visibleClustersBuffer);
-    void BuildClusterBLAS(CommandBuffer *cmd, GPUBuffer *visibleClustersBuffer);
+    void BuildClusterBLAS(CommandBuffer *cmd, GPUBuffer *visibleClustersBuffer,
+                          GPUBuffer *gpuInstancesBuffer);
     void AllocateInstances(StaticArray<GPUInstance> &gpuInstances);
     void BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstances, GPUBuffer *blasSceneBounds,
                     GPUBuffer *debugReadback);
