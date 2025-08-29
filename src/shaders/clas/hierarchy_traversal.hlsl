@@ -20,12 +20,15 @@ float2 TestNode(float3x4 renderFromObject, float3x4 cameraFromRender, float4 lod
 
     // Find angle between vector to cluster center and view vector
     float3 cameraForward = -cameraFromRender[2].xyz;
-    //float zf = abs(dot(cameraForward, center));
-    //float zr = abs(dot(cameraFromRender[0].xyz, center));
-    //float zu = abs(dot(cameraFromRender[1].xyz, center));
 
     float z = dot(cameraForward, center);
-    //float z = max(zf, max(zr, zu));
+    if (z + radius < zNear)
+    {
+        float zf = abs(dot(cameraForward, center));
+        float zr = abs(dot(cameraFromRender[0].xyz, center));
+        float zu = abs(dot(cameraFromRender[1].xyz, center));
+        z = max(zf, max(zr, zu));
+    }
 
     float x = distSqr - z * z;
     x = sqrt(max(0.f, x));

@@ -3,6 +3,8 @@
 RWStructuredBuffer<BLASData> blasDatas : register(u0);
 RWStructuredBuffer<BUILD_CLUSTERS_BOTTOM_LEVEL_INFO> buildClusterBottomLevelInfos : register(u1);
 RWStructuredBuffer<uint> globals : register(u2);
+StructuredBuffer<GPUInstance> gpuInstances : register(t3);
+StructuredBuffer<Resource> resources : register(t4);
 
 [[vk::push_constant]] AddressPushConstant pc;
 
@@ -15,6 +17,14 @@ void main(uint3 DTid : SV_DispatchThreadID)
     BLASData blas = blasDatas[blasIndex];
 
     if (blas.clusterCount == 0) return;
+
+    uint resourceID = gpuInstances[blas.instanceID].resourceID;
+
+    if (resources[resourceID].maxClusters == blas.clusterCount)
+    {
+        blasDatas[blasIndex].addressIndex = resources[resourceID].finestAddressIndex;
+        return;
+    }
 
     uint descriptorIndex;
     InterlockedAdd(globals[GLOBALS_BLAS_FINAL_COUNT_INDEX], 1, descriptorIndex);

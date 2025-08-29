@@ -3110,6 +3110,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
         GenerateValidTriClusters(scratch.temp.arena, combinedMesh, MAX_CLUSTER_TRIANGLES, ~0u,
                                  triangleGeomIDs, partitionResult);
     Assert(success);
+    u32 numFinestClusters = partitionResult.ranges.Length();
 
     StaticArray<u32> newTriangleGeomIDs(scratch.temp.arena, totalNumTriangles);
 
@@ -5068,12 +5069,13 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     u32 totalNumVoxelClusters = numVoxelClusters.load();
     ClusterFileHeader *fileHeader =
         (ClusterFileHeader *)GetMappedPtr(&builder, fileHeaderOffset);
-    fileHeader->magic            = CLUSTER_FILE_MAGIC;
-    fileHeader->numPages         = pageInfos.Length();
-    fileHeader->numNodes         = numNodes;
-    fileHeader->numVoxelClusters = totalNumVoxelClusters;
-    fileHeader->boundsMin        = scene.boundsMin;
-    fileHeader->boundsMax        = scene.boundsMax;
+    fileHeader->magic             = CLUSTER_FILE_MAGIC;
+    fileHeader->numPages          = pageInfos.Length();
+    fileHeader->numNodes          = numNodes;
+    fileHeader->numVoxelClusters  = totalNumVoxelClusters;
+    fileHeader->numFinestClusters = numFinestClusters;
+    // fileHeader->boundsMin        = scene.boundsMin;
+    // fileHeader->boundsMax        = scene.boundsMax;
 
     Print("num voxel clusters: %u\n", totalNumVoxelClusters);
 

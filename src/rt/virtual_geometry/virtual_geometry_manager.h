@@ -205,6 +205,7 @@ struct VirtualGeometryManager
         u32 virtualPageOffset;
 
         u32 totalNumVoxelClusters;
+        u32 numFinestClusters;
 
         PackedHierarchyNode *nodes;
         u32 numNodes;
@@ -272,6 +273,10 @@ struct VirtualGeometryManager
     DescriptorSetLayout ptlasUpdatePartitionsLayout = {};
     VkPipeline ptlasUpdatePartitionsPipeline;
 
+    PushConstant fillFinestClusterBottomLevelInfoPush;
+    DescriptorSetLayout fillFinestClusterBLASInfoLayout = {};
+    VkPipeline fillFinestClusterBLASInfoPipeline;
+
     GPUBuffer evictedPagesBuffer;
     GPUBuffer hierarchyNodeBuffer;
     GPUBuffer clusterPageDataBuffer;
@@ -326,6 +331,9 @@ struct VirtualGeometryManager
     GPUBuffer instanceIDFreeListBuffer;
     GPUBuffer debugBuffer;
 
+    GPUBuffer resourceBuffer;
+    GPUBuffer resourceBitVector;
+
     GPUBuffer ptlasInstanceBitVectorBuffer;
     GPUBuffer ptlasInstanceFrameBitVectorBuffer0;
     GPUBuffer ptlasInstanceFrameBitVectorBuffer1;
@@ -366,6 +374,7 @@ struct VirtualGeometryManager
     bool CheckDuplicatedFixup(u32 virtualOffset, u32 pageIndex, u32 startPage, u32 numPages);
     void ProcessRequests(CommandBuffer *cmd);
     u32 AddNewMesh(Arena *arena, CommandBuffer *cmd, string filename);
+    void FinalizeResources(CommandBuffer *cmd);
     void HierarchyTraversal(CommandBuffer *cmd, GPUBuffer *queueBuffer,
                             GPUBuffer *gpuSceneBuffer, GPUBuffer *workItemQueueBuffer,
                             GPUBuffer *gpuInstancesBuffer, GPUBuffer *visibleClustersBuffer);

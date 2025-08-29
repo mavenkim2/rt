@@ -113,10 +113,11 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
     Shader initializeInstanceFreeListShader = device->CreateShader(
         ShaderStage::Compute, "initialize instance free list", initializeInstanceFreeListData);
 
-    string buildInstanceTlasName   = "../src/shaders/build_instance_tlas.spv";
-    string buildInstanceTlasData   = OS_ReadFile(arena, buildInstanceTlasName);
-    Shader buildInstanceTlasShader = device->CreateShader(
-        ShaderStage::Compute, "build instance tlas", buildInstanceTlasData);
+    string fillFinestClusterBlasName =
+        "../src/shaders/fill_finest_cluster_bottom_level_info.spv";
+    string fillFinestClusterBlasData   = OS_ReadFile(arena, fillFinestClusterBlasName);
+    Shader fillFinestClusterBlasShader = device->CreateShader(
+        ShaderStage::Compute, "fill finest cluster blas", fillFinestClusterBlasData);
 
     string ptlasUpdatePartitionsName   = "../src/shaders/ptlas_update_partitions.spv";
     string ptlasUpdatePartitionsData   = OS_ReadFile(arena, ptlasUpdatePartitionsName);
@@ -237,15 +238,28 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
     fillClusterBottomLevelInfoPush.size   = sizeof(AddressPushConstant);
     fillClusterBottomLevelInfoPush.stage  = ShaderStage::Compute;
 
-    fillClusterBLASInfoLayout.AddBinding(0, DescriptorType::StorageBuffer,
-                                         VK_SHADER_STAGE_COMPUTE_BIT);
-    fillClusterBLASInfoLayout.AddBinding(1, DescriptorType::StorageBuffer,
-                                         VK_SHADER_STAGE_COMPUTE_BIT);
-    fillClusterBLASInfoLayout.AddBinding(2, DescriptorType::StorageBuffer,
-                                         VK_SHADER_STAGE_COMPUTE_BIT);
+    for (int i = 0; i <= 4; i++)
+    {
+        fillClusterBLASInfoLayout.AddBinding(i, DescriptorType::StorageBuffer,
+                                             VK_SHADER_STAGE_COMPUTE_BIT);
+    }
     fillClusterBLASInfoPipeline = device->CreateComputePipeline(
         &fillClusterBLASInfoShader, &fillClusterBLASInfoLayout,
         &fillClusterBottomLevelInfoPush, "fill cluster bottom level info");
+
+    // fill finest
+    fillFinestClusterBottomLevelInfoPush.offset = 0;
+    fillFinestClusterBottomLevelInfoPush.size   = sizeof(AddressPushConstant);
+    fillFinestClusterBottomLevelInfoPush.stage  = ShaderStage::Compute;
+
+    for (int i = 0; i <= 5; i++)
+    {
+        fillFinestClusterBLASInfoLayout.AddBinding(i, DescriptorType::StorageBuffer,
+                                                   VK_SHADER_STAGE_COMPUTE_BIT);
+    }
+    fillFinestClusterBLASInfoPipeline = device->CreateComputePipeline(
+        &fillFinestClusterBlasShader, &fillFinestClusterBLASInfoLayout,
+        &fillFinestClusterBottomLevelInfoPush, "fill finest blas");
 
     // fill blas address array
     for (int i = 0; i <= 15; i++)
@@ -484,6 +498,9 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
                                                  VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                              sizeof(u64) * MAX_CLUSTERS_PER_PAGE * maxPages);
     totalNumBytes += voxelAddressTable.size;
+
+    resourceBitVector = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1024);
+    resourceBuffer    = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1024);
 
     u32 tlasScratchSize, tlasAccelSize;
     device->GetPTLASBuildSizes(1u << 21u, 1u << 17u, 16u, 0, tlasScratchSize, tlasAccelSize);
@@ -833,6 +850,7 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, string 
     meshInfo.totalNumVoxelClusters    = numVoxelClusters;
     meshInfo.boundsMin                = boundsMin;
     meshInfo.boundsMax                = boundsMax;
+    meshInfo.numFinestClusters        = clusterFileHeader.numFinestClusters;
 
     meshInfo.nodes    = nodes;
     meshInfo.numNodes = numNodes;
@@ -843,6 +861,19 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, string 
     meshInfos.Push(meshInfo);
 
     return meshInfos.Length() - 1;
+}
+
+void VirtualGeometryManager::FinalizeResources(CommandBuffer *cmd)
+{
+    ScratchArena scratch;
+    StaticArray<Resource> resources(scratch.temp.arena, meshInfos.Length());
+    for (MeshInfo &meshInfo : meshInfos)
+    {
+        Resource resource    = {};
+        resource.maxClusters = meshInfo.numFinestClusters;
+        resources.Push(resource);
+    }
+    cmd->SubmitBuffer(&resourceBuffer, resources.data, sizeof(Resource) * meshInfos.Length());
 }
 
 void VirtualGeometryManager::RecursePageDependencies(StaticArray<VirtualPageHandle> &pages,
@@ -968,6 +999,13 @@ static Vec3f DecodePosition(u8 *pageData, u32 vertexIndex, Vec3u posBitWidths, V
 
 void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
 {
+    // TODO:
+    // if your min group id is greater than another instance's max group id,
+    // then you can substitute the other instance's cluster blas with your cluster blas
+    // the thing is though this is a trade off no?
+    // it wouldn't have to be group id, it would have to be cluster id
+    // where the cluster id is monotonically increasing as the level increases,
+    // so then it would be flipped? if your max is less than their min
 
     StreamingRequest *requests = (StreamingRequest *)readbackBuffer.mappedPtr;
     u32 numRequests            = requests[0].pageIndex_numPages;
@@ -1785,13 +1823,36 @@ void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd,
         device->EndEvent(cmd);
     }
 
-    {
-        u64 blasClasAddressBufferAddress =
-            device->GetDeviceAddress(blasClasAddressBuffer.buffer);
-        AddressPushConstant pc;
-        pc.addressLowBits  = blasClasAddressBufferAddress & (~0u);
-        pc.addressHighBits = blasClasAddressBufferAddress >> 32u;
+    u64 blasClasAddressBufferAddress = device->GetDeviceAddress(blasClasAddressBuffer.buffer);
+    AddressPushConstant pc;
+    pc.addressLowBits  = blasClasAddressBufferAddress & (~0u);
+    pc.addressHighBits = blasClasAddressBufferAddress >> 32u;
 
+    // Fill finest blas first
+    {
+        device->BeginEvent(cmd, "Fill Finest Cluster BLAS");
+
+        cmd->StartBindingCompute(fillFinestClusterBLASInfoPipeline,
+                                 &fillFinestClusterBLASInfoLayout)
+            .Bind(&blasDataBuffer)
+            .Bind(&buildClusterBottomLevelInfoBuffer)
+            .Bind(&clasGlobalsBuffer)
+            .Bind(gpuInstancesBuffer)
+            .Bind(&resourceBuffer)
+            .Bind(&resourceBitVector)
+            .PushConstants(&fillFinestClusterBottomLevelInfoPush, &pc)
+            .End();
+
+        cmd->DispatchIndirect(&clasGlobalsBuffer, sizeof(u32) * GLOBALS_BLAS_INDIRECT_X);
+
+        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                     VK_ACCESS_2_SHADER_READ_BIT);
+        cmd->FlushBarriers();
+        device->EndEvent(cmd);
+    }
+
+    {
         // Fill out the BUILD_CLUSTERS_BOTTOM_LEVEL_INFO descriptors
         device->BeginEvent(cmd, "Fill Cluster BLAS Info");
 
@@ -1799,6 +1860,8 @@ void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd,
             .Bind(&blasDataBuffer)
             .Bind(&buildClusterBottomLevelInfoBuffer)
             .Bind(&clasGlobalsBuffer)
+            .Bind(gpuInstancesBuffer)
+            .Bind(&resourceBuffer)
             .PushConstants(&fillClusterBottomLevelInfoPush, &pc)
             .End();
 
@@ -1848,44 +1911,6 @@ void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd,
                      VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
         cmd->FlushBarriers();
         device->EndEvent(cmd);
-    }
-
-    if (device->frameCount > 500)
-    {
-        GPUBuffer readback = device->CreateBuffer(
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT, clasGlobalsBuffer.size, MemoryUsage::GPU_TO_CPU);
-        // GPUBuffer readback2 =
-        //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        //                          ptlasIndirectCommandBuffer.size, MemoryUsage::GPU_TO_CPU);
-        // GPUBuffer readback3 =
-        //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        //     ptlasUpdateInfosBuffer.size,
-        //                          MemoryUsage::GPU_TO_CPU);
-        // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-        //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-        //              VK_ACCESS_2_TRANSFER_READ_BIT);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                     VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-        // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-        //              VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-        //              VK_ACCESS_2_TRANSFER_READ_BIT);
-        cmd->FlushBarriers();
-        cmd->CopyBuffer(&readback, &clasGlobalsBuffer);
-        // cmd->CopyBuffer(&readback2, &ptlasIndirectCommandBuffer);
-        // cmd->CopyBuffer(&readback3, &ptlasUpdateInfosBuffer);
-        Semaphore testSemaphore   = device->CreateSemaphore();
-        testSemaphore.signalValue = 1;
-        cmd->SignalOutsideFrame(testSemaphore);
-        device->SubmitCommandBuffer(cmd);
-        device->Wait(testSemaphore);
-        //
-        u32 *data = (u32 *)readback.mappedPtr;
-        // PTLAS_INDIRECT_COMMAND *data2   = (PTLAS_INDIRECT_COMMAND *)readback2.mappedPtr;
-        // PTLAS_UPDATE_INSTANCE_INFO *data3 = (PTLAS_UPDATE_INSTANCE_INFO
-        // *)readback3.mappedPtr;
-
-        int stop = 5;
     }
 
     {
@@ -1984,6 +2009,46 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstan
                      VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
         cmd->FlushBarriers();
         device->EndEvent(cmd);
+    }
+
+    // if (device->frameCount > 500)
+    {
+        GPUBuffer readback = device->CreateBuffer(
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT, clasGlobalsBuffer.size, MemoryUsage::GPU_TO_CPU);
+
+        // GPUBuffer readback2 =
+        //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        //                          ptlasIndirectCommandBuffer.size,
+        // MemoryUsage::GPU_TO_CPU);
+        // GPUBuffer readback3 =
+        //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        //     ptlasUpdateInfosBuffer.size,
+        //                          MemoryUsage::GPU_TO_CPU);
+        // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+        //              VK_ACCESS_2_TRANSFER_READ_BIT);
+        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                     VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+        // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+        //              VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+        //              VK_ACCESS_2_TRANSFER_READ_BIT);
+        cmd->FlushBarriers();
+        cmd->CopyBuffer(debugReadback, &clasGlobalsBuffer);
+        // cmd->CopyBuffer(&readback, &clasGlobalsBuffer);
+        // cmd->CopyBuffer(&readback3, &ptlasUpdateInfosBuffer);
+        // Semaphore testSemaphore   = device->CreateSemaphore();
+        // testSemaphore.signalValue = 1;
+        // cmd->SignalOutsideFrame(testSemaphore);
+        // device->SubmitCommandBuffer(cmd);
+        // device->Wait(testSemaphore);
+
+        // BLASData *data = (BLASData *)readback.mappedPtr;
+        // PTLAS_INDIRECT_COMMAND *data2   = (PTLAS_INDIRECT_COMMAND *)readback2.mappedPtr;
+        // PTLAS_UPDATE_INSTANCE_INFO *data3 = (PTLAS_UPDATE_INSTANCE_INFO
+        // *)readback3.mappedPtr;
+
+        int stop = 5;
     }
 
     // Reset free list counts to 0 if they're negative

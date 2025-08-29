@@ -47,8 +47,7 @@ struct ClusterFileHeader
     uint numPages;
     uint numNodes;
     uint numVoxelClusters;
-    float3 boundsMin;
-    float3 boundsMax;
+    uint numFinestClusters;
 };
 
 struct DecodeClusterData
@@ -275,6 +274,12 @@ struct Brick
 {
     uint64_t bitMask;
     uint vertexOffset;
+};
+
+struct Resource
+{
+    uint maxClusters;
+    uint finestAddressIndex;
 };
 
 #define GLOBALS_VERTEX_BUFFER_OFFSET_INDEX 0

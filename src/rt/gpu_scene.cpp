@@ -616,6 +616,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         aabb.maxZ = boundsMax[2];
         blasSceneBounds.Push(aabb);
     }
+    virtualGeometryManager.FinalizeResources(dgfTransferCmd);
 
     TransferBuffer aabbBuffer =
         dgfTransferCmd->SubmitBuffer(blasSceneBounds.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -753,7 +754,15 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     int envMapBindlessIndex;
 
     ViewCamera camera = {};
+    // camera.pitch      = 0.0536022522f;
+    // camera.yaw        = 1.15505993f;
+    // camera.position   = Vec3f(5518.85205f, 1196.14368f, -11135.9834f);
+    // camera.forward    = Vec3f(0.403283596f, 0.0535765812f, -0.913505197f);
+    // camera.right      = Vec3f(0.911113858f, 0.0692767054f, 0.406290948f);
+
+#if 1
     camera.position   = Vec3f(0);
+    // camera.position = Vec3f(4892.06055f, 767.444824f, -11801.2275f);
     // camera.position = Vec3f(5128.51562f, 1104.60583f, -6173.79395f);
     camera.forward = Normalize(params->look - params->pCamera);
     // camera.forward = Vec3f(-.290819466f, .091174677f, .9524323811f);
@@ -761,6 +770,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     camera.pitch = ArcSin(camera.forward.y);
     camera.yaw   = -Atan2(camera.forward.z, camera.forward.x);
+#endif
 
     Vec3f baseForward = camera.forward;
     Vec3f baseRight   = camera.right;
@@ -788,9 +798,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     Semaphore frameSemaphore = device->CreateSemaphore();
 
-    GPUBuffer readback = device->CreateBuffer(
-        VK_BUFFER_USAGE_TRANSFER_DST_BIT, virtualGeometryManager.ptlasUpdateInfosBuffer.size,
-        MemoryUsage::GPU_TO_CPU);
+    GPUBuffer readback = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                              virtualGeometryManager.clasGlobalsBuffer.size,
+                                              MemoryUsage::GPU_TO_CPU);
 
     for (;;)
     {
@@ -908,7 +918,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         gpuScene.dispatchDimX = dispatchDimX;
         gpuScene.dispatchDimY = dispatchDimY;
 
-        Vec2u *data = (Vec2u *)readback.mappedPtr;
+        u32 *data = (u32 *)readback.mappedPtr;
         if (!device->BeginFrame(false))
         {
             Assert(0);
@@ -918,6 +928,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         {
             int stop = 5;
         }
+
+        Print("%u %u\n", data[GLOBALS_BLAS_BYTES], data[GLOBALS_BLAS_CLAS_COUNT_INDEX]);
 
         Print("frame: %u\n", device->frameCount);
 
@@ -1053,6 +1065,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         cmd->ClearBuffer(&virtualGeometryManager.clasGlobalsBuffer);
         cmd->ClearBuffer(&virtualGeometryManager.streamingRequestsBuffer);
         cmd->ClearBuffer(&virtualGeometryManager.blasDataBuffer);
+        cmd->ClearBuffer(&virtualGeometryManager.resourceBitVector);
         // cmd->ClearBuffer(&tlasBuffer);
         cmd->ClearBuffer(&virtualGeometryManager.ptlasIndirectCommandBuffer);
 

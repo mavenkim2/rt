@@ -1194,7 +1194,7 @@ void Vulkan::CheckInitializedThreadPool(int threadIndex)
 
         poolCreateInfo.pPoolSizes    = poolSize;
         poolCreateInfo.poolSizeCount = ArrayLength(poolSize);
-        poolCreateInfo.maxSets       = 20;
+        poolCreateInfo.maxSets       = 25;
 
         vkCreateDescriptorPool(device, &poolCreateInfo, 0, &pool.descriptorPool[0]);
         vkCreateDescriptorPool(device, &poolCreateInfo, 0, &pool.descriptorPool[1]);
