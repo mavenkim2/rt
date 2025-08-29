@@ -4,20 +4,16 @@
 #include "../../rt/shader_interop/gpu_scene_shaderinterop.h"
 #include "../../rt/shader_interop/as_shaderinterop.h"
 #include "../../rt/shader_interop/hierarchy_traversal_shaderinterop.h"
+#include "../../rt/shader_interop/dense_geometry_shaderinterop.h"
 
 // TODO: hierarchical instance culling
-StructuredBuffer<GPUInstance> gpuInstances : register(t0);
+RWStructuredBuffer<GPUInstance> gpuInstances : register(u0);
 RWStructuredBuffer<uint> globals : register(u1);
 RWStructuredBuffer<CandidateNode> nodeQueue : register(u2);
 RWStructuredBuffer<Queue> queue : register(u3);
 RWStructuredBuffer<BLASData> blasDatas : register(u4);
 ConstantBuffer<GPUScene> gpuScene : register(b5);
-
-#if 0
-RWStructuredBuffer<PTLAS_INDIRECT_COMMAND> ptlasIndirectCommands : register(u6);
-RWStructuredBuffer<PTLAS_UPDATE_INSTANCE_INFO> ptlasInstanceUpdateInfos : register(u7);
-ByteAddressBuffer instanceBitVector : register(t8);
-#endif
+StructuredBuffer<AABB> aabbs : register(t6);
 
 [[vk::push_constant]] NumPushConstant pc;
 
@@ -29,10 +25,14 @@ void main(uint3 dtID : SV_DispatchThreadID)
 
     GPUInstance instance = gpuInstances[instanceIndex];
 
+    AABB aabb = aabbs[instance.resourceID];
+    bool cull = FrustumCull(gpuScene.clipFromRender, instance.worldFromObject, 
+            float3(aabb.minX, aabb.minY, aabb.minZ),
+            float3(aabb.maxX, aabb.maxY, aabb.maxZ), gpuScene.p22, gpuScene.p23);
+
+    instance.cull = cull;
+
 #if 0
-    bool cull = FrustumCull(gpuScene.clipFromRender, instance.renderFromObject, 
-        float3(ref.bounds[0], ref.bounds[1], ref.bounds[2]), 
-        float3(ref.bounds[3], ref.bounds[4], ref.bounds[5]), gpuScene.p22, gpuScene.p23);
 
     if (cull) 
     {

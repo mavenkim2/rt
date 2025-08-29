@@ -10,7 +10,7 @@ static const float zNear = 1e-2f;
 static const float zFar = 1000.f;
 
 // See if child should be visited
-float2 TestNode(float3x4 renderFromObject, float3x4 cameraFromRender, float4 lodBounds, float maxScale, out float test)
+float2 TestNode(float3x4 renderFromObject, float3x4 cameraFromRender, float4 lodBounds, float maxScale, out float test, bool culled)
 {
     // Find length to cluster center
     float3 center = mul(renderFromObject, float4(lodBounds.xyz, 1.f));
@@ -22,7 +22,7 @@ float2 TestNode(float3x4 renderFromObject, float3x4 cameraFromRender, float4 lod
     float3 cameraForward = -cameraFromRender[2].xyz;
 
     float z = dot(cameraForward, center);
-    if (z + radius < zNear)
+    if (culled)
     {
         float zf = abs(dot(cameraForward, center));
         float zr = abs(dot(cameraFromRender[0].xyz, center));
@@ -151,7 +151,7 @@ struct ClusterCull
 
             test = minScale;
 
-            edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, maxScale, test);
+            edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, maxScale, test, instance.cull);
 
             float threshold = maxParentError * minScale * gpuScene.lodScale;
 
@@ -276,7 +276,7 @@ struct ClusterCull
         float maxScale = max(scale.x, max(scale.y, scale.z));
 
         float test;
-        float2 edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, maxScale, test);
+        float2 edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, maxScale, test, instance.cull);
 
         bool isValid = (edgeScales.x > gpuScene.lodScale * lodError * minScale) || (header.flags & CLUSTER_STREAMING_LEAF_FLAG);
 

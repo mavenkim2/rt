@@ -255,6 +255,7 @@ struct GPUInstance
     uint resourceID;
     uint partitionIndex;
     uint virtualInstanceIDOffset;
+    bool cull;
 };
 
 // struct InstanceRef

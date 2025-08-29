@@ -180,19 +180,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     instanceCullingPush.offset       = 0;
 
     DescriptorSetLayout instanceCullingLayout = {};
-    for (int i = 0; i <= 4; i++)
+    for (int i = 0; i <= 6; i++)
     {
         instanceCullingLayout.AddBinding(i, DescriptorType::StorageBuffer,
                                          VK_SHADER_STAGE_COMPUTE_BIT);
     }
-    instanceCullingLayout.AddBinding(5, DescriptorType::UniformBuffer,
-                                     VK_SHADER_STAGE_COMPUTE_BIT);
-    // instanceCullingLayout.AddBinding(7, DescriptorType::StorageBuffer,
-    //                                  VK_SHADER_STAGE_COMPUTE_BIT);
-    // instanceCullingLayout.AddBinding(8, DescriptorType::StorageBuffer,
-    //                                  VK_SHADER_STAGE_COMPUTE_BIT);
-    // instanceCullingLayout.AddBinding(9, DescriptorType::StorageBuffer,
-    //                                  VK_SHADER_STAGE_COMPUTE_BIT);
 
     VkPipeline instanceCullingPipeline =
         device->CreateComputePipeline(&instanceCullingShader, &instanceCullingLayout,
@@ -761,7 +753,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     // camera.right      = Vec3f(0.911113858f, 0.0692767054f, 0.406290948f);
 
 #if 1
-    camera.position   = Vec3f(0);
+    camera.position = Vec3f(0);
     // camera.position = Vec3f(4892.06055f, 767.444824f, -11801.2275f);
     // camera.position = Vec3f(5128.51562f, 1104.60583f, -6173.79395f);
     camera.forward = Normalize(params->look - params->pCamera);
@@ -995,6 +987,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     .Bind(&queueBuffer)
                     .Bind(&virtualGeometryManager.blasDataBuffer)
                     .Bind(&sceneTransferBuffers[currentBuffer].buffer)
+                    .Bind(&aabbBuffer.buffer)
                     // .Bind(&virtualGeometryManager.ptlasIndirectCommandBuffer)
                     // .Bind(&virtualGeometryManager.ptlasUpdateInfosBuffer)
                     // .Bind(&virtualGeometryManager.ptlasInstanceBitVectorBuffer)
@@ -1091,8 +1084,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 .Bind(&workItemQueueBuffer, 0, sizeof(Vec4u) * MAX_CANDIDATE_NODES)
                 .Bind(&queueBuffer)
                 .Bind(&virtualGeometryManager.blasDataBuffer)
-                // .Bind(&virtualGeometryManager.instanceRefBuffer)
                 .Bind(&sceneTransferBuffers[currentBuffer].buffer)
+                .Bind(&aabbBuffer.buffer)
                 // .Bind(&virtualGeometryManager.ptlasIndirectCommandBuffer)
                 // .Bind(&virtualGeometryManager.ptlasUpdateInfosBuffer)
                 // .Bind(&virtualGeometryManager.ptlasInstanceBitVectorBuffer)
