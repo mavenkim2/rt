@@ -880,7 +880,8 @@ struct CommandQueue
     VkQueue queue;
     Mutex lock = {};
 
-    VkSemaphore submitSemaphore[numActiveFrames];
+    //VkSemaphore submitSemaphore[numActiveFrames];
+    VkFence submitFence[numActiveFrames];
     u64 submissionID;
 };
 

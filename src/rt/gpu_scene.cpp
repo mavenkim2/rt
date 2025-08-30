@@ -180,11 +180,13 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     instanceCullingPush.offset       = 0;
 
     DescriptorSetLayout instanceCullingLayout = {};
-    for (int i = 0; i <= 6; i++)
+    for (int i = 0; i <= 5; i++)
     {
         instanceCullingLayout.AddBinding(i, DescriptorType::StorageBuffer,
                                          VK_SHADER_STAGE_COMPUTE_BIT);
     }
+    instanceCullingLayout.AddBinding(6, DescriptorType::UniformBuffer,
+                                     VK_SHADER_STAGE_COMPUTE_BIT);
 
     VkPipeline instanceCullingPipeline =
         device->CreateComputePipeline(&instanceCullingShader, &instanceCullingLayout,
@@ -267,7 +269,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     layout.AddBinding((u32)RTBindings::ShaderDebugInfo, DescriptorType::UniformBuffer, flags);
     layout.AddBinding((u32)RTBindings::ClusterPageData, DescriptorType::StorageBuffer, flags);
     layout.AddBinding((u32)RTBindings::PtexFaceData, DescriptorType::StorageBuffer, flags);
-    layout.AddBinding((u32)RTBindings::Feedback, DescriptorType::StorageBuffer, flags);
+    // layout.AddBinding((u32)RTBindings::Feedback, DescriptorType::StorageBuffer, flags);
 
     layout.AddImmutableSamplers();
 
@@ -676,8 +678,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             Instance *instances    = (Instance *)scene->primitives;
             for (int instanceIndex = 0; instanceIndex < scene->numPrimitives; instanceIndex++)
             {
-                GPUInstance gpuInstance;
-                gpuInstance.resourceID = instances[instanceIndex].id;
+                GPUInstance gpuInstance = {};
+                gpuInstance.resourceID  = instances[instanceIndex].id;
 
                 AffineSpace &transform =
                     scene->affineTransforms[instances[instanceIndex].transformIndex];
@@ -746,13 +748,13 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     int envMapBindlessIndex;
 
     ViewCamera camera = {};
-    // camera.pitch      = 0.0536022522f;
-    // camera.yaw        = 1.15505993f;
-    // camera.position   = Vec3f(5518.85205f, 1196.14368f, -11135.9834f);
-    // camera.forward    = Vec3f(0.403283596f, 0.0535765812f, -0.913505197f);
-    // camera.right      = Vec3f(0.911113858f, 0.0692767054f, 0.406290948f);
+    camera.pitch      = 0.0536022522f;
+    camera.yaw        = 1.15505993f;
+    camera.position   = Vec3f(5518.85205f, 1196.14368f, -11135.9834f);
+    camera.forward    = Vec3f(0.403283596f, 0.0535765812f, -0.913505197f);
+    camera.right      = Vec3f(0.911113858f, 0.0692767054f, 0.406290948f);
 
-#if 1
+#if 0
     camera.position = Vec3f(0);
     // camera.position = Vec3f(4892.06055f, 767.444824f, -11801.2275f);
     // camera.position = Vec3f(5128.51562f, 1104.60583f, -6173.79395f);
@@ -793,7 +795,12 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     GPUBuffer readback = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                               virtualGeometryManager.clasGlobalsBuffer.size,
                                               MemoryUsage::GPU_TO_CPU);
+    // GPUBuffer readback2 = device->CreateBuffer(
+    //     VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+    //     virtualGeometryManager.instanceIDFreeListBuffer.size, MemoryUsage::GPU_TO_CPU);
 
+    Semaphore transferSem   = device->CreateSemaphore();
+    transferSem.signalValue = 1;
     for (;;)
     {
         ScratchArena frameScratch;
@@ -921,9 +928,15 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             int stop = 5;
         }
 
-        Print("%u %u\n", data[GLOBALS_BLAS_BYTES], data[GLOBALS_BLAS_CLAS_COUNT_INDEX]);
-
         Print("frame: %u\n", device->frameCount);
+
+        // for (int i = 0; i < 16; i++)
+        // {
+        //     Print("%u ", *((u32 *)readback2.mappedPtr + 131073 * i));
+        // }
+        // Print("\n");
+        Print("%u %u %u %u\n", data[GLOBALS_BLAS_BYTES], data[GLOBALS_BLAS_CLAS_COUNT_INDEX],
+              data[GLOBALS_VISIBLE_CLUSTER_COUNT_INDEX], data[GLOBALS_DEBUG]);
 
         u32 frame       = device->GetCurrentBuffer();
         GPUImage *image = &images[frame];
@@ -986,8 +999,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     .Bind(&workItemQueueBuffer, 0, sizeof(Vec4u) * MAX_CANDIDATE_NODES)
                     .Bind(&queueBuffer)
                     .Bind(&virtualGeometryManager.blasDataBuffer)
-                    .Bind(&sceneTransferBuffers[currentBuffer].buffer)
                     .Bind(&aabbBuffer.buffer)
+                    .Bind(&sceneTransferBuffers[currentBuffer].buffer)
                     // .Bind(&virtualGeometryManager.ptlasIndirectCommandBuffer)
                     // .Bind(&virtualGeometryManager.ptlasUpdateInfosBuffer)
                     // .Bind(&virtualGeometryManager.ptlasInstanceBitVectorBuffer)
@@ -1049,7 +1062,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         device->SubmitCommandBuffer(transitionCmd);
         device->SubmitCommandBuffer(virtualTextureCopyCmd);
 
-        cmd->ClearBuffer(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
+        // cmd->ClearBuffer(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
 
         // Virtual geometry pass
         cmd->ClearBuffer(&visibleClustersBuffer, ~0u);
@@ -1084,8 +1097,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 .Bind(&workItemQueueBuffer, 0, sizeof(Vec4u) * MAX_CANDIDATE_NODES)
                 .Bind(&queueBuffer)
                 .Bind(&virtualGeometryManager.blasDataBuffer)
-                .Bind(&sceneTransferBuffers[currentBuffer].buffer)
                 .Bind(&aabbBuffer.buffer)
+                .Bind(&sceneTransferBuffers[currentBuffer].buffer)
                 // .Bind(&virtualGeometryManager.ptlasIndirectCommandBuffer)
                 // .Bind(&virtualGeometryManager.ptlasUpdateInfosBuffer)
                 // .Bind(&virtualGeometryManager.ptlasInstanceBitVectorBuffer)
@@ -1135,7 +1148,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             cmd, &visibleClustersBuffer, &gpuInstancesBuffer.buffer, &aabbBuffer.buffer);
 
         virtualGeometryManager.BuildPTLAS(cmd, &gpuInstancesBuffer.buffer, &aabbBuffer.buffer,
-                                          &readback);
+                                          &readback); //, &readback2);
 
         cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                      VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
@@ -1194,8 +1207,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         VkPipelineStageFlags2 flags   = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
         VkPipelineBindPoint bindPoint = VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR;
-        cmd->Barrier(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer, flags,
-                     VK_ACCESS_2_SHADER_WRITE_BIT);
+        // cmd->Barrier(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer, flags,
+        //              VK_ACCESS_2_SHADER_WRITE_BIT);
         cmd->Barrier(&sceneTransferBuffers[currentBuffer].buffer, flags,
                      VK_ACCESS_2_SHADER_WRITE_BIT);
         cmd->Barrier(&shaderDebugBuffers[currentBuffer].buffer, flags,
@@ -1217,8 +1230,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             .Bind(&virtualTextureManager.gpuPhysicalPool)
             .Bind(&shaderDebugBuffers[currentBuffer].buffer)
             .Bind(&virtualGeometryManager.clusterPageDataBuffer)
-            .Bind(&faceDataBuffer)
-            .Bind(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
+            .Bind(&faceDataBuffer);
+        // .Bind(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
 
         cmd->BindDescriptorSets(bindPoint, &descriptorSet, rts.layout);
         cmd->PushConstants(&pushConstant, &pc, rts.layout);
@@ -1231,10 +1244,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         // Copy feedback from device to host
         CommandBuffer *transferCmd =
             device->BeginCommandBuffer(QueueType_Copy, "feedback copy cmd");
-        transferCmd->WaitOn(cmd);
-        transferCmd->CopyBuffer(
-            &virtualTextureManager.feedbackBuffers[currentBuffer].stagingBuffer,
-            &virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
+        cmd->Signal(transferSem);
+        transferCmd->Wait(transferSem);
+        // transferCmd->CopyBuffer(
+        //     &virtualTextureManager.feedbackBuffers[currentBuffer].stagingBuffer,
+        //     &virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
         transferCmd->CopyBuffer(&virtualGeometryManager.readbackBuffer,
                                 &virtualGeometryManager.streamingRequestsBuffer);
         device->SubmitCommandBuffer(transferCmd, true);

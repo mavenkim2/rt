@@ -377,7 +377,10 @@ void Quadric::InitializeEdge(const Vec3f &p0, const Vec3f &p1, f32 weight)
 
     f32 length = Length(n);
 
-    if (length < 1e-8f) return;
+    if (length < 1e-8f)
+    {
+        return;
+    }
 
     n /= length;
 
@@ -387,12 +390,12 @@ void Quadric::InitializeEdge(const Vec3f &p0, const Vec3f &p1, f32 weight)
 
     // Multiply quadric by area (in preparation to be summed by other faces)
     c00 = area - area * n.x * n.x;
-    c01 *= -area * n.x * n.y;
-    c02 *= -area * n.x * n.z;
+    c01 = -area * n.x * n.y;
+    c02 = -area * n.x * n.z;
 
-    c11 *= area - area * n.y * n.y;
-    c12 *= -area * n.y * n.z;
-    c22 *= area - area * n.z * n.z;
+    c11 = area - area * n.y * n.y;
+    c12 = -area * n.y * n.z;
+    c22 = area - area * n.z * n.z;
 }
 
 void Quadric::Add(Quadric &other)
@@ -3271,6 +3274,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     }
 
     std::atomic<u32> numVoxelClusters(0);
+    std::atomic<u32> anyVoxels(0);
     u32 depth = 0;
     {
         // 1. Split triangles into clusters (mesh remains)
@@ -3583,6 +3587,148 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
             std::atomic<u32> numVertices(0);
             std::atomic<u32> numIndices(0);
             std::atomic<u32> numVoxels(0);
+
+            // StaticArray<Mesh> groupMeshes(partitionResult.ranges.Length());
+
+            // let me think through how i'm going to do this
+            // 1. if the mesh has triangles, then combine the triangles
+            // 2. normal simplification code, see if the cluster has islands,
+            // if it does see if the simplification is better w/ voxels or triangles
+
+            // ParallelForLoop(
+            //     0, partitionResult.ranges.Length(), 1, 1, [&](int jobID, int groupIndex) {
+            //         u32 threadIndex = GetThreadIndex();
+            //         Arena *arena    = arenas[threadIndex];
+            //         ScratchArena scratch;
+            //
+            //         PartitionRange range  = partitionResult.ranges[groupIndex];
+            //         u32 groupNumTriangles = 0;
+            //         u32 newGroupIndex     = groupIndex + totalNumGroups;
+            //
+            //         for (int clusterIndexIndex = range.begin; clusterIndexIndex < range.end;
+            //              clusterIndexIndex++)
+            //         {
+            //             int clusterIndex =
+            //             partitionResult.clusterIndices[clusterIndexIndex]; const Cluster
+            //             &cluster = levelClusters[clusterIndex]; groupNumTriangles +=
+            //             cluster.triangleIndices.Length();
+            //         }
+            //
+            //         Vec4f *clusterSpheres =
+            //             PushArrayNoZero(scratch.temp.arena, Vec4f, range.end - range.begin);
+            //         Bounds parentBounds;
+            //
+            //         // Set the child start index of last level's clusters
+            //         for (int clusterIndexIndex = range.begin; clusterIndexIndex < range.end;
+            //              clusterIndexIndex++)
+            //         {
+            //             int clusterIndex =
+            //             partitionResult.clusterIndices[clusterIndexIndex];
+            //
+            //             levelClusters[clusterIndex].groupIndex = newGroupIndex;
+            //
+            //             clusterSpheres[clusterIndexIndex - range.begin] =
+            //                 levelClusters[clusterIndex].lodBounds;
+            //         }
+            //
+            //         Vec4f parentSphereBounds =
+            //             ConstructSphereFromSpheres(clusterSpheres, range.end - range.begin);
+            //
+            //         f32 *groupVertices =
+            //             PushArrayNoZero(scratch.temp.arena, f32,
+            //                             (groupNumTriangles * 3) * (3 + numAttributes));
+            //         u32 *indices =
+            //             PushArrayNoZero(scratch.temp.arena, u32, groupNumTriangles * 3);
+            //         u32 *geomIDs = PushArrayNoZero(scratch.temp.arena, u32,
+            //         groupNumTriangles); u32 vertexCount            = 0; u32 indexCount = 0;
+            //         u32 triangleCount          = 0;
+            //         u32 clusterTotalVoxelCount = 0;
+            //
+            //         u32 numHash = NextPowerOfTwo(groupNumTriangles * 3);
+            //
+            //         f32 maxLodError = 0.f;
+            //
+            //         HashIndex vertexHash(scratch.temp.arena, numHash, numHash);
+            //         HashIndex cornerHash(scratch.temp.arena, numHash, numHash);
+            //
+            //         // Merge clusters into a single vertex and index buffer
+            //         bool hasVoxels = false;
+            //         for (int clusterIndexIndex = range.begin; clusterIndexIndex < range.end;
+            //              clusterIndexIndex++)
+            //         {
+            //             int clusterIndex =
+            //             partitionResult.clusterIndices[clusterIndexIndex]; u32 groupID =
+            //             clusterToGroupID[clusterIndex]; const Cluster &cluster =
+            //             levelClusters[clusterIndex];
+            //
+            //             ClusterGroup &prevClusterGroup =
+            //                 clusterGroups[cluster.childGroupIndex];
+            //
+            //             hasVoxels |= (bool)cluster.compressedVoxels.Length();
+            //             maxLodError = Max(cluster.lodError, maxLodError);
+            //
+            //             for (const CompressedVoxel &voxel : cluster.compressedVoxels)
+            //             {
+            //                 clusterTotalVoxelCount +=
+            //                     PopCount(voxel.bitMask) + PopCount(voxel.bitMask >> 32u);
+            //             }
+            //
+            //             for (u32 index = 0; index < cluster.triangleIndices.Length();
+            //             index++)
+            //             {
+            //                 u32 triangleIndex = triangleCount++;
+            //
+            //                 u32 primID             = cluster.triangleIndices[index];
+            //                 geomIDs[triangleIndex] = cluster.geomIDs[index];
+            //
+            //                 for (int vertIndex = 0; vertIndex < 3; vertIndex++)
+            //                 {
+            //                     u32 indexIndex  = 3 * primID + vertIndex;
+            //                     u32 vertexIndex = prevClusterGroup.indices[indexIndex];
+            //
+            //                     f32 *clusterVertexData =
+            //                         GetVertexData(prevClusterGroup.vertexData, vertexIndex);
+            //                     Vec3f pos =
+            //                         GetPosition(prevClusterGroup.vertexData, vertexIndex);
+            //                     int hashP = Hash(pos);
+            //                     cornerHash.AddInHash(hashP, 3 * triangleIndex + vertIndex);
+            //
+            //                     int hash = MurmurHash32((const char *)clusterVertexData,
+            //                                             vertexDataLen, 0);
+            //
+            //                     u32 newVertexIndex = ~0u;
+            //                     for (int hashIndex = vertexHash.FirstInHash(hash);
+            //                          hashIndex != -1;
+            //                          hashIndex = vertexHash.NextInHash(hashIndex))
+            //                     {
+            //                         f32 *otherVertexData =
+            //                             GetVertexData(groupVertices, hashIndex);
+            //
+            //                         if (memcmp(otherVertexData, clusterVertexData,
+            //                                    vertexDataLen) == 0)
+            //                         {
+            //                             newVertexIndex = (u32)hashIndex;
+            //                             break;
+            //                         }
+            //                     }
+            //
+            //                     if (newVertexIndex == ~0u)
+            //                     {
+            //                         newVertexIndex = vertexCount++;
+            //                         MemoryCopy(GetVertexData(groupVertices, newVertexIndex),
+            //                                    clusterVertexData, vertexDataLen);
+            //                         vertexHash.AddInHash(hash, newVertexIndex);
+            //                     }
+            //
+            //                     indices[indexCount++] = newVertexIndex;
+            //                 }
+            //             }
+            //         }
+            //         Assert(triangleCount == groupNumTriangles);
+            //         Assert(indexCount == groupNumTriangles * 3);
+            //
+            //         if (anyVoxels.load() != 0) return;
+            //     });
 
             ParallelForLoop(
                 0, partitionResult.ranges.Length(), 1, 1, [&](int jobID, int groupIndex) {

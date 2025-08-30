@@ -59,13 +59,17 @@ struct DecodeClusterData
     uint32_t vertexBufferOffset;
 };
 
+struct VoxelPageDecodeData
+{
+    uint32_t offset;
+    int pageIndex;
+};
+
 struct BLASData
 {
     uint instanceID;
     uint clusterStartIndex;
     uint clusterCount;
-
-    uint voxelClusterCount;
 
     uint addressIndex;
 };
@@ -254,7 +258,7 @@ struct GPUInstance
     uint globalRootNodeOffset;
     uint resourceID;
     uint partitionIndex;
-    uint virtualInstanceIDOffset;
+    uint voxelAddressOffset;
     bool cull;
 };
 
@@ -285,7 +289,7 @@ struct Resource
 
 #define GLOBALS_VERTEX_BUFFER_OFFSET_INDEX 0
 #define GLOBALS_INDEX_BUFFER_OFFSET_INDEX  1
-#define GLOBALS_ALL_CLUSTER_COUNT_INDEX    2
+#define GLOBALS_CLAS_COUNT_INDEX           2
 #define GLOBALS_DECODE_INDIRECT_Y          3
 #define GLOBALS_DECODE_INDIRECT_Z          4
 
@@ -314,13 +318,12 @@ struct Resource
 
 #define GLOBALS_DEBUG 20
 
-#define GLOBALS_BLAS_VOXEL_CLUSTER_COUNT_INDEX 21
+#define GLOBALS_UNUSED_CHECK_INDEX 21
 
 #define GLOBALS_PTLAS_UPDATE_COUNT_INDEX 22
 #define GLOBALS_PTLAS_WRITE_COUNT_INDEX  23
 
 #define GLOBALS_VISIBLE_INSTANCE_COUNT 24
-#define GLOBALS_CLAS_COUNT_INDEX       25
 
 #define GLOBALS_SIZE 26
 

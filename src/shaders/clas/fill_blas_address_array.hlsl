@@ -2,18 +2,18 @@
 #include "../../rt/shader_interop/as_shaderinterop.h"
 #include "../../rt/shader_interop/hierarchy_traversal_shaderinterop.h"
 #include "../dense_geometry.hlsli"
-#include "ptlas_write_instances.hlsli"
 
-StructuredBuffer<VisibleCluster> visibleClusters : register(t7);
-RWStructuredBuffer<BLASData> blasDatas : register(u9);
+StructuredBuffer<uint> globals : register(t0);
+StructuredBuffer<VisibleCluster> visibleClusters : register(t1);
+RWStructuredBuffer<BLASData> blasDatas : register(u2);
 
-StructuredBuffer<uint64_t> inputAddressArray : register(t10);
-RWStructuredBuffer<uint64_t> blasAddressArray : register(u11);
+StructuredBuffer<uint64_t> inputAddressArray : register(t3);
+RWStructuredBuffer<uint64_t> blasAddressArray : register(u4);
 
-StructuredBuffer<CLASPageInfo> clasPageInfos : register(t12);
-StructuredBuffer<uint64_t> blasVoxelAddressTable : register(t13);
-StructuredBuffer<GPUInstance> gpuInstances : register(t14);
-StructuredBuffer<AABB> aabbs : register(t15);
+StructuredBuffer<CLASPageInfo> clasPageInfos : register(t5);
+StructuredBuffer<uint64_t> blasVoxelAddressTable : register(t6);
+StructuredBuffer<GPUInstance> gpuInstances : register(t7);
+StructuredBuffer<AABB> aabbs : register(t8);
 
 [numthreads(32, 1, 1)]
 void main(uint3 dtID : SV_DispatchThreadID)
@@ -22,10 +22,10 @@ void main(uint3 dtID : SV_DispatchThreadID)
 
     VisibleCluster visibleCluster = visibleClusters[dtID.x];
     uint blasIndex = visibleCluster.blasIndex;
-    uint clusterIndex = BitFieldExtractU32(visibleCluster.isVoxel_pageIndex_clusterIndex, MAX_CLUSTERS_PER_PAGE_BITS, 0);
-    uint pageIndex = BitFieldExtractU32(visibleCluster.isVoxel_pageIndex_clusterIndex, 12, MAX_CLUSTERS_PER_PAGE_BITS);
-    uint isVoxel = BitFieldExtractU32(visibleCluster.isVoxel_pageIndex_clusterIndex, 1, 12 + MAX_CLUSTERS_PER_PAGE_BITS);
+    uint clusterIndex = BitFieldExtractU32(visibleCluster.pageIndex_clusterIndex, MAX_CLUSTERS_PER_PAGE_BITS, 0);
+    uint pageIndex = BitFieldExtractU32(visibleCluster.pageIndex_clusterIndex, 12, MAX_CLUSTERS_PER_PAGE_BITS);
 
+#if 0
     if (isVoxel)
     {
         uint addressIndex = pageIndex * MAX_CLUSTERS_PER_PAGE + clusterIndex;
@@ -48,11 +48,12 @@ void main(uint3 dtID : SV_DispatchThreadID)
         aabb.maxZ = header.boundsMax.z;
 #endif
 
-        //printf("%f %f %f %f %f %f\n", aabb.minX, aabb.minY, aabb.minZ, aabb.maxX, aabb.maxY, aabb.maxZ);
+        printf("%u\n", header.id);
 
         WritePTLASDescriptors(instance, address, virtualInstanceID, addressIndex, aabb, false, 0u);
     }
     else 
+#endif
     {
         CLASPageInfo clasPageInfo = clasPageInfos[pageIndex];
         uint destIndex;

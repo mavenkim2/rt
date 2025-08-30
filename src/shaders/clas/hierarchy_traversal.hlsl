@@ -161,7 +161,7 @@ struct ClusterCull
             priority = threshold == 0.f ? 0.f : threshold / edgeScales.x;
         }
 
-#if 1
+#if 0
         if (isVisible)
         {
             float3 minP = node.center[childIndex] - node.extents[childIndex];
@@ -205,7 +205,9 @@ struct ClusterCull
             uint numPages = BitFieldExtractU32(leafInfo, MAX_PARTS_PER_GROUP_BITS, MAX_CLUSTERS_PER_PAGE_BITS + MAX_CLUSTERS_PER_GROUP_BITS);
             uint localPageIndex = leafInfo >> (MAX_CLUSTERS_PER_PAGE_BITS + MAX_CLUSTERS_PER_GROUP_BITS + MAX_PARTS_PER_GROUP_BITS);
 
-            if (isValid)
+            bool isVoxel;
+
+            if (isValid && !isVoxel)
             {
                 uint leafWriteOffset;
                 InterlockedAdd(queue[0].leafWriteOffset, numClusters, leafWriteOffset);
@@ -225,6 +227,11 @@ struct ClusterCull
 
                     leafQueue[leafWriteOffset + i] = candidateCluster;
                 }
+            }
+            else if (isValid && isVoxel)
+            {
+                uint depth;
+                blasDatas[candidateNode.blasIndex].addressIndex = (1u << 31u) | depth;
             }
 
             if (isVisible)
@@ -287,17 +294,9 @@ struct ClusterCull
         {
             bool isVoxel = (bool)header.numBricks;
             VisibleCluster cluster;
-            cluster.isVoxel_pageIndex_clusterIndex = (isVoxel << (MAX_CLUSTERS_PER_PAGE_BITS + 12)) | (pageIndex << MAX_CLUSTERS_PER_PAGE_BITS) | clusterIndex;
+            cluster.pageIndex_clusterIndex = (pageIndex << MAX_CLUSTERS_PER_PAGE_BITS) | clusterIndex;
             cluster.blasIndex = blasIndex;
-
-            if (header.numBricks)
-            {
-                InterlockedAdd(blasDatas[blasIndex].voxelClusterCount, 1);
-            }
-            else 
-            {
-                InterlockedAdd(blasDatas[blasIndex].clusterCount, 1);
-            }
+            InterlockedAdd(blasDatas[blasIndex].clusterCount, 1);
 
             selectedClusters[clusterOffset] = cluster;
         }

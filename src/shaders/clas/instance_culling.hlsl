@@ -12,8 +12,8 @@ RWStructuredBuffer<uint> globals : register(u1);
 RWStructuredBuffer<CandidateNode> nodeQueue : register(u2);
 RWStructuredBuffer<Queue> queue : register(u3);
 RWStructuredBuffer<BLASData> blasDatas : register(u4);
-ConstantBuffer<GPUScene> gpuScene : register(b5);
-StructuredBuffer<AABB> aabbs : register(t6);
+StructuredBuffer<AABB> aabbs : register(t5);
+ConstantBuffer<GPUScene> gpuScene : register(b6);
 
 [[vk::push_constant]] NumPushConstant pc;
 

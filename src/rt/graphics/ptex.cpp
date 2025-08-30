@@ -1304,10 +1304,10 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
 
         feedbackBuffers =
             FixedArray<TransferBuffer, numPendingSubmissions>(numPendingSubmissions);
-        feedbackBuffers[0] =
-            device->GetReadbackBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, megabytes(8));
-        feedbackBuffers[1] =
-            device->GetReadbackBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, megabytes(8));
+        // feedbackBuffers[0] =
+        //     device->GetReadbackBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, megabytes(8));
+        // feedbackBuffers[1] =
+        //     device->GetReadbackBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, megabytes(8));
 
         feedbackMutex.count.store(0);
     }
@@ -1470,7 +1470,6 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *tra
     uploadSemaphores[currentBuffer].signalValue++;
     transferCmd->SignalOutsideFrame(uploadSemaphores[currentBuffer]);
     computeCmd->Wait(uploadSemaphores[currentBuffer]);
-
 
 #if 0
     // Write last frame's feedback buffer

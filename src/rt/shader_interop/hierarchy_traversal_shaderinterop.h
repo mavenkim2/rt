@@ -27,7 +27,7 @@ struct CandidateNode
 
 struct VisibleCluster
 {
-    uint isVoxel_pageIndex_clusterIndex;
+    uint pageIndex_clusterIndex;
     uint blasIndex;
 };
 

@@ -57,6 +57,16 @@ struct HierarchyFixup
     }
 };
 
+struct ClusterGroupFixup
+{
+    u32 clusterStartIndex;
+    u32 clusterEndIndex;
+    u32 pageStartIndex;
+    u32 numPages;
+    u32 totalNumBricks;
+    u32 depth;
+};
+
 struct RecordAOSSplits;
 template <i32 N>
 struct BuildRef;
@@ -135,14 +145,6 @@ struct VirtualGeometryManager
 
     const u32 maxClusterFixupsPerFrame = 2 * maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE;
 
-    const u32 hierarchyUploadBufferOffset = maxPageInstallsPerFrame * CLUSTER_PAGE_SIZE;
-    const u32 evictedPagesOffset = hierarchyUploadBufferOffset + sizeof(u32) * maxNodes;
-    const u32 clusterFixupOffset = evictedPagesOffset + sizeof(u32) * maxPageInstallsPerFrame;
-    const u32 voxelBlasOffset =
-        clusterFixupOffset + maxClusterFixupsPerFrame * sizeof(GPUClusterFixup);
-    const u32 clusterAABBOffset =
-        voxelBlasOffset + MAX_CLUSTERS_PER_PAGE * sizeof(u64) * maxPageInstallsPerFrame;
-
     enum class PageFlag
     {
         NonResident,
@@ -195,6 +197,10 @@ struct VirtualGeometryManager
 
         Graph<u32> pageToParentPageGraph;
         Graph<ClusterFixup> pageToParentClusters;
+        Graph<ClusterGroupFixup> pageToVoxelClusterGroup;
+
+        StaticArray<u64> voxelBLASAddressTable;
+        u32 voxelAddressOffset;
 
         Vec3f boundsMin;
         Vec3f boundsMax;
@@ -224,6 +230,10 @@ struct VirtualGeometryManager
 
     DescriptorSetLayout decodeDgfClustersLayout = {};
     VkPipeline decodeDgfClustersPipeline;
+
+    PushConstant decodeVoxelClustersPush;
+    DescriptorSetLayout decodeVoxelClustersLayout = {};
+    VkPipeline decodeVoxelClustersPipeline;
 
     PushConstant clasDefragPush;
     DescriptorSetLayout clasDefragLayout = {};
@@ -282,19 +292,18 @@ struct VirtualGeometryManager
     GPUBuffer clusterPageDataBuffer;
 
     GPUBuffer clusterFixupBuffer;
+    GPUBuffer voxelPageDecodeBuffer;
 
-    GPUBuffer instanceRefBuffer;
+    GPUBuffer pageUploadBuffer;
+    GPUBuffer fixupBuffer;
+    GPUBuffer voxelTransferBuffer;
 
-    GPUBuffer uploadBuffer;
+    // GPUBuffer uploadBuffer;
     GPUBuffer streamingRequestsBuffer;
     GPUBuffer readbackBuffer;
 
     GPUBuffer clusterAccelAddresses;
     GPUBuffer clusterAccelSizes;
-
-    // For defrag
-    GPUBuffer tempClusterAccelAddresses;
-    GPUBuffer tempClusterAccelSizes;
 
     GPUBuffer indexBuffer;
     GPUBuffer vertexBuffer;
@@ -382,7 +391,7 @@ struct VirtualGeometryManager
                           GPUBuffer *gpuInstancesBuffer, GPUBuffer *aabbBuffer);
     void AllocateInstances(StaticArray<GPUInstance> &gpuInstances);
     void BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstances, GPUBuffer *blasSceneBounds,
-                    GPUBuffer *debugReadback);
+                    GPUBuffer *debugReadback); //, GPUBuffer *debugRdbck2);
     void UnlinkLRU(int pageIndex);
     void LinkLRU(int index);
 

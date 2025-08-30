@@ -33,7 +33,7 @@ ConstantBuffer<GPUScene> scene : register(b2);
 StructuredBuffer<GPUMaterial> materials : register(t4);
 ConstantBuffer<ShaderDebugInfo> debugInfo: register(b7);
 
-RWStructuredBuffer<uint> feedbackBuffer : register(u12);
+//RWStructuredBuffer<uint> feedbackBuffer : register(u12);
 
 [[vk::push_constant]] RayPushConstant push;
 

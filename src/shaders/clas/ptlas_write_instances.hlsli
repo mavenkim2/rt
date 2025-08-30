@@ -1,3 +1,4 @@
+#if 0
 #ifndef PTLAS_WRITE_INSTANCES_HLSLI_
 #define PTLAS_WRITE_INSTANCES_HLSLI_
 
@@ -8,46 +9,25 @@ RWStructuredBuffer<uint> thisFrameBitVector : register(u1);
 RWStructuredBuffer<uint> globals : register(u2);
 RWStructuredBuffer<PTLAS_WRITE_INSTANCE_INFO> ptlasInstanceWriteInfos : register(u3);
 RWStructuredBuffer<PTLAS_UPDATE_INSTANCE_INFO> ptlasInstanceUpdateInfos : register(u4);
-RWStructuredBuffer<uint> virtualInstanceTable : register(u5);
-RWStructuredBuffer<int> instanceIDFreeList : register(u6);
 
 RWStructuredBuffer<uint2> debugList : register(u16);
 
-void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint virtualInstanceIndex, uint instanceID, AABB aabb, bool update, uint flags)
+void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint instanceIndex, uint instanceID, AABB aabb, bool update, uint flags)
 {
     uint partition = instance.partitionIndex;
-    uint2 offsets = uint2(virtualInstanceIndex >> 5u, virtualInstanceIndex & 31u);
-    //bool wasRendered = renderedBitVector[offsets.x] & (1u << offsets.y);
 
-    uint instanceIndex = virtualInstanceTable[virtualInstanceIndex];
+    uint2 offsets = uint2(instanceIndex >> 5u, instanceIndex & 31u);
+
+    bool wasRendered = renderedBitVector[offsets.x] & (1u << offsets.y);
 
     const int maxInstances = 1u << 21u;
     const int numPartitions = 16;
     const int numInstancesPerPartition = maxInstances / numPartitions;
 
-    if (instanceIndex == ~0u)
+    if (!wasRendered)
     {
-        uint freeListCountIndex = partition * (numInstancesPerPartition + 1u);
-        int freeListIndex;
-        InterlockedAdd(instanceIDFreeList[freeListCountIndex], -1, freeListIndex);
-        if (freeListIndex < 1)
-        {
-            return;
-        }
-
-        instanceIndex = partition * numInstancesPerPartition + instanceIDFreeList[freeListCountIndex + freeListIndex];
-
         uint descriptorIndex;
         InterlockedAdd(globals[GLOBALS_PTLAS_WRITE_COUNT_INDEX], 1, descriptorIndex);
-
-        uint storedInstanceIndex = instanceIndex;
-
-        // debug
-#if 0
-        uint debugIndex;
-        InterlockedAdd(globals[GLOBALS_DEBUG], 1, debugIndex);
-        debugList[debugIndex] = uint2(instanceIndex, freeListIndex);
-#endif
 
         PTLAS_WRITE_INSTANCE_INFO instanceInfo = (PTLAS_WRITE_INSTANCE_INFO)0;
         if (flags & 0x10u)
@@ -73,11 +53,6 @@ void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint virtualI
                 instanceInfo.explicitAABB[3 + i] = maxP[i];
             }
         }
-        else 
-        {
-            storedInstanceIndex |= 1u << 31u;
-        }
-        virtualInstanceTable[virtualInstanceIndex] = storedInstanceIndex;
         instanceInfo.instanceFlags |= flags;
 
         instanceInfo.transform = instance.worldFromObject;
@@ -93,7 +68,6 @@ void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint virtualI
     }
     else if (update)
     {
-        instanceIndex &= 0x7fffffffu;
         uint descriptorIndex;
         InterlockedAdd(globals[GLOBALS_PTLAS_UPDATE_COUNT_INDEX], 1, descriptorIndex);
 
@@ -108,4 +82,5 @@ void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint virtualI
     InterlockedOr(thisFrameBitVector[offsets.x], 1u << offsets.y);
 }
 
+#endif
 #endif

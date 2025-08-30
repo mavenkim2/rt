@@ -6,7 +6,6 @@ RWStructuredBuffer<float3> decodeVertexBuffer : register(u1);
 
 StructuredBuffer<DecodeClusterData> decodeClusterDatas : register(t2);
 StructuredBuffer<uint> globals : register(t3);
-RWStructuredBuffer<AABB> aabbs : register(u4);
 
 #define THREAD_GROUP_SIZE 32
 [numthreads(THREAD_GROUP_SIZE, 1, 1)] 
@@ -14,7 +13,7 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
 {
     uint clusterID = groupID.x;
 
-    if (clusterID >= globals[GLOBALS_ALL_CLUSTER_COUNT_INDEX]) return;
+    if (clusterID >= globals[GLOBALS_CLAS_COUNT_INDEX]) return;
 
     DecodeClusterData decodeClusterData = decodeClusterDatas[clusterID];
     uint pageIndex = decodeClusterData.pageIndex;
@@ -56,63 +55,6 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
         {
             float3 position = header.DecodePosition(vertexIndex);
             decodeVertexBuffer[vertexBufferOffset + vertexIndex] = position;
-        }
-    }
-    else if (header.numBricks)
-    {
-        for (uint brickIndex = groupIndex; brickIndex < header.numBricks; brickIndex += THREAD_GROUP_SIZE)
-        {
-            Brick brick = header.DecodeBrick(brickIndex);
-            float3 position = header.DecodePosition(brickIndex);
-
-            uint3 maxP;
-            GetBrickMax(brick.bitMask, maxP);
-
-#ifndef TRACE_BRICKS
-            uint aabbOffset = header.aabbOffset + brickIndex * 64;
-            for (uint i = 0; i < 64; i++)
-            {
-                uint bit = i;
-                if ((brick.bitMask >> i) & 1)
-                {
-                    uint x         = bit & 3u;
-                    uint y         = (bit >> 2u) & 3u;
-                    uint z         = bit >> 4u;
-                    float3 aabbMin = position + float3(x, y, z) * header.lodError;
-                    float3 aabbMax = aabbMin + header.lodError;
-
-                    AABB aabb;
-                    aabb.minX = aabbMin.x;
-                    aabb.minY = aabbMin.y;
-                    aabb.minZ = aabbMin.z;
-                    aabb.maxX = aabbMax.x;
-                    aabb.maxY = aabbMax.y;
-                    aabb.maxZ = aabbMax.z;
-
-                    aabbs[aabbOffset++] = aabb;
-                }
-                else
-                {
-                    AABB aabb = (AABB)0;
-                    aabb.minX = 0.f/0.f;
-                    aabbs[aabbOffset++] = aabb;
-                }
-            }
-
-#else    
-            float3 aabbMin = position;
-            float3 aabbMax = position + Vec3f(maxP) * lodError;
-
-            AABB aabb;
-            aabb.minX = aabbMin.x;
-            aabb.minY = aabbMin.y;
-            aabb.minZ = aabbMin.z;
-            aabb.maxX = aabbMax.x;
-            aabb.maxY = aabbMax.y;
-            aabb.maxZ = aabbMax.z;
-
-            aabbs[aabbOffset++] = aabb;
-#endif
         }
     }
 }

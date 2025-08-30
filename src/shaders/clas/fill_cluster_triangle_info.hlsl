@@ -13,9 +13,7 @@ RWStructuredBuffer<CLASPageInfo> clasPageInfos : register(u4);
 [[vk::push_constant]] FillClusterTriangleInfoPushConstant pc;
 
 groupshared uint clusterStartIndex;
-groupshared uint decodeStartIndex;
 groupshared uint numTriangleClusters;
-groupshared uint numVoxelClusters;
 
 [numthreads(MAX_CLUSTERS_PER_PAGE, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupID, uint groupIndex : SV_GroupIndex)
@@ -33,7 +31,6 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
     if (groupIndex == 0)
     {
         numTriangleClusters = 0;
-        numVoxelClusters = 0;
     }
     GroupMemoryBarrierWithGroupSync();
 
@@ -51,19 +48,14 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
     {
         InterlockedAdd(numTriangleClusters, 1, addressOffset);
     }
-    else if (header.numBricks)
-    {
-        InterlockedAdd(numVoxelClusters, 1, addressOffset);
-    }
     GroupMemoryBarrierWithGroupSync();
 
     if (groupIndex == 0)
     {
         InterlockedAdd(globals[GLOBALS_CLAS_COUNT_INDEX], numTriangleClusters, clusterStartIndex);
-        InterlockedAdd(globals[GLOBALS_ALL_CLUSTER_COUNT_INDEX], numClusters, decodeStartIndex);
 
         clasPageInfos[pageIndex].addressStartIndex = pc.clusterOffset + clusterStartIndex;
-        clasPageInfos[pageIndex].tempClusterOffset = decodeStartIndex;
+        clasPageInfos[pageIndex].tempClusterOffset = clusterStartIndex;
         clasPageInfos[pageIndex].clasSize = 0;
         clasPageInfos[pageIndex].numTriangleClusters = numTriangleClusters;
     }
@@ -99,24 +91,12 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
 
         buildClusterTriangleInfos[descriptorIndex] = desc;
 
-        uint decodeIndex = decodeStartIndex + addressOffset;
+        uint decodeIndex = clusterStartIndex + addressOffset;
         DecodeClusterData clusterData;
         clusterData.pageIndex = pageIndex;
         clusterData.clusterIndex = clusterID;
         clusterData.indexBufferOffset = indexBufferOffset;
         clusterData.vertexBufferOffset = vertexBufferOffset;
-
-        decodeClusterDatas[decodeIndex] = clusterData;
-    }
-    else if (header.numBricks)
-    {
-        uint decodeIndex = decodeStartIndex + numTriangleClusters + addressOffset;
-
-        DecodeClusterData clusterData;
-        clusterData.pageIndex = pageIndex;
-        clusterData.clusterIndex = clusterID;
-        clusterData.indexBufferOffset = ~0u;
-        clusterData.vertexBufferOffset = ~0u;
 
         decodeClusterDatas[decodeIndex] = clusterData;
     }

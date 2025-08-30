@@ -11,54 +11,63 @@ RWStructuredBuffer<PTLAS_WRITE_INSTANCE_INFO> ptlasInstanceWriteInfos : register
 [numthreads(32, 1, 1)]
 void main(uint dtID : SV_DispatchThreadID)
 {
-    uint frameBits = thisFrameBitVector[dtID.x];
-    uint lastFrameBits = lastFrameBitVector[dtID.x];
-
-    const int maxInstances = 1u << 21u;
-    const int numPartitions = 16;
-    const int numInstancesPerPartition = maxInstances / numPartitions;
-
-    uint unusedMask = lastFrameBits & ~frameBits;
-    while (unusedMask)
+    for (;;)
     {
-        //uint instanceIndex = 32 * dtID.x + firstbitlow(unusedMask);
-        uint virtualInstanceIndex = 32 * dtID.x + firstbitlow(unusedMask);
+        uint index;
+        InterlockedAdd(globals[GLOBALS_UNUSED_CHECK_INDEX], 1, index);
 
-        uint instanceIndex = virtualInstanceTable[virtualInstanceIndex];
-        bool update = instanceIndex >> 31u;
-        instanceIndex &= 0x7fffffffu;
+        const int maxInstances = 1u << 21u;
+        const int numPartitions = 16;
+        const int numInstancesPerPartition = maxInstances / numPartitions;
+        const int maxIndex = (1u << 24u) >> 3u;
 
-        uint partition = instanceIndex / numInstancesPerPartition;
-        uint descriptorIndex;
+        if (index >= maxIndex) break;
 
-        if (!update)
+        uint frameBits = thisFrameBitVector[index];
+        uint lastFrameBits = lastFrameBitVector[index];
+
+        uint unusedMask = lastFrameBits & ~frameBits;
+        while (unusedMask)
         {
-            PTLAS_WRITE_INSTANCE_INFO instanceInfo = (PTLAS_WRITE_INSTANCE_INFO)0;
-            instanceInfo.instanceIndex = instanceIndex;
+            uint virtualInstanceIndex = 32 * index + firstbitlow(unusedMask);
 
-            InterlockedAdd(globals[GLOBALS_PTLAS_WRITE_COUNT_INDEX], 1, descriptorIndex);
-            ptlasInstanceWriteInfos[descriptorIndex] = instanceInfo;
+            uint instanceIndex = virtualInstanceTable[virtualInstanceIndex];
+            bool update = instanceIndex >> 31u;
+            instanceIndex &= 0x7fffffffu;
+
+            uint partition = instanceIndex / numInstancesPerPartition;
+            uint descriptorIndex;
+
+            if (update)
+            {
+                InterlockedAdd(globals[GLOBALS_PTLAS_UPDATE_COUNT_INDEX], 1, descriptorIndex);
+
+                PTLAS_UPDATE_INSTANCE_INFO instanceInfo;
+                instanceInfo.instanceIndex = instanceIndex;
+                instanceInfo.instanceContributionToHitGroupIndex = 0;
+                instanceInfo.accelerationStructure = 0;
+                ptlasInstanceUpdateInfos[descriptorIndex] = instanceInfo;
+            }
+            else 
+            {
+                PTLAS_WRITE_INSTANCE_INFO instanceInfo = (PTLAS_WRITE_INSTANCE_INFO)0;
+                instanceInfo.instanceMask = 0xff;
+                instanceInfo.instanceIndex = instanceIndex;
+
+                InterlockedAdd(globals[GLOBALS_PTLAS_WRITE_COUNT_INDEX], 1, descriptorIndex);
+                ptlasInstanceWriteInfos[descriptorIndex] = instanceInfo;
+            }
+
+            virtualInstanceTable[virtualInstanceIndex] = ~0u;
+
+            instanceIndex = instanceIndex % numInstancesPerPartition;
+            uint freeListCountIndex = partition * (numInstancesPerPartition + 1u);
+            int freeListIndex;
+            InterlockedAdd(instanceIDFreeList[freeListCountIndex], 1, freeListIndex);
+            freeListIndex += freeListCountIndex;
+            instanceIDFreeList[freeListIndex + 1] = instanceIndex;
+
+            unusedMask &= unusedMask - 1;
         }
-        else 
-        {
-            InterlockedAdd(globals[GLOBALS_PTLAS_UPDATE_COUNT_INDEX], 1, descriptorIndex);
-
-            PTLAS_UPDATE_INSTANCE_INFO instanceInfo;
-            instanceInfo.instanceIndex = instanceIndex;
-            instanceInfo.instanceContributionToHitGroupIndex = 0;
-            instanceInfo.accelerationStructure = 0;
-            ptlasInstanceUpdateInfos[descriptorIndex] = instanceInfo;
-        }
-
-        virtualInstanceTable[virtualInstanceIndex] = ~0u;
-
-        instanceIndex = instanceIndex % numInstancesPerPartition;
-        uint freeListCountIndex = partition * (numInstancesPerPartition + 1u);
-        int freeListIndex;
-        InterlockedAdd(instanceIDFreeList[freeListCountIndex], 1, freeListIndex);
-        freeListIndex += freeListCountIndex;
-        instanceIDFreeList[freeListIndex + 1] = instanceIndex;
-
-        unusedMask &= unusedMask - 1;
     }
 }

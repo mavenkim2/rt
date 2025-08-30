@@ -537,8 +537,11 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
         queues[i].submissionID = 0;
         for (int frame = 0; frame < numActiveFrames; frame++)
         {
-            Semaphore s                      = CreateSemaphore();
-            queues[i].submitSemaphore[frame] = s.semaphore;
+            VkFenceCreateInfo info = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+            VkResult result = vkCreateFence(device, &info, 0, &queues[i].submitFence[frame]);
+            VK_CHECK(result);
+            // Semaphore s                      = CreateSemaphore();
+            // queues[i].submitSemaphore[frame] = s.semaphore;
         }
     }
     u32 numProcessors = OS_NumProcessors();
@@ -1290,14 +1293,14 @@ void Vulkan::SubmitCommandBuffer(CommandBuffer *cmd, bool frame, bool parallel)
         signalSubmitInfo[i].semaphore = cmd->signalSemaphores[i].semaphore;
         signalSubmitInfo[i].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
     }
-    if (frame)
-    {
-        signalSubmitInfo[signalSize].sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-        u32 submissionID                       = queue.submissionID + 1;
-        signalSubmitInfo[signalSize].value     = submissionID;
-        signalSubmitInfo[signalSize].semaphore = queue.submitSemaphore[GetCurrentBuffer()];
-        signalSubmitInfo[signalSize].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-    }
+    // if (frame)
+    // {
+    //     signalSubmitInfo[signalSize].sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+    //     u32 submissionID                       = queue.submissionID + 1;
+    //     signalSubmitInfo[signalSize].value     = submissionID;
+    //     signalSubmitInfo[signalSize].semaphore = queue.submitSemaphore[GetCurrentBuffer()];
+    //     signalSubmitInfo[signalSize].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    // }
 
     VkCommandBufferSubmitInfo bufferSubmitInfo = {
         VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
@@ -1305,20 +1308,21 @@ void Vulkan::SubmitCommandBuffer(CommandBuffer *cmd, bool frame, bool parallel)
 
     info.waitSemaphoreInfoCount   = waitSize;
     info.pWaitSemaphoreInfos      = submitInfo;
-    info.signalSemaphoreInfoCount = signalSize + frame;
+    info.signalSemaphoreInfoCount = signalSize; // + frame;
     info.pSignalSemaphoreInfos    = signalSubmitInfo;
     info.commandBufferInfoCount   = 1;
     info.pCommandBufferInfos      = &bufferSubmitInfo;
 
     if (parallel) BeginMutex(&queue.lock);
-    vkQueueSubmit2(queue.queue, 1, &info, VK_NULL_HANDLE);
+    vkQueueSubmit2(queue.queue, 1, &info,
+                   frame ? queue.submitFence[GetCurrentBuffer()] : VK_NULL_HANDLE);
     if (parallel) EndMutex(&queue.lock);
 
     cmd->waitSemaphores.clear();
     cmd->signalSemaphores.clear();
     if (frame)
     {
-        cmd->semaphore    = queue.submitSemaphore[GetCurrentBuffer()];
+        // cmd->semaphore    = queue.submitSemaphore[GetCurrentBuffer()];
         cmd->submissionID = queue.submissionID + 1;
     }
 
@@ -3981,17 +3985,22 @@ bool Vulkan::BeginFrame(bool doubleBuffer)
             CommandQueue &queue = queues[i];
             if (queue.submissionID >= threshold)
             {
-                u64 val                      = queue.submissionID - doubleBuffer;
-                VkSemaphoreWaitInfo waitInfo = {VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
-                waitInfo.pValues             = &val;
-                waitInfo.semaphoreCount      = 1;
-                waitInfo.pSemaphores         = &queue.submitSemaphore[GetCurrentBuffer()];
-                VkResult result = vkWaitSemaphores(device, &waitInfo, 10e9); // UINT64_MAX);
+                u64 val         = queue.submissionID - doubleBuffer;
+                VkResult result = vkWaitForFences(
+                    device, 1, &queue.submitFence[GetCurrentBuffer()], true, 10e9);
+                // VkSemaphoreWaitInfo waitInfo = {VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+                // waitInfo.pValues             = &val;
+                // waitInfo.semaphoreCount      = 1;
+                // // waitInfo.pSemaphores         =
+                // &queue.submitSemaphore[GetCurrentBuffer()]; waitInfo.pSemaphores =
+                // &queue.submitSemaphore[GetCurrentBuffer()];
+                // VkResult result = vkWaitSemaphores(device, &waitInfo, 10e9); // UINT64_MAX);
 
                 if (result != VK_SUCCESS)
                 {
                     success = false;
                 }
+                vkResetFences(device, 1, &queue.submitFence[GetCurrentBuffer()]);
             }
         }
     }
