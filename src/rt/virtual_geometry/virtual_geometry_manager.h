@@ -57,13 +57,13 @@ struct HierarchyFixup
     }
 };
 
-struct ClusterGroupFixup
+struct VoxelClusterGroupFixup
 {
     u32 clusterStartIndex;
     u32 clusterEndIndex;
     u32 pageStartIndex;
     u32 numPages;
-    u32 totalNumBricks;
+    u32 clusterOffset;
     u32 depth;
 };
 
@@ -197,10 +197,12 @@ struct VirtualGeometryManager
 
         Graph<u32> pageToParentPageGraph;
         Graph<ClusterFixup> pageToParentClusters;
-        Graph<ClusterGroupFixup> pageToVoxelClusterGroup;
 
-        StaticArray<u64> voxelBLASAddressTable;
+        StaticArray<VoxelClusterGroupFixup> voxelClusterGroupFixups;
+
+        u32 voxelBLASBitmask;
         u32 voxelAddressOffset;
+        u32 clusterLookupTableOffset;
 
         Vec3f boundsMin;
         Vec3f boundsMax;
@@ -336,8 +338,8 @@ struct VirtualGeometryManager
     GPUBuffer ptlasWriteInfosBuffer;
     GPUBuffer ptlasUpdateInfosBuffer;
 
-    GPUBuffer virtualInstanceTableBuffer;
-    GPUBuffer instanceIDFreeListBuffer;
+    // GPUBuffer virtualInstanceTableBuffer;
+    // GPUBuffer instanceIDFreeListBuffer;
     GPUBuffer debugBuffer;
 
     GPUBuffer resourceBuffer;
@@ -346,11 +348,13 @@ struct VirtualGeometryManager
     GPUBuffer ptlasInstanceBitVectorBuffer;
     GPUBuffer ptlasInstanceFrameBitVectorBuffer0;
     GPUBuffer ptlasInstanceFrameBitVectorBuffer1;
+    GPUBuffer instanceBitmasksBuffer;
 
     GPUBuffer voxelAABBBuffer;
     GPUBuffer voxelBlasBuffer;
     GPUBuffer voxelAddressTable;
     GPUBuffer voxelCompactedBlasBuffer;
+    GPUBuffer clusterLookupTableBuffer;
 
     GPUBuffer tlasAccelBuffer;
     GPUBuffer tlasScratchBuffer;

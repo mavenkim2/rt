@@ -270,6 +270,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     layout.AddBinding((u32)RTBindings::ClusterPageData, DescriptorType::StorageBuffer, flags);
     layout.AddBinding((u32)RTBindings::PtexFaceData, DescriptorType::StorageBuffer, flags);
     // layout.AddBinding((u32)RTBindings::Feedback, DescriptorType::StorageBuffer, flags);
+    layout.AddBinding(13, DescriptorType::StorageBuffer, flags);
 
     layout.AddImmutableSamplers();
 
@@ -974,7 +975,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             computeCmd->ClearBuffer(&virtualGeometryManager.clasGlobalsBuffer);
             computeCmd->ClearBuffer(&virtualGeometryManager.streamingRequestsBuffer);
             computeCmd->ClearBuffer(&virtualGeometryManager.blasDataBuffer);
-            computeCmd->ClearBuffer(&virtualGeometryManager.virtualInstanceTableBuffer, ~0u);
+            // computeCmd->ClearBuffer(&virtualGeometryManager.virtualInstanceTableBuffer,
+            // ~0u);
             computeCmd->ClearBuffer(&virtualGeometryManager.ptlasInstanceBitVectorBuffer);
             computeCmd->ClearBuffer(
                 &virtualGeometryManager.ptlasInstanceFrameBitVectorBuffer0);
@@ -1072,6 +1074,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         cmd->ClearBuffer(&virtualGeometryManager.streamingRequestsBuffer);
         cmd->ClearBuffer(&virtualGeometryManager.blasDataBuffer);
         cmd->ClearBuffer(&virtualGeometryManager.resourceBitVector);
+        cmd->ClearBuffer(&virtualGeometryManager.instanceBitmasksBuffer);
         // cmd->ClearBuffer(&tlasBuffer);
         cmd->ClearBuffer(&virtualGeometryManager.ptlasIndirectCommandBuffer);
 
@@ -1230,7 +1233,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             .Bind(&virtualTextureManager.gpuPhysicalPool)
             .Bind(&shaderDebugBuffers[currentBuffer].buffer)
             .Bind(&virtualGeometryManager.clusterPageDataBuffer)
-            .Bind(&faceDataBuffer);
+            .Bind(&faceDataBuffer)
+            .Bind(&virtualGeometryManager.clusterLookupTableBuffer);
         // .Bind(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
 
         cmd->BindDescriptorSets(bindPoint, &descriptorSet, rts.layout);

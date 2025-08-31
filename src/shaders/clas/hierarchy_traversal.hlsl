@@ -109,6 +109,7 @@ RWStructuredBuffer<VisibleCluster> selectedClusters : register(u7);
 RWStructuredBuffer<BLASData> blasDatas : register(u9);
 
 RWStructuredBuffer<StreamingRequest> requests : register(u10);
+RWStructuredBuffer<uint> instanceBitmasks : register(u11);
 
 struct ClusterCull 
 {
@@ -205,9 +206,7 @@ struct ClusterCull
             uint numPages = BitFieldExtractU32(leafInfo, MAX_PARTS_PER_GROUP_BITS, MAX_CLUSTERS_PER_PAGE_BITS + MAX_CLUSTERS_PER_GROUP_BITS);
             uint localPageIndex = leafInfo >> (MAX_CLUSTERS_PER_PAGE_BITS + MAX_CLUSTERS_PER_GROUP_BITS + MAX_PARTS_PER_GROUP_BITS);
 
-            bool isVoxel;
-
-            if (isValid && !isVoxel)
+            if (isValid)
             {
                 uint leafWriteOffset;
                 InterlockedAdd(queue[0].leafWriteOffset, numClusters, leafWriteOffset);
@@ -227,11 +226,6 @@ struct ClusterCull
 
                     leafQueue[leafWriteOffset + i] = candidateCluster;
                 }
-            }
-            else if (isValid && isVoxel)
-            {
-                uint depth;
-                blasDatas[candidateNode.blasIndex].addressIndex = (1u << 31u) | depth;
             }
 
             if (isVisible)
@@ -268,6 +262,7 @@ struct ClusterCull
         uint numClusters = GetNumClustersInPage(baseAddress);
         DenseGeometry header = GetDenseGeometryHeader(baseAddress, numClusters, clusterIndex);
 
+        bool isVoxel = header.numBricks;
         float4 lodBounds = header.lodBounds;
         float lodError = header.lodError;
 
@@ -290,7 +285,7 @@ struct ClusterCull
         uint clusterOffset;
         WaveInterlockedAddScalarTest(globals[GLOBALS_VISIBLE_CLUSTER_COUNT_INDEX], isValid, 1, clusterOffset);
 
-        if (isValid)
+        if (isValid && !isVoxel)
         {
             bool isVoxel = (bool)header.numBricks;
             VisibleCluster cluster;
@@ -299,6 +294,11 @@ struct ClusterCull
             InterlockedAdd(blasDatas[blasIndex].clusterCount, 1);
 
             selectedClusters[clusterOffset] = cluster;
+        }
+        else if (isValid && isVoxel)
+        {
+            uint depth;
+            InterlockedOr(instanceBitmasks[instanceID], 1u << depth);
         }
     }
 };

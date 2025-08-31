@@ -13,7 +13,8 @@ StructuredBuffer<uint64_t> blasAddresses : register(t5);
 StructuredBuffer<BLASData> blasDatas : register(t6);
 RWStructuredBuffer<GPUInstance> gpuInstances : register(u7);
 StructuredBuffer<AABB> aabbs : register(t8);
-StructuredBuffer<uint64_t> voxelAddressTable : register(t9);
+StructuredBuffer<VoxelAddressTableEntry> voxelAddressTable : register(t9);
+StructuredBuffer<uint> instanceBitmasks : register(t10);
 
 void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint instanceIndex, uint instanceID, AABB aabb, bool update, uint flags)
 {
@@ -92,22 +93,35 @@ void main(uint3 dtID : SV_DispatchThreadID)
     if (blasIndex >= globals[GLOBALS_BLAS_COUNT_INDEX]) return;
 
     BLASData blasData = blasDatas[blasIndex];
-    bool isVoxel = blasData.addressIndex >> 31u;
-    uint addressIndex = blasData.addressIndex & 0x7fffffffu;
-    if (blasData.clusterCount == 0 && !isVoxel) return;
+    uint bitMask = instanceBitmasks[blasData.instanceID];
+    if (blasData.clusterCount == 0 && bitMask == 0) return;
 
     GPUInstance instance = gpuInstances[blasData.instanceID];
 
     uint64_t address = 0;
-    if (isVoxel)
+    uint tableOffset = 0;
+    if (bitMask)
     {
-        address = blasAddresses[blasData.addressIndex];
+        while (bitMask)
+        {
+            uint offset = firstbitlow(bitMask);
+            VoxelAddressTableEntry entry = voxelAddressTable[instance.voxelAddressOffset + offset];
+            address = entry.address;
+            tableOffset = entry.tableOffset;
+            if (address != 0)
+            {
+                break;
+            }
+            bitMask &= bitMask - 1;
+        }
     }
     else 
     {
-        address = voxelAddressTable[instance.voxelAddressOffset + addressIndex];
+        address = blasAddresses[blasData.addressIndex];
     }
 
+    if (address == 0) return;
+
     AABB aabb = aabbs[instance.resourceID];
-    WritePTLASDescriptors(instance, address, blasData.instanceID, 0, aabb, true, 0x10u);
+    WritePTLASDescriptors(instance, address, blasData.instanceID, tableOffset, aabb, true, 0x10u);
 }

@@ -8,6 +8,7 @@ namespace rt
 {
 #endif
 
+#define TRACE_BRICKS
 #define RAY_TRACING_ADDRESS_STRIDE               8
 #define FILL_CLUSTER_BOTTOM_LEVEL_INFO_GROUPSIZE 32
 
@@ -62,6 +63,8 @@ struct DecodeClusterData
 struct VoxelPageDecodeData
 {
     uint32_t offset;
+    uint clusterStartIndex;
+    uint clusterEndIndex;
     int pageIndex;
 };
 
@@ -285,6 +288,13 @@ struct Resource
 {
     uint maxClusters;
     uint finestAddressIndex;
+    uint clusterLookupTableOffset;
+};
+
+struct VoxelAddressTableEntry
+{
+    uint64_t address;
+    uint32_t tableOffset;
 };
 
 #define GLOBALS_VERTEX_BUFFER_OFFSET_INDEX 0

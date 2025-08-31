@@ -34,6 +34,7 @@ StructuredBuffer<GPUMaterial> materials : register(t4);
 ConstantBuffer<ShaderDebugInfo> debugInfo: register(b7);
 
 //RWStructuredBuffer<uint> feedbackBuffer : register(u12);
+StructuredBuffer<uint> clusterLookupTable : register(t13);
 
 [[vk::push_constant]] RayPushConstant push;
 
@@ -48,8 +49,6 @@ void IntersectAABB(float3 boundsMin, float3 boundsMax, float3 o, float3 invDir, 
     tEntry = max(tMin.x, max(tMin.y, tMin.z));
     tLeave = min(tMax.x, min(tMax.y, tMax.z));
 }
-
-//#define TRACE_BRICKS
 
 [shader("raygeneration")]
 void main()
@@ -103,18 +102,21 @@ void main()
 
         uint hitKind = 0;
 
-        float testColor = 0;
         float hitT = FLT_MAX;
         while (query.Proceed())
         {
             if (query.CandidateType() == CANDIDATE_PROCEDURAL_PRIMITIVE)
             {
 #ifndef TRACE_BRICKS
-                uint clusterID = query.CandidateInstanceID();
+#error
+                uint levelTableOffset = query.CandidateInstanceID();
                 uint primIndex = query.CandidatePrimitiveIndex();
 
-                uint brickIndex = primIndex >> 6;
+                uint brickIndex = (primIndex >> 6) & 127;
                 uint voxelIndex = primIndex & 63;
+                uint tableOffset = primIndex >> 13;
+
+                uint clusterID = clusterLookupTable[levelTableOffset + tableOffset];
 
                 uint pageIndex = GetPageIndexFromClusterID(clusterID); 
                 uint clusterIndex = GetClusterIndexFromClusterID(clusterID);
@@ -177,8 +179,14 @@ void main()
 #endif
                 }
 #else
-                uint clusterID = query.CandidateInstanceID();
-                uint brickIndex = query.CandidatePrimitiveIndex();
+                //uint resourceID = query.CandidateInstanceID();
+                uint tableBaseOffset = query.CandidateInstanceID();
+                uint primIndex = query.CandidatePrimitiveIndex();
+
+                uint brickIndex = primIndex & 127;
+                uint tableOffset = primIndex >> 7;
+
+                uint clusterID = clusterLookupTable[tableBaseOffset + tableOffset];
 
                 uint pageIndex = GetPageIndexFromClusterID(clusterID); 
                 uint clusterIndex = GetClusterIndexFromClusterID(clusterID);
@@ -200,11 +208,17 @@ void main()
 
                 float3 objectRayOrigin = (query.CandidateObjectRayOrigin() - position) * rcpVoxelSize;
                 float3 objectRayDir = query.CandidateObjectRayDirection() * rcpVoxelSize;
-                float3 invDir = rcp(objectRayDir);
+                float3 invDir =
+                    float3(abs(objectRayDir.x) < 1e-8f ? 0.f : 1.f / objectRayDir.x, 
+                           abs(objectRayDir.y) < 1e-8f ? 0.f : 1.f / objectRayDir.y, 
+                           abs(objectRayDir.z) < 1e-8f ? 0.f : 1.f / objectRayDir.z);
 
                 float tEntry, tLeave;
                 float3 tMin;
                 IntersectAABB(float3(0, 0, 0), float3(voxelMax), objectRayOrigin, invDir, tEntry, tLeave, tMin);
+
+                tLeave = min(tLeave, hitT);
+                tEntry = max(tEntry, 0);
 
                 if (tEntry <= tLeave)
                 {
@@ -242,14 +256,15 @@ void main()
 
                                 if (rng.Uniform() < alpha)
                                 {
-                                    testColor = alpha;
                                     hitKind = bit;
+                                    hitT = tHit;
 
                                     query.CommitProceduralPrimitiveHit(tHit);
                                     break;
                                 }
 #else
                                 hitKind = bit;
+                                hitT = tHit;
 
                                 query.CommitProceduralPrimitiveHit(tHit);
                                 break;
@@ -427,13 +442,17 @@ void main()
         else if (query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
         {
 #ifndef TRACE_BRICKS
+#error
             uint primIndex = query.CommittedPrimitiveIndex();
             uint brickIndex = primIndex >> 6u;
             hitKind = primIndex & 63u;
 #else
-            uint brickIndex = query.CommittedPrimitiveIndex();
+            uint primIndex = query.CandidatePrimitiveIndex();
+            uint brickIndex = primIndex & 127;
+            uint tableOffset = primIndex >> 7;
 #endif
-            uint clusterID = query.CommittedInstanceID();
+            uint tableBaseOffset = query.CandidateInstanceID();
+            uint clusterID = clusterLookupTable[tableBaseOffset + tableOffset];
 
             uint pageIndex = GetPageIndexFromClusterID(clusterID); 
             uint clusterIndex = GetClusterIndexFromClusterID(clusterID);
