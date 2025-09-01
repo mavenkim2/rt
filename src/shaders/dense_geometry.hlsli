@@ -48,6 +48,7 @@ struct DenseGeometry
     int3 prevHighEdge2BeforeDwords;
 
     uint flags;
+    uint depth;
 
     uint numBricks;
     uint brickOffset;
@@ -444,6 +445,7 @@ DenseGeometry GetDenseGeometryHeader(uint4 packed[NUM_CLUSTER_HEADER_FLOAT4S], u
     result.lodError = asfloat(packed[3].w);
 
     result.flags = packed[4].x;
+    result.depth = packed[4].y;
     //result.id = packed[4].y;
 
     result.boundsMin.x = asfloat(packed[4].z);

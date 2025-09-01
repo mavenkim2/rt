@@ -262,6 +262,7 @@ struct GPUInstance
     uint resourceID;
     uint partitionIndex;
     uint voxelAddressOffset;
+    uint clusterLookupTableOffset;
     bool cull;
 };
 

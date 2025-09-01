@@ -297,7 +297,7 @@ struct ClusterCull
         }
         else if (isValid && isVoxel)
         {
-            uint depth;
+            uint depth = header.depth;
             InterlockedOr(instanceBitmasks[instanceID], 1u << depth);
         }
     }

@@ -1770,7 +1770,6 @@ struct ClusterGroup
     u32 parentCount;
 
     f32 maxParentError;
-    f32 maxChildError;
 
     // Debug
     u32 numVertices;
@@ -2017,9 +2016,6 @@ bool RecursivePartitionGraph(ArrayView<int> clusterIndices, ArrayView<idx_t> clu
             numSwaps + 1, globalClusterOffset + clusterOffset, ranges, numPartitions,
             numAdjacency, minGroupSize, maxGroupSize);
     };
-
-    // TODO: for whatever reason multithreading METIS causes inscrutable errors. fix this if
-    // speedup needed
 
     // if (numClusters > 256)
     // {
@@ -3453,6 +3449,17 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                 rootGroup.numIndices  = 0;
                 rootGroup.mipLevel    = depth++;
                 rootGroup.hasVoxels   = bool(levelClusters[0].compressedVoxels.Length());
+                rootGroup.rangeIndex  = -1;
+
+                if (rootGroup.hasVoxels)
+                {
+                    ClusterGroupRange clusterGroupRange;
+                    clusterGroupRange.groupStartIndex = clusterGroups.Length();
+                    clusterGroupRange.groupCount      = 1;
+                    clusterGroupRanges.Push(clusterGroupRange);
+
+                    rootGroup.rangeIndex = clusterGroupRanges.Length() - 1;
+                }
 
                 clusterGroups.Push(rootGroup);
 
@@ -3722,26 +3729,10 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
             std::atomic<u32> numIndices(0);
             std::atomic<u32> numVoxels(0);
 
-            // StaticArray<Mesh> groupMeshes(partitionResult.ranges.Length());
-
-            // let me think through how i'm going to do this
-            // 1. if the group has triangles, then combine the triangles
-            //      - normal triangle simplification code, see if the cluster has islands
-            //      - if the cluster has islands, try voxel simplification, and if it's better,
-            //      use that
-            // - if one group uses voxels, then all the groups must use voxels. redo
-            // voxelization for all the groups
-
-            // for all groups with triangles, simplify them
-            // for all groups with voxels/triangle groups that can be voxelized, try to
-            // voxelize. if any triangle group is voxelized, all triangle groups must be
-            // voxelized. instead of redoing like an idiot
-
             struct TempGroupData
             {
                 Mesh mesh_;
                 u32 *geomIDs;
-                f32 maxLodError;
 
                 Mesh simplifiedMesh;
                 u32 *simplifiedGeomIDs;
@@ -3780,37 +3771,15 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
                         PartitionRange range  = partitionResult.ranges[groupIndex];
                         u32 groupNumTriangles = 0;
-                        u32 newGroupIndex     = groupIndex + totalNumGroups;
 
-                        f32 maxLodError = 0.f;
                         for (int clusterIndexIndex = range.begin;
                              clusterIndexIndex < range.end; clusterIndexIndex++)
                         {
                             int clusterIndex =
                                 partitionResult.clusterIndices[clusterIndexIndex];
                             const Cluster &cluster = levelClusters[clusterIndex];
-                            maxLodError            = Max(cluster.lodError, maxLodError);
                             groupNumTriangles += cluster.triangleIndices.Length();
                         }
-
-                        Vec4f *clusterSpheres = PushArrayNoZero(scratch.temp.arena, Vec4f,
-                                                                range.end - range.begin);
-
-                        // Set the child start index of last level's clusters
-                        for (int clusterIndexIndex = range.begin;
-                             clusterIndexIndex < range.end; clusterIndexIndex++)
-                        {
-                            int clusterIndex =
-                                partitionResult.clusterIndices[clusterIndexIndex];
-
-                            levelClusters[clusterIndex].groupIndex = newGroupIndex;
-
-                            clusterSpheres[clusterIndexIndex - range.begin] =
-                                levelClusters[clusterIndex].lodBounds;
-                        }
-
-                        Vec4f parentSphereBounds = ConstructSphereFromSpheres(
-                            clusterSpheres, range.end - range.begin);
 
                         f32 *groupVertices = PushArrayNoZero(
                             tempArena, f32, (groupNumTriangles * 3) * (3 + numAttributes));
@@ -3826,7 +3795,6 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                         HashIndex cornerHash(scratch.temp.arena, numHash, numHash);
 
                         // Merge clusters into a single vertex and index buffer
-                        bool hasVoxels = false;
                         for (int clusterIndexIndex = range.begin;
                              clusterIndexIndex < range.end; clusterIndexIndex++)
                         {
@@ -3837,9 +3805,6 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
                             ClusterGroup &prevClusterGroup =
                                 clusterGroups[cluster.childGroupIndex];
-
-                            hasVoxels |= (bool)cluster.compressedVoxels.Length();
-                            maxLodError = Max(cluster.lodError, maxLodError);
 
                             for (u32 index = 0; index < cluster.triangleIndices.Length();
                                  index++)
@@ -3940,19 +3905,29 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
                         if (numIslands > 1)
                         {
-                            u32 index = potentialVoxelGroupCount.fetch_add(1);
+                            potentialVoxelGroupCount.fetch_add(1);
+                        }
+
+                        f32 totalSurfaceArea = 0.f;
+                        u32 numTris          = indexCount / 3;
+                        for (u32 tri = 0; tri < numTris; tri++)
+                        {
+                            Vec3f p0 = GetPosition(groupVertices, indices[3 * tri + 0]);
+                            Vec3f p1 = GetPosition(groupVertices, indices[3 * tri + 1]);
+                            Vec3f p2 = GetPosition(groupVertices, indices[3 * tri + 2]);
+                            f32 area = 0.5f * Length(Cross(p1 - p0, p2 - p0));
+                            totalSurfaceArea += area;
                         }
 
                         Mesh groupMesh        = {};
                         groupMesh.indices     = indices;
-                        groupMesh.p           = (Vec3f *)vertexData;
+                        groupMesh.p           = (Vec3f *)groupVertices;
                         groupMesh.numVertices = vertexCount;
                         groupMesh.numIndices  = indexCount;
 
                         TempGroupData groupData;
-                        groupData.mesh_       = groupMesh;
-                        groupData.geomIDs     = geomIDs;
-                        groupData.maxLodError = maxLodError;
+                        groupData.mesh_   = groupMesh;
+                        groupData.geomIDs = geomIDs;
 
                         groupData.simplifiedMesh = SimplifyTriangleMesh(
                             tempArena, partitionResult, range, groupMesh, numAttributes,
@@ -3964,7 +3939,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                     });
             }
 
-            if (potentialVoxelGroupCount.load())
+            if (bool(voxelGroupCount.load()) || bool(potentialVoxelGroupCount.load()))
             {
                 ParallelForLoop(
                     0, partitionResult.ranges.Length(), 1, 1, [&](int jobID, int groupIndex) {
@@ -3996,12 +3971,14 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                         }
 
                         u32 clusterTotalVoxelCount = 0;
+                        f32 maxLodError            = 0.f;
                         for (int clusterIndexIndex = range.begin;
                              clusterIndexIndex < range.end; clusterIndexIndex++)
                         {
                             int clusterIndex =
                                 partitionResult.clusterIndices[clusterIndexIndex];
                             const Cluster &cluster = levelClusters[clusterIndex];
+                            maxLodError            = Max(maxLodError, cluster.lodError);
 
                             for (const CompressedVoxel &voxel : cluster.compressedVoxels)
                             {
@@ -4014,7 +3991,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                             ((tempGroupData.mesh_.numVertices + clusterTotalVoxelCount) * 3) /
                             4;
                         f32 voxelSize = Sqrt(totalSurfaceArea / targetNumVoxels) * .75f;
-                        voxelSize     = Max(tempGroupData.maxLodError, voxelSize);
+                        voxelSize     = Max(maxLodError, voxelSize);
 
                         u32 maxClusterTriangles = MAX_CLUSTER_TRIANGLES + 2;
                         f32 error               = 0.f;
@@ -4037,7 +4014,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                                 VoxelizeTriangles(scratch.temp.arena, voxelHashSet,
                                                   (f32 *)tempGroupData.mesh_.p,
                                                   tempGroupData.mesh_.indices,
-                                                  tempGroupData.mesh_.numIndices * 3,
+                                                  tempGroupData.mesh_.numIndices / 3,
                                                   numAttributes, voxelSize);
                             }
 
@@ -4174,8 +4151,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                             int clusterIndex =
                                 partitionResult.clusterIndices[clusterIndexIndex];
 
-                            const Cluster &cluster = levelClusters[clusterIndex];
-                            levelClusters[clusterIndex].groupIndex = newGroupIndex;
+                            Cluster &cluster   = levelClusters[clusterIndex];
+                            cluster.groupIndex = newGroupIndex;
 
                             clusterSpheres[clusterIndexIndex - range.begin] =
                                 levelClusters[clusterIndex].lodBounds;
@@ -4186,6 +4163,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
                         Vec3f *newP = PushArrayNoZero(arena, Vec3f, voxelMesh.numVertices);
                         MemoryCopy(newP, voxelMesh.p, sizeof(Vec3f) * voxelMesh.numVertices);
+                        voxelMesh.p = newP;
 
                         numVoxels.fetch_add(voxelMesh.numVertices, std::memory_order_relaxed);
 
@@ -4281,16 +4259,12 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                         }
 
                         ClusterGroup newClusterGroup;
-                        newClusterGroup.vertexData     = (f32 *)voxelMesh.p;
-                        newClusterGroup.indices        = voxelMesh.indices;
-                        newClusterGroup.buildDataIndex = threadIndex;
-                        newClusterGroup.isLeaf         = false;
-                        newClusterGroup.hasVoxels      = true;
-                        newClusterGroup.maxParentError = voxelSize;
-                        newClusterGroup.maxChildError  = groupData.maxLodError;
-
-                        Assert(newClusterGroup.maxChildError <=
-                               newClusterGroup.maxParentError);
+                        newClusterGroup.vertexData       = (f32 *)voxelMesh.p;
+                        newClusterGroup.indices          = {};
+                        newClusterGroup.buildDataIndex   = threadIndex;
+                        newClusterGroup.isLeaf           = false;
+                        newClusterGroup.hasVoxels        = true;
+                        newClusterGroup.maxParentError   = voxelSize;
                         newClusterGroup.lodBounds        = parentSphereBounds;
                         newClusterGroup.parentStartIndex = parentStartIndex;
                         newClusterGroup.parentCount      = numParentClusters;
@@ -4323,8 +4297,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                             int clusterIndex =
                                 partitionResult.clusterIndices[clusterIndexIndex];
 
-                            const Cluster &cluster = levelClusters[clusterIndex];
-                            levelClusters[clusterIndex].groupIndex = newGroupIndex;
+                            Cluster &cluster   = levelClusters[clusterIndex];
+                            cluster.groupIndex = newGroupIndex;
 
                             clusterSpheres[clusterIndexIndex - range.begin] =
                                 levelClusters[clusterIndex].lodBounds;
@@ -4367,6 +4341,18 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
                             numVertices.fetch_add(groupData.simplifiedMesh.numVertices);
                             numIndices.fetch_add(groupData.simplifiedMesh.numIndices);
+
+                            Vec3f *newP = PushArrayNoZero(
+                                arena, Vec3f, groupData.simplifiedMesh.numVertices);
+                            MemoryCopy(newP, groupData.simplifiedMesh.p,
+                                       sizeof(Vec3f) * groupData.simplifiedMesh.numVertices);
+                            groupData.simplifiedMesh.p = newP;
+
+                            u32 *newIndices = PushArrayNoZero(
+                                arena, u32, groupData.simplifiedMesh.numIndices);
+                            MemoryCopy(newIndices, groupData.simplifiedMesh.indices,
+                                       sizeof(u32) * groupData.simplifiedMesh.numIndices);
+                            groupData.simplifiedMesh.indices = newIndices;
 
                             int numParentClusters =
                                 clusterGroupPartitionResult.ranges.Length();
@@ -4432,11 +4418,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                             newClusterGroup.isLeaf         = false;
                             newClusterGroup.hasVoxels      = false;
                             newClusterGroup.maxParentError = groupData.error;
-                            newClusterGroup.maxChildError  = groupData.maxLodError;
-
-                            Assert(newClusterGroup.maxChildError <=
-                                   newClusterGroup.maxParentError);
-                            newClusterGroup.lodBounds        = parentSphereBounds;
+                            newClusterGroup.lodBounds      = parentSphereBounds;
                             newClusterGroup.parentStartIndex = parentStartIndex;
                             newClusterGroup.parentCount      = numParentClusters;
 
@@ -4451,7 +4433,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
             }
 
             // Write obj to disk
-#if 1
+#if 0
             ArrayView<ClusterGroup> levelClusterGroups(clusterGroups, totalNumGroups,
                                                        partitionResult.ranges.Length());
             u32 vertexCount = numVertices.load();
@@ -4636,27 +4618,38 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
     SortHandles(groupHandles, clusterGroups.Length());
 
-    f32 maxError = 0.f;
+#if 0
+    f32 maxError             = 0.f;
+    ClusterGroupRange &range = clusterGroupRanges[0];
+    for (u32 groupIndex = range.groupStartIndex;
+         groupIndex < range.groupStartIndex + range.groupCount; groupIndex++)
+    {
+        ClusterGroup &group = clusterGroups[groupIndex];
+        maxError            = Max(group.maxParentError, maxError);
+    }
+    for (u32 groupIndex = range.groupStartIndex;
+         groupIndex < range.groupStartIndex + range.groupCount; groupIndex++)
+    {
+        ClusterGroup &group  = clusterGroups[groupIndex];
+        group.maxParentError = maxError;
+    }
     for (ClusterGroupRange &range : clusterGroupRanges)
     {
-        Vec4f *spheres = PushArrayNoZero(scratch.temp.arena, Vec4f, range.groupCount);
+        bool any = false;
         for (u32 groupIndex = range.groupStartIndex;
              groupIndex < range.groupStartIndex + range.groupCount; groupIndex++)
         {
-            ClusterGroup &group                         = clusterGroups[groupIndex];
-            maxError                                    = Max(group.maxParentError, maxError);
-            spheres[groupIndex - range.groupStartIndex] = group.lodBounds;
+            ClusterGroup &group = clusterGroups[groupIndex];
+            if (group.maxParentError < maxError)
+            {
+                Print("yay\n");
+                any                  = true;
+                group.maxParentError = maxError;
+            }
         }
-        Vec4f newLodBounds = ConstructSphereFromSpheres(spheres, range.groupCount);
-        for (u32 groupIndex = range.groupStartIndex;
-             groupIndex < range.groupStartIndex + range.groupCount; groupIndex++)
-        {
-            ClusterGroup &group  = clusterGroups[groupIndex];
-            group.lodBounds      = newLodBounds;
-            group.maxParentError = maxError;
-        }
-        Print("test %f\n", maxError);
+        if (!any) break;
     }
+#endif
 
     string outFilename =
         PushStr8F(scratch.temp.arena, "%S.geo", RemoveFileExtension(filename));
@@ -4722,15 +4715,12 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
         ClusterGroup &group = clusterGroups[groupIndex];
         if (group.isLeaf) continue;
 
-        if (group.rangeIndex != -1)
+        if (group.rangeIndex != -1 && group.rangeIndex != 0)
         {
             if (prevRangeIndex != -1 && group.rangeIndex != prevRangeIndex)
             {
                 fixup.clusterEndIndex = clusterPageStartIndex;
-                fixup.numPages        = pageInfos.Length() - fixup.pageStartIndex;
-                fixup.clusterOffset   = voxelClusterCount;
-
-                voxelClusterCount = 0;
+                fixup.numPages        = pageInfos.Length() - fixup.pageStartIndex + 1;
 
                 voxelClusterGroupFixups.Push(fixup);
                 prevRangeIndex = -1;
@@ -4741,6 +4731,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                 fixup                   = {};
                 fixup.clusterStartIndex = clusterPageStartIndex;
                 fixup.pageStartIndex    = pageInfos.Length();
+                fixup.clusterOffset     = voxelClusterCount;
                 fixup.depth             = group.mipLevel;
                 Assert(fixup.depth > 0);
             }
@@ -4825,17 +4816,15 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
         group.numParts = parts.Length() - group.numParts;
     }
 
+    fixup.clusterEndIndex = clusterPageStartIndex;
+    fixup.numPages        = pageInfos.Length() - fixup.pageStartIndex + 1;
+    voxelClusterGroupFixups.Push(fixup);
+
     PageInfo finalPageInfo;
     finalPageInfo.partStartIndex = partStartIndex;
     finalPageInfo.partCount      = parts.Length() - partStartIndex;
     finalPageInfo.numClusters    = numClustersInPage;
     pageInfos.Push(finalPageInfo);
-
-    for (ClusterGroupRange &range : clusterGroupRanges)
-    {
-        VoxelClusterGroupFixup fixup;
-        voxelClusterGroupFixups.Push(fixup);
-    }
 
     Graph<ClusterFixup> pageToParentClusterGraph;
     u32 numParentClusters = pageToParentClusterGraph.InitializeStatic(
@@ -4859,13 +4848,18 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
                     ClusterGroup &childGroup = clusterGroups[cluster.childGroupIndex];
 
+                    Assert(childGroup.numPages < (1u << 3u));
                     ClusterFixup fixup(part.pageIndex,
                                        part.clusterPageStartIndex + clusterIndex -
                                            part.clusterStartIndex,
                                        childGroup.pageStartIndex, childGroup.numPages);
+                    ErrorExit(childGroup.pageStartIndex + childGroup.numPages - 1 <=
+                                  part.pageIndex,
+                              "%u %u %u\n", childGroup.pageStartIndex, childGroup.numPages,
+                              part.pageIndex);
 
-                    for (u32 childPageIndex = group.pageStartIndex;
-                         childPageIndex < group.pageStartIndex + group.numPages;
+                    for (u32 childPageIndex = childGroup.pageStartIndex;
+                         childPageIndex < childGroup.pageStartIndex + childGroup.numPages;
                          childPageIndex++)
                     {
                         u32 dataIndex = offsets[childPageIndex]++;
@@ -4904,6 +4898,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                 }
                 if (add)
                 {
+                    ErrorExit(fixup.GetPageIndex() > pageIndex, "%u %u\n",
+                              fixup.GetPageIndex(), pageIndex);
                     u32 dataIndex = offsets[pageIndex]++;
                     num++;
 
@@ -5047,8 +5043,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                 MemoryCopy(ptr + currentPageOffset + 4 * soaStride, &flags, sizeof(u32));
                 // MemoryCopy(ptr + currentPageOffset + 4 * soaStride + sizeof(u32),
                 //            &clusterIndices[clusterIndex], sizeof(u32));
-                // MemoryCopy(ptr + currentPageOffset + 4 * soaStride + sizeof(u32),
-                //            &cluster.aabbOffset, sizeof(u32));
+                MemoryCopy(ptr + currentPageOffset + 4 * soaStride + sizeof(u32),
+                           &cluster.mipLevel, sizeof(u32));
 
                 float3 boundsMin = ToVec3f(cluster.bounds.minP);
                 float3 boundsMax = ToVec3f(cluster.bounds.maxP);
@@ -5271,65 +5267,6 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     root.childIndex  = ~0u;
 
     queue[writeOffset++] = root;
-
-    // 1. instance culling
-    // hierarchy. procedural aabbs
-    // as proxies for instance
-    // groups. closest hit
-    // intersections of these aabbs
-    // are saved, and a bvh is
-    // built over just the
-    // instances inside these
-    // proxies. the intersections
-    // are then repeated with this
-    // smaller set.
-    // 2. partial rebraiding
-    // 3. instance proxy combining
-
-    // interesting idea:
-    // 1. create a bounding
-    // sphere/aabb hierarchy over
-    // instances. the leaves
-    // contain instance ids.
-    // 2. use previous frame's rays
-    // to traverse this hierarchy.
-    // instances in intersected
-    // leaves are added to the
-    // tlas. this would be in
-    // addition to standard
-    // occlusion/frustum/small
-    // element culling (maybe? i'm
-    // not sure about this last
-    // part)
-    // 3. since we control this
-    // hierarchy, instead of normal
-    // instancing you could use
-    // instanced submeshes (cluster
-    // groups), reducing overlap
-    // between instances (just like
-    // partial rebraiding)
-    // 4. thus instance data can be
-    // very highly compressed, and
-    // decompressed when needed
-
-    // 5. maybe have some form of
-    // feedback? like with virtual
-    // textures (idk how this fits
-    // in to the rest of the
-    // system)
-    // 6. when the instance is
-    // small enough, use some
-    // smaller proxy/proxies (i.e.,
-    // somehow combine and simplify
-    // the instances)
-    // 7. partitioned tlas
-    // (obviously)
-
-    // so if the instance is
-    // outside the frustum or
-    // occluded, and wasn't
-    // intersected, then it should
-    // be removed
 
     u32 numLeaves    = 0;
     u32 numParts     = 0;

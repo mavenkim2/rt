@@ -35,6 +35,7 @@ ConstantBuffer<ShaderDebugInfo> debugInfo: register(b7);
 
 //RWStructuredBuffer<uint> feedbackBuffer : register(u12);
 StructuredBuffer<uint> clusterLookupTable : register(t13);
+StructuredBuffer<GPUInstance> gpuInstances : register(t14);
 
 [[vk::push_constant]] RayPushConstant push;
 
@@ -179,8 +180,9 @@ void main()
 #endif
                 }
 #else
+                uint instanceID = query.CandidateInstanceID();
+                uint tableBaseOffset = gpuInstances[instanceID].clusterLookupTableOffset;
                 //uint resourceID = query.CandidateInstanceID();
-                uint tableBaseOffset = query.CandidateInstanceID();
                 uint primIndex = query.CandidatePrimitiveIndex();
 
                 uint brickIndex = primIndex & 127;
@@ -451,7 +453,8 @@ void main()
             uint brickIndex = primIndex & 127;
             uint tableOffset = primIndex >> 7;
 #endif
-            uint tableBaseOffset = query.CandidateInstanceID();
+            uint instanceID = query.CandidateInstanceID();
+            uint tableBaseOffset = gpuInstances[instanceID].clusterLookupTableOffset;
             uint clusterID = clusterLookupTable[tableBaseOffset + tableOffset];
 
             uint pageIndex = GetPageIndexFromClusterID(clusterID); 

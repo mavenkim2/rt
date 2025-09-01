@@ -271,6 +271,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     layout.AddBinding((u32)RTBindings::PtexFaceData, DescriptorType::StorageBuffer, flags);
     // layout.AddBinding((u32)RTBindings::Feedback, DescriptorType::StorageBuffer, flags);
     layout.AddBinding(13, DescriptorType::StorageBuffer, flags);
+    layout.AddBinding(14, DescriptorType::StorageBuffer, flags);
 
     layout.AddImmutableSamplers();
 
@@ -1234,7 +1235,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             .Bind(&shaderDebugBuffers[currentBuffer].buffer)
             .Bind(&virtualGeometryManager.clusterPageDataBuffer)
             .Bind(&faceDataBuffer)
-            .Bind(&virtualGeometryManager.clusterLookupTableBuffer);
+            .Bind(&virtualGeometryManager.clusterLookupTableBuffer)
+            .Bind(&gpuInstancesBuffer.buffer);
         // .Bind(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
 
         cmd->BindDescriptorSets(bindPoint, &descriptorSet, rts.layout);

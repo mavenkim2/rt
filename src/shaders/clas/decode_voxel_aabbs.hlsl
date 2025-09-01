@@ -9,11 +9,7 @@ StructuredBuffer<VoxelPageDecodeData> decodeDatas : register(t2);
 [numthreads(THREAD_GROUP_SIZE, 1, 1)] 
 void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
 {
-    uint clusterID = groupID.x;
-
-    //if (clusterID >= globals[GLOBALS_ALL_CLUSTER_COUNT_INDEX]) return;
-
-    VoxelPageDecodeData data = decodeDatas[clusterID];
+    VoxelPageDecodeData data = decodeDatas[groupID.x];
     uint pageIndex = data.pageIndex;
     uint clusterStartIndex = data.clusterStartIndex;
     uint clusterEndIndex = data.clusterEndIndex;
