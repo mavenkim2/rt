@@ -28,7 +28,7 @@ void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint instance
     const int numPartitions = 16;
     const int numInstancesPerPartition = maxInstances / numPartitions;
 
-    if (!wasRendered)
+    if (1)//!wasRendered)
     {
         uint descriptorIndex;
         InterlockedAdd(globals[GLOBALS_PTLAS_WRITE_COUNT_INDEX], 1, descriptorIndex);

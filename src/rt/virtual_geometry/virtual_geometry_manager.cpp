@@ -1151,12 +1151,12 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
     u32 pagesToInstall = Min(unloadedRequests.Length(), maxPageInstallsPerFrame);
     int lruIndex       = lruTail;
 
-    if (pageUploadBuffer.size > 2 * CLUSTER_PAGE_SIZE * pagesToInstall)
+    if (pageUploadBuffer.size)
     {
         device->DestroyBuffer(&pageUploadBuffer);
         pageUploadBuffer.size = 0;
     }
-    if (pageUploadBuffer.size < CLUSTER_PAGE_SIZE * pagesToInstall)
+    if (pagesToInstall)
     {
         pageUploadBuffer =
             device->CreateBuffer(VK_BUFFER_USAGE_2_TRANSFER_SRC_BIT,
@@ -1433,16 +1433,13 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         u32 hierarchyFixupSize  = sizeof(u32) * hierarchyFixupData.Length();
         u32 totalSize           = hierarchyFixupSize + gpuClusterFixupSize + pageInstallSize;
 
-        if (fixupBuffer.size > 2 * totalSize)
+        if (fixupBuffer.size)
         {
             device->DestroyBuffer(&fixupBuffer);
-            fixupBuffer.size = 0;
         }
-        if (fixupBuffer.size < totalSize)
-        {
-            fixupBuffer = device->CreateBuffer(VK_BUFFER_USAGE_2_TRANSFER_SRC_BIT, totalSize,
-                                               MemoryUsage::CPU_TO_GPU);
-        }
+        Assert(totalSize);
+        fixupBuffer = device->CreateBuffer(VK_BUFFER_USAGE_2_TRANSFER_SRC_BIT, totalSize,
+                                           MemoryUsage::CPU_TO_GPU);
 
         u32 offset = hierarchyFixupSize;
         MemoryCopy(fixupBuffer.mappedPtr, hierarchyFixupData.data, hierarchyFixupSize);
@@ -1498,6 +1495,41 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         device->EndEvent(cmd);
     }
 
+    for (int requestIndex = 0; requestIndex < pagesToInstall; requestIndex++)
+    {
+        PageHandle handle         = pageHandles[requestIndex];
+        VirtualPageHandle request = unloadedRequests[handle.index];
+
+        u32 page           = pageIndices[requestIndex];
+        MeshInfo &meshInfo = meshInfos[request.instanceID];
+        u8 *src            = meshInfo.pageData + CLUSTER_PAGE_SIZE * request.pageIndex;
+
+        u32 numClusters            = *(u32 *)src;
+        u32 clusterHeaderSOAStride = numClusters * 16;
+        u32 numTriangleClusters    = 0;
+
+        for (u32 clusterIndex = 0; clusterIndex < numClusters; clusterIndex++)
+        {
+            u32 clusterHeaderSOAStride = numClusters * 16;
+            u32 baseOffset = request.pageIndex * CLUSTER_PAGE_SIZE + 4 + clusterIndex * 16;
+            Vec4u packed[NUM_CLUSTER_HEADER_FLOAT4S];
+            for (int i = 0; i < NUM_CLUSTER_HEADER_FLOAT4S; i++)
+            {
+                packed[i] =
+                    *(Vec4u *)(meshInfo.pageData + baseOffset + i * clusterHeaderSOAStride);
+            }
+
+            if ((packed[2].w >> 31u) == 0)
+            {
+                numTriangleClusters++;
+            }
+        }
+
+        physicalPages[page].numTriangleClusters = numTriangleClusters;
+
+        triangleClustersToAdd += numTriangleClusters;
+    }
+
     u32 newClasOffset = currentTriangleClusterTotal;
     currentTriangleClusterTotal += triangleClustersToAdd;
 
@@ -1542,37 +1574,24 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
             create.buffer = &accelBuffer;
         }
 
-        if (voxelAABBBuffer.size > 2 * sizeof(AABB) * numAABBs)
+        if (voxelAABBBuffer.size)
         {
             device->DestroyBuffer(&voxelAABBBuffer);
-            voxelAABBBuffer.size = 0;
         }
-        if (voxelAABBBuffer.size < sizeof(AABB) * numAABBs)
-        {
-            if (voxelAABBBuffer.size)
-            {
-                device->DestroyBuffer(&voxelAABBBuffer);
-            }
-
-            voxelAABBBuffer = device->CreateBuffer(
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-                sizeof(AABB) * numAABBs);
-        }
+        voxelAABBBuffer = device->CreateBuffer(
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+            sizeof(AABB) * numAABBs);
 
         u32 voxelDecodeSize = sizeof(VoxelPageDecodeData) * voxelPageDecodeData.Length();
-        if (voxelPageDecodeBuffer.size < voxelDecodeSize)
+        if (voxelPageDecodeBuffer.size)
         {
-            if (voxelPageDecodeBuffer.size)
-            {
-                device->DestroyBuffer(&voxelPageDecodeBuffer);
-            }
-            voxelPageDecodeBuffer = device->CreateBuffer(
-                VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT,
-                voxelDecodeSize);
+            device->DestroyBuffer(&voxelPageDecodeBuffer);
         }
+        voxelPageDecodeBuffer = device->CreateBuffer(VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT |
+                                                         VK_BUFFER_USAGE_2_TRANSFER_DST_BIT,
+                                                     voxelDecodeSize);
 
         u32 voxelPageFixupsSize   = sizeof(VoxelPageDecodeData) * voxelPageDecodeData.Length();
         u32 voxelAddressTableSize = sizeof(u64) * voxelAddressTableOffsets.Length();
@@ -1582,16 +1601,12 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
                            clusterLookupTableCopiesSize;
 
         // TODO: have unified system for GPU transfers
-        if (voxelTransferBuffer.size > 2 * transferSize)
+        if (voxelTransferBuffer.size)
         {
             device->DestroyBuffer(&voxelTransferBuffer);
-            voxelTransferBuffer.size = 0;
         }
-        if (voxelTransferBuffer.size < transferSize)
-        {
-            voxelTransferBuffer = device->CreateBuffer(VK_BUFFER_USAGE_2_TRANSFER_SRC_BIT,
-                                                       transferSize, MemoryUsage::CPU_TO_GPU);
-        }
+        voxelTransferBuffer = device->CreateBuffer(VK_BUFFER_USAGE_2_TRANSFER_SRC_BIT,
+                                                   transferSize, MemoryUsage::CPU_TO_GPU);
 
         uint64_t scratchDataDeviceAddress = device->GetDeviceAddress(&scratchBuffer);
         uint64_t aabbDeviceAddress        = device->GetDeviceAddress(&voxelAABBBuffer);
@@ -1905,40 +1920,6 @@ void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd,
                                               GPUBuffer *gpuInstancesBuffer,
                                               GPUBuffer *aabbBuffer)
 {
-    // if (device->frameCount > 0)
-    // {
-    //     GPUBuffer readback = device->CreateBuffer(
-    //         VK_BUFFER_USAGE_TRANSFER_DST_BIT, blasDataBuffer.size, MemoryUsage::GPU_TO_CPU);
-    //     //
-    //     // GPUBuffer readback2 =
-    //     //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-    //     //     thisFrameBitVector->size,
-    //     //                          MemoryUsage::GPU_TO_CPU);
-    //     // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-    //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-    //     //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-    //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-    //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-    //     VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-    //                  VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-    //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-    //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-    //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-    //     cmd->FlushBarriers();
-    //     cmd->CopyBuffer(&readback, &blasDataBuffer);
-    //     // cmd->CopyBuffer(&readback, &blasDataBuffer);
-    //     // cmd->CopyBuffer(&readback2, thisFrameBitVector);
-    //     Semaphore testSemaphore   = device->CreateSemaphore();
-    //     testSemaphore.signalValue = 1;
-    //     cmd->SignalOutsideFrame(testSemaphore);
-    //     device->SubmitCommandBuffer(cmd);
-    //     device->Wait(testSemaphore);
-    //
-    //     BLASData *data = (BLASData *)readback.mappedPtr;
-    //     // u32 *data2     = (u32 *)readback2.mappedPtr;
-    //     //
-    //     int stop = 5;
-    // }
 
     {
         device->BeginEvent(cmd, "Get BLAS Address Offset");

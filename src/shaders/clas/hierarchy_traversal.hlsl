@@ -280,6 +280,7 @@ struct ClusterCull
         float test;
         float2 edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, maxScale, test, instance.cull);
 
+        uint depth = header.depth;
         bool isValid = (edgeScales.x > gpuScene.lodScale * lodError * minScale) || (header.flags & CLUSTER_STREAMING_LEAF_FLAG);
 
         uint clusterOffset;
@@ -297,7 +298,6 @@ struct ClusterCull
         }
         else if (isValid && isVoxel)
         {
-            uint depth = header.depth;
             InterlockedOr(instanceBitmasks[instanceID], 1u << depth);
         }
     }

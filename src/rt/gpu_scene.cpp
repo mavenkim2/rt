@@ -750,13 +750,13 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     int envMapBindlessIndex;
 
     ViewCamera camera = {};
-    camera.pitch      = 0.0536022522f;
-    camera.yaw        = 1.15505993f;
-    camera.position   = Vec3f(5518.85205f, 1196.14368f, -11135.9834f);
-    camera.forward    = Vec3f(0.403283596f, 0.0535765812f, -0.913505197f);
-    camera.right      = Vec3f(0.911113858f, 0.0692767054f, 0.406290948f);
+    // camera.pitch      = 0.0536022522f;
+    // camera.yaw        = 1.15505993f;
+    // camera.position   = Vec3f(5518.85205f, 1196.14368f, -11135.9834f);
+    // camera.forward    = Vec3f(0.403283596f, 0.0535765812f, -0.913505197f);
+    // camera.right      = Vec3f(0.911113858f, 0.0692767054f, 0.406290948f);
 
-#if 0
+#if 1
     camera.position = Vec3f(0);
     // camera.position = Vec3f(4892.06055f, 767.444824f, -11801.2275f);
     // camera.position = Vec3f(5128.51562f, 1104.60583f, -6173.79395f);
