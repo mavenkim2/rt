@@ -12,9 +12,9 @@ bool FrustumCull(float4x4 clipFromRender, float3x4 renderFromObject, float3 minP
     float4x4 mvp = mul(clipFromRender, renderFromObject_);
 
     float4 sides[3];
-    sides[0] = float4(mvp._m00_m10_m20_m30 * (maxP[0] - minP[0]));
-    sides[1] = float4(mvp._m01_m11_m21_m31 * (maxP[1] - minP[1]));
-    sides[2] = float4(mvp._m02_m12_m22_m32 * (maxP[2] - minP[2]));
+    sides[0] = mul(mvp, float4(maxP[0] - minP[0], 0.f, 0.f, 0.f));
+    sides[1] = mul(mvp, float4(maxP[1] - minP[1], 0.f, 0.f, 0.f));
+    sides[2] = mul(mvp, float4(maxP[2] - minP[2], 0.f, 0.f, 0.f));
 
     float4 planeMin = 1.f;
     float4 p0 = mul(mvp, float4(minP, 1.f));
@@ -42,6 +42,6 @@ bool FrustumCull(float4x4 clipFromRender, float3x4 renderFromObject, float3 minP
     float minZ = min(z0, z1);
     float maxZ = max(z0, z1);
 
-    cull &= maxZ < 0.f;
+    cull |= maxZ < 0.f;
     return cull;
 }

@@ -585,16 +585,35 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     VirtualGeometryManager virtualGeometryManager(dgfTransferCmd, sceneScratch.temp.arena);
     StaticArray<AABB> blasSceneBounds(sceneScratch.temp.arena, numBlas);
+    StaticArray<string> virtualGeoFilenames(sceneScratch.temp.arena, numBlas);
+    HashIndex filenameHash(sceneScratch.temp.arena, NextPowerOfTwo(numBlas),
+                           NextPowerOfTwo(numBlas));
 
     for (int sceneIndex = 0; sceneIndex < numBlas; sceneIndex++)
     {
-        ScenePrimitives *scene = blasScenes[sceneIndex];
-        scene->sceneIndex      = sceneIndex;
-        string filename        = scene->filename;
-        string virtualGeoFilename =
-            PushStr8F(sceneScratch.temp.arena, "%S%S.geo", params->directory,
-                      RemoveFileExtension(filename));
+        ScenePrimitives *scene    = blasScenes[sceneIndex];
+        string virtualGeoFilename = scene->virtualGeoFilename;
+        u32 hash                  = Hash(virtualGeoFilename);
 
+        int resourceID = -1;
+        for (int hashIndex = filenameHash.FirstInHash(hash); hashIndex != -1;
+             hashIndex     = filenameHash.NextInHash(hashIndex))
+        {
+            if (virtualGeoFilenames[hashIndex] == virtualGeoFilename)
+            {
+                resourceID = hashIndex;
+                break;
+            }
+        }
+        if (resourceID != -1)
+        {
+            scene->sceneIndex = resourceID;
+            continue;
+        }
+
+        scene->sceneIndex = virtualGeoFilenames.Length();
+        virtualGeoFilenames.Push(virtualGeoFilename);
+        filenameHash.AddInHash(hash, scene->sceneIndex);
         virtualGeometryManager.AddNewMesh(sceneScratch.temp.arena, dgfTransferCmd,
                                           virtualGeoFilename);
 
@@ -681,7 +700,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             for (int instanceIndex = 0; instanceIndex < scene->numPrimitives; instanceIndex++)
             {
                 GPUInstance gpuInstance = {};
-                gpuInstance.resourceID  = instances[instanceIndex].id;
+                u32 resourceID = scene->childScenes[instances[instanceIndex].id]->sceneIndex;
+                gpuInstance.resourceID = resourceID;
 
                 AffineSpace &transform =
                     scene->affineTransforms[instances[instanceIndex].transformIndex];
@@ -694,9 +714,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     }
                 }
                 gpuInstance.globalRootNodeOffset =
-                    virtualGeometryManager
-                        .meshInfos[scene->childScenes[instances[instanceIndex].id]->sceneIndex]
-                        .hierarchyNodeOffset;
+                    virtualGeometryManager.meshInfos[resourceID].hierarchyNodeOffset;
                 gpuInstances.Push(gpuInstance);
             }
         }
@@ -1004,9 +1022,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     .Bind(&virtualGeometryManager.blasDataBuffer)
                     .Bind(&aabbBuffer.buffer)
                     .Bind(&sceneTransferBuffers[currentBuffer].buffer)
-                    // .Bind(&virtualGeometryManager.ptlasIndirectCommandBuffer)
-                    // .Bind(&virtualGeometryManager.ptlasUpdateInfosBuffer)
-                    // .Bind(&virtualGeometryManager.ptlasInstanceBitVectorBuffer)
                     .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
                     .End();
 
@@ -1103,9 +1118,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 .Bind(&virtualGeometryManager.blasDataBuffer)
                 .Bind(&aabbBuffer.buffer)
                 .Bind(&sceneTransferBuffers[currentBuffer].buffer)
-                // .Bind(&virtualGeometryManager.ptlasIndirectCommandBuffer)
-                // .Bind(&virtualGeometryManager.ptlasUpdateInfosBuffer)
-                // .Bind(&virtualGeometryManager.ptlasInstanceBitVectorBuffer)
                 .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
                 .End();
 
@@ -1120,6 +1132,48 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             cmd->FlushBarriers();
             device->EndEvent(cmd);
         }
+
+        // if (device->frameCount > 500)
+        // {
+        //     GPUBuffer readback0 =
+        //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        //                              gpuInstancesBuffer.buffer.size,
+        //                              MemoryUsage::GPU_TO_CPU);
+        //     //
+        //     // GPUBuffer readback2 =
+        //     //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        //     //     thisFrameBitVector->size,
+        //     //                          MemoryUsage::GPU_TO_CPU);
+        //     // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        //     //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+        //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
+        //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+        //                  VK_ACCESS_2_TRANSFER_READ_BIT);
+        //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+        //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+        //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
+        //     cmd->FlushBarriers();
+        //     cmd->CopyBuffer(&readback0, &gpuInstancesBuffer.buffer);
+        //     // cmd->CopyBuffer(&readback, &blasDataBuffer);
+        //     // cmd->CopyBuffer(&readback2, thisFrameBitVector);
+        //     Semaphore testSemaphore   = device->CreateSemaphore();
+        //     testSemaphore.signalValue = 1;
+        //     cmd->SignalOutsideFrame(testSemaphore);
+        //     device->SubmitCommandBuffer(cmd);
+        //     device->Wait(testSemaphore);
+        //
+        //     GPUInstance *data = (GPUInstance *)readback0.mappedPtr;
+        //     u32 count         = 0;
+        //     for (int i = 0; i < gpuInstances.Length(); i++)
+        //     {
+        //         if (data[i].cull) count++;
+        //     }
+        //     // u32 *data2     = (u32 *)readback2.mappedPtr;
+        //     //
+        //     int stop = 5;
+        // }
 
         // Hierarchy traversal
         {

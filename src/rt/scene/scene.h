@@ -58,6 +58,7 @@ struct ScenePrimitives
     typedef bool (*OccludedFunc)(ScenePrimitives *, StackEntry<DefaultN>, Ray2 &);
 
     string filename;
+    string virtualGeoFilename;
 
     GeometryType geometryType;
 

@@ -2254,10 +2254,9 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstan
                  VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
     cmd->FlushBarriers();
 
-    Assert(maxPartitions <= 16);
     cmd->BuildPTLAS(&tlasAccelBuffer, &tlasScratchBuffer, &ptlasIndirectCommandBuffer,
                     &clasGlobalsBuffer, sizeof(u32) * GLOBALS_PTLAS_OP_TYPE_COUNT_INDEX,
-                    (1u << 21), (1u << 21u) / 16, 16, 0);
+                    (1u << 21), (1u << 21u) / maxPartitions, maxPartitions, 0);
 }
 
 struct GetHierarchyNode
@@ -2428,7 +2427,6 @@ void VirtualGeometryManager::Test(ScenePrimitives *scene,
     bool parallel = scene->numPrimitives >= BUILD_PARALLEL_THRESHOLD;
 
     BuildHierarchy(scene, refs, record, numPartitions, partitionIndices, parallel);
-    Assert(numPartitions <= maxPartitions);
 
     for (u32 i = 0; i < partitionIndices.Length(); i++)
     {

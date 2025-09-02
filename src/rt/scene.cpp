@@ -7,6 +7,7 @@
 #include "shader_interop/hit_shaderinterop.h"
 #include "graphics/ptex.h"
 #include "scene_load.h"
+#include "string.h"
 #ifdef USE_GPU
 #include "gpu_scene.h"
 #else
@@ -304,7 +305,7 @@ Texture *ReadTexture(Arena *arena, Tokenizer *tokenizer, string directory, int *
         scene->ptexTextures.push_back(tex);
 
         if (index) *index = (int)(scene->ptexTextures.size() - 1);
-        return &scene->ptexTextures.back();
+        return &scene->ptexTextures[scene->ptexTextures.size() - 1];
     }
     else
     {
@@ -431,6 +432,7 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
     // TODO: I have no idea why this errored out?
     // ChunkedLinkedList<Material *, 1024> materialsList(tempArena);
     std::vector<Material *> materialsList;
+    scene->ptexTextures                = StaticArray<PtexTexture>(arena, 100);
     NullMaterial *nullMaterial         = PushStructConstruct(arena, NullMaterial)();
     nullMaterial->ptexReflectanceIndex = -1;
     materialsList.push_back(nullMaterial);
@@ -820,7 +822,12 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
 
             while (!Advance(&tokenizer, "SHAPE_END "))
             {
-                if (Advance(&tokenizer, "Quad "))
+                if (Advance(&tokenizer, "Geo Filename "))
+                {
+                    string geoFilename        = ReadWord(&tokenizer);
+                    scene->virtualGeoFilename = PushStr8Copy(arena, geoFilename);
+                }
+                else if (Advance(&tokenizer, "Quad "))
                 {
                     // MOANA: everything should be catclark
                     // Assert(0);

@@ -88,6 +88,8 @@ struct PBRTFileInfo
 
     ChunkedLinkedList<AffineSpace, MemoryType_Instance> transforms;
 
+    string virtualGeoFilename;
+
     PBRTFileInfo *imports[32];
     u32 numImports;
     Scheduler::Counter counter = {};
@@ -259,6 +261,72 @@ struct MaterialMap
     }
 };
 
+struct MeshHashNode
+{
+    string buffer;
+    string filename;
+    u64 hash;
+    MeshHashNode *next;
+};
+
+struct MeshHashMap
+{
+    MeshHashNode *map;
+    Mutex *mutexes;
+    u32 count;
+
+    u32 FindOrAdd(Arena *arena, string buffer, u64 hash, string &filename)
+    {
+        u32 index = hash & (count - 1);
+        BeginRMutex(&mutexes[index]);
+        MeshHashNode *node = &map[index];
+        MeshHashNode *prev;
+        while (node)
+        {
+            if (hash == node->hash && node->buffer.size == buffer.size)
+            {
+                if (memcmp(buffer.str, node->buffer.str, buffer.size) == 0)
+                {
+                    filename = node->filename;
+                    EndRMutex(&mutexes[index]);
+                    return true;
+                }
+            }
+            Assert(hash != node->hash);
+            prev = node;
+            node = node->next;
+        }
+        Assert(!node);
+        EndRMutex(&mutexes[index]);
+
+        BeginWMutex(&mutexes[index]);
+        node = &map[index];
+        while (node)
+        {
+            if (hash == node->hash && node->buffer.size == buffer.size)
+            {
+                if (memcmp(buffer.str, node->buffer.str, buffer.size) == 0)
+                {
+                    filename = node->filename;
+                    EndWMutex(&mutexes[index]);
+                    return true;
+                }
+            }
+            Assert(hash != node->hash);
+            prev = node;
+            node = node->next;
+        }
+
+        prev->hash     = hash;
+        prev->buffer   = PushStr8Copy(arena, buffer);
+        prev->filename = PushStr8Copy(arena, filename);
+        prev->next     = PushStruct(arena, MeshHashNode);
+        EndWMutex(&mutexes[index]);
+
+        return false;
+    }
+};
+
 struct SceneLoadState
 {
     Arena **arenas;
@@ -274,6 +342,7 @@ struct SceneLoadState
     IncludeMap includeMap;
 
     MaterialMap materialMap;
+    MeshHashMap meshMap;
 
     void Init(Arena *arena)
     {
@@ -301,6 +370,10 @@ struct SceneLoadState
         materialMap.count   = 16384;
         materialMap.map     = PushArray(arena, MaterialHashNode, materialMap.count);
         materialMap.mutexes = PushArray(arena, Mutex, materialMap.count);
+
+        meshMap.count   = 16384;
+        meshMap.map     = PushArray(arena, MeshHashNode, meshMap.count);
+        meshMap.mutexes = PushArray(arena, Mutex, meshMap.count);
 
         materialCounter = 1;
     }
@@ -670,9 +743,10 @@ string ReplaceColons(Arena *arena, string str)
     return newString;
 }
 
-void WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState *sls, string directory,
-                 string currentFilename)
+static string WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState *sls,
+                          string directory, string currentFilename)
 {
+
 #ifdef USE_GPU
     if (state->shapes.Length())
     {
@@ -861,10 +935,62 @@ void WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState *sls, str
         });
         string virtualGeoFilename =
             PushStr8F(tempArena, "%S%S.geo", directory, RemoveFileExtension(currentFilename));
-        CreateClusters(meshes.data, newNumMeshes, materialIndices, virtualGeoFilename);
+        string geoFilename = virtualGeoFilename;
+
+        Arena *arena = sls->arenas[GetThreadIndex()];
+        u32 size     = 0;
+        for (u32 i = 0; i < newNumMeshes; i++)
+        {
+            Mesh &mesh = meshes[i];
+            size += sizeof(Vec3f) * mesh.numVertices;
+            size += sizeof(u32) * mesh.numIndices;
+            if (mesh.n)
+            {
+                size += sizeof(Vec3f) * mesh.numVertices;
+            }
+            if (mesh.uv)
+            {
+                size += sizeof(Vec2f) * mesh.numVertices;
+            }
+        }
+        u8 *buffer = PushArrayNoZero(tempArena, u8, size);
+
+        u32 offset = 0;
+        for (u32 i = 0; i < newNumMeshes; i++)
+        {
+            Mesh &mesh = meshes[i];
+            MemoryCopy(buffer + offset, mesh.p, sizeof(Vec3f) * mesh.numVertices);
+            offset += sizeof(Vec3f) * mesh.numVertices;
+            MemoryCopy(buffer + offset, mesh.indices, sizeof(u32) * mesh.numIndices);
+            if (mesh.n)
+            {
+                MemoryCopy(buffer + offset, mesh.n, sizeof(Vec3f) * mesh.numVertices);
+                offset += sizeof(Vec3f) * mesh.numVertices;
+            }
+            if (mesh.uv)
+            {
+                MemoryCopy(buffer + offset, mesh.uv, sizeof(Vec2f) * mesh.numVertices);
+                offset += sizeof(Vec2f) * mesh.numVertices;
+            }
+        }
+
+        string str = {buffer, size};
+        u64 hash   = MurmurHash64A(str.str, size, 0);
+
+        u32 result = sls->meshMap.FindOrAdd(arena, str, hash, virtualGeoFilename);
+        if (!result)
+        {
+            CreateClusters(meshes.data, newNumMeshes, materialIndices, virtualGeoFilename);
+        }
+        else
+        {
+            Print("%S is a duplicate of %S\n", geoFilename, virtualGeoFilename);
+        }
         ReleaseArenaArray(arenas);
+        return virtualGeoFilename;
     }
 #endif
+    return {};
 }
 
 PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
@@ -949,7 +1075,8 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                     geoFilename = PushStr8F(tempArena, "%S_rtshape_tri.rtscene",
                                             RemoveFileExtension(state->filename));
                 }
-                WriteNanite(state, tempArena, sls, directory, geoFilename);
+                state->virtualGeoFilename =
+                    WriteNanite(state, tempArena, sls, directory, geoFilename);
                 WriteFile(directory, state, originFile ? sls : 0);
                 ArenaRelease(state->arena);
                 for (u32 i = 0; i < state->numImports; i++)
@@ -1311,7 +1438,8 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 {
                     state->Merge(state->imports[i]);
                 }
-                WriteNanite(state, tempArena, sls, directory, state->filename);
+                state->virtualGeoFilename =
+                    WriteNanite(state, tempArena, sls, directory, state->filename);
                 WriteFile(directory, state);
                 ArenaRelease(state->arena);
                 for (u32 i = 0; i < state->numImports; i++)
@@ -2104,6 +2232,12 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
         {
             WriteTransforms(info, dataBuilder);
             Put(&builder, "SHAPE_START ");
+            if (info->virtualGeoFilename.size)
+            {
+                Put(&builder, "Geo Filename ");
+                Put(&builder, info->virtualGeoFilename);
+                Put(&builder, " ");
+            }
             // TODO: need to handle duplicates as well
             for (auto *node = info->shapes.first; node != 0; node = node->next)
             {
