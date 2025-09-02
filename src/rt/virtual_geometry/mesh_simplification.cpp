@@ -1971,11 +1971,11 @@ bool RecursivePartitionGraph(ArrayView<int> clusterIndices, ArrayView<idx_t> clu
     {
         int rangeIndex = numPartitions.fetch_add(1, std::memory_order_relaxed);
 
+        if (rangeIndex == ranges.Length()) return false;
+
         PartitionRange range;
         range.begin = globalClusterOffset;
         range.end   = range.begin + numClusters;
-
-        if (rangeIndex == ranges.Length()) return false;
 
         ranges[rangeIndex] = range;
 
@@ -3245,10 +3245,20 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     }
 
     GraphPartitionResult partitionResult;
-    bool success =
-        GenerateValidTriClusters(scratch.temp.arena, combinedMesh, MAX_CLUSTER_TRIANGLES, ~0u,
-                                 triangleGeomIDs, partitionResult);
-    Assert(success);
+    u32 maxNumTriangles = MAX_CLUSTER_TRIANGLES;
+    for (;;)
+    {
+        bool success =
+            GenerateValidTriClusters(scratch.temp.arena, combinedMesh, maxNumTriangles, ~0u,
+                                     triangleGeomIDs, partitionResult);
+        if (success)
+        {
+            break;
+        }
+        maxNumTriangles -= 2;
+        Print("Triangle clusterization exceeded limits; trying "
+              "again\n");
+    }
     u32 numFinestClusters = partitionResult.ranges.Length();
 
     StaticArray<u32> newTriangleGeomIDs(scratch.temp.arena, totalNumTriangles);
@@ -3308,6 +3318,17 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
         clusters.Push(cluster);
     }
 
+#if 1
+    ArrayView<ClusterGroup> levelClusterGroups(clusterGroups, 0, 1);
+    u32 vertexCount = combinedMesh.numVertices;
+    u32 indexCount  = combinedMesh.numIndices;
+    u32 voxelCount  = 0;
+
+    ArrayView<Cluster> levelClusters(clusters);
+    WriteClustersToOBJ(levelClusterGroups, levelClusters, filename, vertexCount, indexCount,
+                       voxelCount, numAttributes, 500);
+#endif
+
     // Create clusters
     StaticArray<DenseGeometryBuildData> buildDatas(scratch.temp.arena, OS_NumProcessors());
     for (int i = 0; i < buildDatas.capacity; i++)
@@ -3344,38 +3365,44 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
             Print("depth: %u num clusters: %u\n", depth, levelClusters.num);
             if (levelClusters.Length() < 2)
             {
-                levelClusters[0].groupIndex = clusterGroups.Length();
-                ClusterGroup rootGroup;
-                rootGroup.vertexData        = 0;
-                rootGroup.indices           = 0;
-                rootGroup.buildDataIndex    = 0;
-                rootGroup.isLeaf            = false;
-                rootGroup.maxParentError    = 1e10;
-                rootGroup.lodBounds         = levelClusters[0].lodBounds;
-                rootGroup.parentStartIndex  = ~0u;
-                rootGroup.parentCount       = ~0u;
-                rootGroup.clusterStartIndex = prevClusterArrayEnd;
-                rootGroup.clusterCount      = 1;
-
-                rootGroup.numVertices = 0;
-                rootGroup.numIndices  = 0;
-                rootGroup.mipLevel    = depth++;
-                rootGroup.hasVoxels   = bool(levelClusters[0].compressedVoxels.Length());
-                rootGroup.rangeIndex  = -1;
-
-                if (rootGroup.hasVoxels)
+                u32 numPrimitives = levelClusters[0].triangleIndices.Length() +
+                                    levelClusters[0].compressedVoxels.Length();
+                // TODO
+                // if (numPrimitives < 64)
                 {
-                    ClusterGroupRange clusterGroupRange;
-                    clusterGroupRange.groupStartIndex = clusterGroups.Length();
-                    clusterGroupRange.groupCount      = 1;
-                    clusterGroupRanges.Push(clusterGroupRange);
+                    levelClusters[0].groupIndex = clusterGroups.Length();
+                    ClusterGroup rootGroup;
+                    rootGroup.vertexData        = 0;
+                    rootGroup.indices           = 0;
+                    rootGroup.buildDataIndex    = 0;
+                    rootGroup.isLeaf            = false;
+                    rootGroup.maxParentError    = 1e10;
+                    rootGroup.lodBounds         = levelClusters[0].lodBounds;
+                    rootGroup.parentStartIndex  = ~0u;
+                    rootGroup.parentCount       = ~0u;
+                    rootGroup.clusterStartIndex = prevClusterArrayEnd;
+                    rootGroup.clusterCount      = 1;
 
-                    rootGroup.rangeIndex = clusterGroupRanges.Length() - 1;
+                    rootGroup.numVertices = 0;
+                    rootGroup.numIndices  = 0;
+                    rootGroup.mipLevel    = depth++;
+                    rootGroup.hasVoxels   = bool(levelClusters[0].compressedVoxels.Length());
+                    rootGroup.rangeIndex  = -1;
+
+                    if (rootGroup.hasVoxels)
+                    {
+                        ClusterGroupRange clusterGroupRange;
+                        clusterGroupRange.groupStartIndex = clusterGroups.Length();
+                        clusterGroupRange.groupCount      = 1;
+                        clusterGroupRanges.Push(clusterGroupRange);
+
+                        rootGroup.rangeIndex = clusterGroupRanges.Length() - 1;
+                    }
+
+                    clusterGroups.Push(rootGroup);
+
+                    break;
                 }
-
-                clusterGroups.Push(rootGroup);
-
-                break;
             }
 
             u32 hashSize = NextPowerOfTwo(3 * MAX_CLUSTER_TRIANGLES * levelClusters.Length());
@@ -4345,7 +4372,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
             }
 
             // Write obj to disk
-#if 0
+#if 1
             ArrayView<ClusterGroup> levelClusterGroups(clusterGroups, totalNumGroups,
                                                        partitionResult.ranges.Length());
             u32 vertexCount = numVertices.load();
@@ -4442,17 +4469,11 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
             MemoryCopy(clusters.data + totalNumClusters, reorderedClusters.data,
                        clusterOffset * sizeof(Cluster));
 
-            bool skip = numLevelClusters.load() == levelClusters.Length();
-
             levelClusters = ArrayView<Cluster>(clusters, totalNumClusters,
                                                clusters.Length() - totalNumClusters);
             depth++;
 
             ReleaseArenaArray(tempArenas);
-            if (skip)
-            {
-                break;
-            }
         }
     }
 
@@ -4728,9 +4749,12 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
         group.numParts = parts.Length() - group.numParts;
     }
 
-    fixup.clusterEndIndex = clusterPageStartIndex;
-    fixup.numPages        = pageInfos.Length() - fixup.pageStartIndex + 1;
-    voxelClusterGroupFixups.Push(fixup);
+    if (voxelClusterCount)
+    {
+        fixup.clusterEndIndex = clusterPageStartIndex;
+        fixup.numPages        = pageInfos.Length() - fixup.pageStartIndex + 1;
+        voxelClusterGroupFixups.Push(fixup);
+    }
 
     PageInfo finalPageInfo;
     finalPageInfo.partStartIndex = partStartIndex;
@@ -5952,6 +5976,215 @@ static void CheckVoxelOccupancy(Arena *arena, ScenePrimitives *scene,
         numVoxels--;
     }
 #endif
+}
+
+static void BuildInstanceHierarchy(PrimRef *refs, RecordAOSSplits &record,
+                                   std::atomic<u32> &numPartitions,
+                                   StaticArray<u32> &partitionIndices, bool parallel)
+{
+    typedef HeuristicObjectBinning<PrimRef> Heuristic;
+
+    HeuristicObjectBinning<PrimRef> heuristic(refs, 0);
+
+    Assert(record.count > 0);
+
+    RecordAOSSplits childRecords[CHILDREN_PER_HIERARCHY_NODE];
+    u32 numChildren = 0;
+
+    Split split = heuristic.Bin(record);
+
+    if (record.count <= 1024)
+    {
+        u32 threadIndex = GetThreadIndex();
+        heuristic.FlushState(split);
+
+        u32 partitionIndex = numPartitions.fetch_add(1, std::memory_order_relaxed);
+
+        for (int i = 0; i < record.count; i++)
+        {
+            PrimRef &ref                 = refs[record.start + i];
+            partitionIndices[ref.primID] = partitionIndex;
+        }
+
+        return;
+    }
+
+    heuristic.Split(split, record, childRecords[0], childRecords[1]);
+
+    // N - 1 splits produces N children
+    for (numChildren = 2; numChildren < CHILDREN_PER_HIERARCHY_NODE; numChildren++)
+    {
+        i32 bestChild = -1;
+        f32 maxArea   = neg_inf;
+        for (u32 recordIndex = 0; recordIndex < numChildren; recordIndex++)
+        {
+            RecordAOSSplits &childRecord = childRecords[recordIndex];
+            if (childRecord.count <= CHILDREN_PER_HIERARCHY_NODE) continue;
+
+            f32 childArea = HalfArea(childRecord.geomBounds);
+            if (childArea > maxArea)
+            {
+                bestChild = recordIndex;
+                maxArea   = childArea;
+            }
+        }
+        if (bestChild == -1) break;
+
+        split = heuristic.Bin(childRecords[bestChild]);
+
+        RecordAOSSplits out;
+        heuristic.Split(split, childRecords[bestChild], out, childRecords[numChildren]);
+
+        childRecords[bestChild] = out;
+    }
+
+    if (parallel)
+    {
+        scheduler.ScheduleAndWait(numChildren, 1, [&](u32 jobID) {
+            bool childParallel = childRecords[jobID].count >= BUILD_PARALLEL_THRESHOLD;
+            BuildInstanceHierarchy(refs, childRecords[jobID], numPartitions, partitionIndices,
+                                   childParallel);
+        });
+    }
+    else
+    {
+        for (int i = 0; i < numChildren; i++)
+        {
+            BuildInstanceHierarchy(refs, childRecords[i], numPartitions, partitionIndices,
+                                   false);
+        }
+    }
+}
+
+void SimplifyInstances(string directory, Instance *instances, u32 numInstances,
+                       AffineSpace *transforms, u32 numTransforms, Mesh &mesh)
+{
+    ScratchArena scratch;
+    std::atomic<u32> numPartitions(0);
+
+    StaticArray<u32> partitionIndices(scratch.temp.arena, numInstances, numInstances);
+    RecordAOSSplits record(neg_inf);
+    PrimRef *refs = PushArrayNoZero(scratch.temp.arena, PrimRef, numInstances);
+
+    Bounds bounds;
+    for (u32 i = 0; i < mesh.numVertices; i++)
+    {
+        bounds.Extend(Lane4F32(mesh.p[i]));
+    }
+    Bounds geom;
+    Bounds cent;
+
+    for (u32 i = 0; i < numInstances; i++)
+    {
+        AffineSpace &transform = transforms[instances[i].transformIndex];
+        Bounds instanceBounds  = Transform(transform, bounds);
+
+        PrimRef &ref = refs[i];
+        ref.minX     = -instanceBounds.minP[0];
+        ref.minY     = -instanceBounds.minP[1];
+        ref.minZ     = -instanceBounds.minP[2];
+        ref.maxX     = instanceBounds.maxP[0];
+        ref.maxY     = instanceBounds.maxP[1];
+        ref.maxZ     = instanceBounds.maxP[2];
+        ref.primID   = i;
+
+        geom.Extend(instanceBounds);
+        cent.Extend(instanceBounds.minP + instanceBounds.maxP);
+    }
+    Vec3f center      = ToVec3f((geom.minP + geom.maxP) / 2.f);
+    record.geomBounds = Lane8F32(-geom.minP, geom.maxP);
+    record.centBounds = Lane8F32(-cent.minP, cent.maxP);
+    record.SetRange(0, numInstances);
+    BuildInstanceHierarchy(refs, record, numPartitions, partitionIndices, true);
+
+    Graph<u32> instanceGraph;
+    instanceGraph.InitializeStatic(scratch.temp.arena, numInstances, numPartitions.load(),
+                                   [&](u32 instanceIndex, u32 *offsets, u32 *data = 0) {
+                                       u32 partition = partitionIndices[instanceIndex];
+                                       u32 dataIndex = offsets[partition]++;
+                                       if (data) data[dataIndex] = instanceIndex;
+                                       return 1;
+                                   });
+
+    for (u32 p = 0; p < numPartitions.load(); p++)
+    {
+        u32 numInstancesInPartition = instanceGraph.offsets[p + 1] - instanceGraph.offsets[p];
+
+        ScratchArena instanceScratch;
+
+        Vec3f *newP     = PushArrayNoZero(instanceScratch.temp.arena, Vec3f,
+                                          numInstancesInPartition * mesh.numVertices);
+        u32 *newIndices = PushArrayNoZero(instanceScratch.temp.arena, u32,
+                                          numInstancesInPartition * mesh.numIndices);
+        u32 hashSize    = NextPowerOfTwo(numInstancesInPartition * mesh.numVertices);
+        HashIndex vertexHash(instanceScratch.temp.arena, hashSize, hashSize);
+        u32 vertexCount = 0;
+        u32 indexCount  = 0;
+        Bounds partitionBounds;
+
+        for (u32 dataIndex = instanceGraph.offsets[p];
+             dataIndex < instanceGraph.offsets[p + 1]; dataIndex++)
+        {
+            u32 instanceIndex  = instanceGraph.data[dataIndex];
+            Instance &instance = instances[instanceIndex];
+
+            AffineSpace &transform = transforms[instance.transformIndex];
+            // Voxels
+            if (mesh.indices == 0)
+            {
+                Assert(0);
+            }
+            // Triangles
+            else
+            {
+                for (u32 indexIndex = 0; indexIndex < mesh.numIndices; indexIndex++)
+                {
+                    const Vec3f &p     = mesh.p[mesh.indices[indexIndex]];
+                    Vec3f transformedP = TransformP(transform, p);
+                    partitionBounds.Extend(Lane4F32(transformedP));
+
+                    int hash = Hash(transformedP);
+
+                    int index = -1;
+                    for (int hashIndex = vertexHash.FirstInHash(hash); hashIndex != -1;
+                         hashIndex     = vertexHash.NextInHash(hashIndex))
+                    {
+                        if (newP[hashIndex] == transformedP)
+                        {
+                            index = hashIndex;
+                            break;
+                        }
+                    }
+                    if (index == -1)
+                    {
+                        index       = vertexCount++;
+                        newP[index] = transformedP;
+                        vertexHash.AddInHash(hash, index);
+                    }
+                    newIndices[indexCount++] = index;
+                }
+            }
+        }
+
+        Vec3f partitionCenter = ToVec3f((partitionBounds.minP + partitionBounds.maxP) / 2.f);
+        for (int i = 0; i < vertexCount; i++)
+        {
+            newP[i] -= partitionCenter;
+        }
+        Mesh newMesh        = {};
+        newMesh.p           = newP;
+        newMesh.numVertices = vertexCount;
+        newMesh.indices     = newIndices;
+        newMesh.numIndices  = indexCount;
+
+        StaticArray<u32> materialIndices(instanceScratch.temp.arena, 1);
+        materialIndices.Push(0);
+
+        string filename =
+            PushStr8F(instanceScratch.temp.arena, "%Sinstance_test_%u.geo\n", directory, p);
+        CreateClusters(&newMesh, 1, materialIndices, filename);
+        int stop = 5;
+    }
 }
 
 #if 0

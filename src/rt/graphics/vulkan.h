@@ -880,7 +880,7 @@ struct CommandQueue
     VkQueue queue;
     Mutex lock = {};
 
-    //VkSemaphore submitSemaphore[numActiveFrames];
+    // VkSemaphore submitSemaphore[numActiveFrames];
     VkFence submitFence[numActiveFrames];
     u64 submissionID;
 };
@@ -1095,8 +1095,8 @@ struct Vulkan
                               u32 &scratchSize, u32 &updateScratchSize,
                               u32 &accelerationStructureSize);
     void GetCLASBuildSizes(CLASOpMode opMode, int maxNumClusters, u32 maxNumTriangles,
-                           u32 maxNumVertices, u32 &scratchSize,
-                           u32 &accelerationStructureSize);
+                           u32 maxNumVertices, u32 maxClusterTriangles, u32 maxClusterVertices,
+                           u32 &scratchSize, u32 &accelerationStructureSize);
     void GetCLASTemplateBuildSizes(CLASOpMode opMode, int maxNumClusters, u32 maxNumTriangles,
                                    u32 maxNumVertices, u32 maxClusterTriangles,
                                    u32 maxClusterVertices, u32 &scratchSize,

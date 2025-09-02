@@ -3500,7 +3500,8 @@ void Vulkan::GetClusterBuildSizes(CLASOpInput opInput, CLASOpMode opMode, CLASOp
 }
 
 void Vulkan::GetCLASBuildSizes(CLASOpMode opMode, int maxNumClusters, u32 maxNumTriangles,
-                               u32 maxNumVertices, u32 &scratchSize,
+                               u32 maxNumVertices, u32 maxClusterTriangles,
+                               u32 maxClusterVertices, u32 &scratchSize,
                                u32 &accelerationStructureSize)
 
 {

@@ -432,7 +432,8 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
                               maxPages * MAX_CLUSTERS_PER_PAGE,
                               maxPages * MAX_CLUSTERS_PER_PAGE * MAX_CLUSTER_TRIANGLES,
                               maxPages * MAX_CLUSTERS_PER_PAGE * MAX_CLUSTER_TRIANGLE_VERTICES,
-                              clasScratchSize, clasAccelerationStructureSize);
+                              MAX_CLUSTER_TRIANGLES, MAX_CLUSTER_VERTICES, clasScratchSize,
+                              clasAccelerationStructureSize);
 
     Assert(clasAccelerationStructureSize <= expectedSize);
     clasImplicitData =

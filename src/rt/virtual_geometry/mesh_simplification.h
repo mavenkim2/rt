@@ -147,6 +147,10 @@ static void CheckVoxelOccupancy(Arena *arena, ScenePrimitives *scene,
                                 SimpleHashSet<Vec3i> &voxelHashSet, StaticArray<Voxel> &voxels,
                                 StaticArray<Vec3i> &extraVoxels, f32 voxelSize);
 
+struct Instance;
+void SimplifyInstances(string directory, Instance *instances, u32 numInstances,
+                       AffineSpace *transforms, u32 numTransforms, Mesh &mesh);
+
 } // namespace rt
 
 #endif

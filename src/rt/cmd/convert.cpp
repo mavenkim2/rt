@@ -263,7 +263,10 @@ struct MaterialMap
 
 struct MeshHashNode
 {
-    string buffer;
+    Mesh *meshes;
+    u32 numMeshes;
+    string idFilename;
+
     string filename;
     u64 hash;
     MeshHashNode *next;
@@ -275,7 +278,10 @@ struct MeshHashMap
     Mutex *mutexes;
     u32 count;
 
-    u32 FindOrAdd(Arena *arena, string buffer, u64 hash, string &filename)
+    MeshHashNode **filenameMap;
+
+    u32 FindOrAdd(Arena *arena, Mesh *meshes, u32 numMeshes, u64 hash, string &filename,
+                  string idFilename)
     {
         u32 index = hash & (count - 1);
         BeginRMutex(&mutexes[index]);
@@ -283,9 +289,41 @@ struct MeshHashMap
         MeshHashNode *prev;
         while (node)
         {
-            if (hash == node->hash && node->buffer.size == buffer.size)
+            if (hash == node->hash && numMeshes == node->numMeshes)
             {
-                if (memcmp(buffer.str, node->buffer.str, buffer.size) == 0)
+                bool same = true;
+                for (u32 i = 0; i < numMeshes; i++)
+                {
+                    Mesh &otherMesh = node->meshes[i];
+                    Mesh &mesh      = meshes[i];
+                    if (mesh.numVertices == otherMesh.numVertices &&
+                        mesh.numIndices == otherMesh.numIndices)
+                    {
+                        same &= memcmp(mesh.p, otherMesh.p,
+                                       sizeof(Vec3f) * mesh.numVertices) == 0 &&
+                                memcmp(mesh.indices, otherMesh.indices,
+                                       sizeof(u32) * mesh.numIndices) == 0;
+                        same &= bool(mesh.uv) == bool(otherMesh.uv);
+                        if (mesh.uv && otherMesh.uv)
+                        {
+                            same &= memcmp(mesh.uv, otherMesh.uv,
+                                           sizeof(Vec2f) * mesh.numVertices) == 0;
+                        }
+                        same &= bool(mesh.n) == bool(otherMesh.n);
+                        if (mesh.n && otherMesh.n)
+                        {
+                            same &= memcmp(mesh.n, otherMesh.n,
+                                           sizeof(Vec3f) * mesh.numVertices) == 0;
+                        }
+                    }
+                    else
+                    {
+                        same = false;
+                        break;
+                    }
+                    if (!same) break;
+                }
+                if (same)
                 {
                     filename = node->filename;
                     EndRMutex(&mutexes[index]);
@@ -303,9 +341,41 @@ struct MeshHashMap
         node = &map[index];
         while (node)
         {
-            if (hash == node->hash && node->buffer.size == buffer.size)
+            if (hash == node->hash)
             {
-                if (memcmp(buffer.str, node->buffer.str, buffer.size) == 0)
+                bool same = true;
+                for (u32 i = 0; i < numMeshes; i++)
+                {
+                    Mesh &otherMesh = node->meshes[i];
+                    Mesh &mesh      = meshes[i];
+                    if (mesh.numVertices == otherMesh.numVertices &&
+                        mesh.numIndices == otherMesh.numIndices)
+                    {
+                        same &= memcmp(mesh.p, otherMesh.p,
+                                       sizeof(Vec3f) * mesh.numVertices) == 0 &&
+                                memcmp(mesh.indices, otherMesh.indices,
+                                       sizeof(u32) * mesh.numIndices) == 0;
+                        same &= bool(mesh.uv) == bool(otherMesh.uv);
+                        if (mesh.uv && otherMesh.uv)
+                        {
+                            same &= memcmp(mesh.uv, otherMesh.uv,
+                                           sizeof(Vec2f) * mesh.numVertices) == 0;
+                        }
+                        same &= bool(mesh.n) == bool(otherMesh.n);
+                        if (mesh.n && otherMesh.n)
+                        {
+                            same &= memcmp(mesh.n, otherMesh.n,
+                                           sizeof(Vec3f) * mesh.numVertices) == 0;
+                        }
+                    }
+                    else
+                    {
+                        same = false;
+                        break;
+                    }
+                    if (!same) break;
+                }
+                if (same)
                 {
                     filename = node->filename;
                     EndWMutex(&mutexes[index]);
@@ -317,12 +387,69 @@ struct MeshHashMap
             node = node->next;
         }
 
-        prev->hash     = hash;
-        prev->buffer   = PushStr8Copy(arena, buffer);
+        prev->hash = hash;
+
+        Mesh *storedMeshes = PushArrayNoZero(arena, Mesh, numMeshes);
+        for (u32 i = 0; i < numMeshes; i++)
+        {
+            Mesh &mesh       = meshes[i];
+            Mesh copy        = {};
+            copy.numVertices = mesh.numVertices;
+            copy.numIndices  = mesh.numIndices;
+            copy.p           = PushArrayNoZero(arena, Vec3f, mesh.numVertices);
+            MemoryCopy(copy.p, mesh.p, sizeof(Vec3f) * mesh.numVertices);
+            copy.indices = PushArrayNoZero(arena, u32, mesh.numIndices);
+            MemoryCopy(copy.indices, mesh.indices, sizeof(u32) * mesh.numIndices);
+            if (mesh.uv)
+            {
+                copy.uv = PushArrayNoZero(arena, Vec2f, mesh.numVertices);
+                MemoryCopy(copy.uv, mesh.uv, sizeof(Vec2f) * mesh.numVertices);
+            }
+            if (mesh.n)
+            {
+                copy.n = PushArrayNoZero(arena, Vec3f, mesh.numVertices);
+                MemoryCopy(copy.n, mesh.n, sizeof(Vec3f) * mesh.numVertices);
+            }
+            storedMeshes[i] = copy;
+        }
+        prev->meshes     = storedMeshes;
+        prev->numMeshes  = numMeshes;
+        prev->idFilename = PushStr8Copy(arena, idFilename);
+
         prev->filename = PushStr8Copy(arena, filename);
         prev->next     = PushStruct(arena, MeshHashNode);
         EndWMutex(&mutexes[index]);
 
+        u32 fileHash            = Hash(idFilename);
+        u32 fileIndex           = fileHash & (count - 1);
+        MeshHashNode **fileNode = &filenameMap[fileIndex];
+        BeginWMutex(&mutexes[fileIndex]);
+        while (*fileNode)
+        {
+            fileNode = &(*fileNode)->next;
+        }
+        *fileNode = prev;
+        EndWMutex(&mutexes[fileIndex]);
+
+        return false;
+    }
+    bool Find(Mesh *&meshes, u32 &numMeshes, string filename)
+    {
+        u32 fileHash  = Hash(filename);
+        u32 fileIndex = fileHash & (count - 1);
+        BeginRMutex(&mutexes[fileIndex]);
+        MeshHashNode *fileNode = filenameMap[fileIndex];
+        while (fileNode)
+        {
+            if (fileNode->idFilename == filename)
+            {
+                meshes    = fileNode->meshes;
+                numMeshes = fileNode->numMeshes;
+                return true;
+            }
+            fileNode = fileNode->next;
+        }
+        EndRMutex(&mutexes[fileIndex]);
         return false;
     }
 };
@@ -374,6 +501,8 @@ struct SceneLoadState
         meshMap.count   = 16384;
         meshMap.map     = PushArray(arena, MeshHashNode, meshMap.count);
         meshMap.mutexes = PushArray(arena, Mutex, meshMap.count);
+
+        meshMap.filenameMap = PushArray(arena, MeshHashNode *, meshMap.count);
 
         materialCounter = 1;
     }
@@ -977,7 +1106,8 @@ static string WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState 
         string str = {buffer, size};
         u64 hash   = MurmurHash64A(str.str, size, 0);
 
-        u32 result = sls->meshMap.FindOrAdd(arena, str, hash, virtualGeoFilename);
+        u32 result = sls->meshMap.FindOrAdd(arena, meshes.data, newNumMeshes, hash,
+                                            virtualGeoFilename, currentFilename);
         if (!result)
         {
             CreateClusters(meshes.data, newNumMeshes, materialIndices, virtualGeoFilename);
@@ -1078,6 +1208,41 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 state->virtualGeoFilename =
                     WriteNanite(state, tempArena, sls, directory, geoFilename);
                 WriteFile(directory, state, originFile ? sls : 0);
+
+                if (state->fileInstances.totalCount)
+                {
+                    ScratchArena scratch;
+                    Instance *instances =
+                        PushArrayNoZero(scratch.temp.arena, Instance, state->numInstances);
+                    for (auto *instNode = state->fileInstances.first; instNode != 0;
+                         instNode       = instNode->next)
+                    {
+                        for (u32 i = 0; i < instNode->count; i++)
+                        {
+                            InstanceType *fileInst = &instNode->values[i];
+                            u32 instanceCount      = 0;
+
+                            for (u32 transformIndex = fileInst->transformIndexStart;
+                                 transformIndex <= fileInst->transformIndexEnd;
+                                 transformIndex++)
+                            {
+                                Instance &instance      = instances[instanceCount++];
+                                instance.id             = 0;
+                                instance.transformIndex = transformIndex;
+                            }
+
+                            Mesh *meshes;
+                            u32 numMeshes;
+                            sls->meshMap.Find(meshes, numMeshes, fileInst->filename);
+                            AffineSpace *transforms = PushArrayNoZero(
+                                scratch.temp.arena, AffineSpace, state->transforms.totalCount);
+                            state->transforms.Flatten(transforms);
+                            SimplifyInstances(directory, instances, instanceCount, transforms,
+                                              state->transforms.totalCount, meshes[0]);
+                        }
+                    }
+                }
+
                 ArenaRelease(state->arena);
                 for (u32 i = 0; i < state->numImports; i++)
                 {
@@ -2459,8 +2624,11 @@ int main(int argc, char **argv)
     LoadPBRT(arena, filename);
 #else
     int numMeshes, actualNumMeshes;
-    string testFilename = "../../data/island/pbrt-v4/obj/isMountainB/archives/"
-                          "xgFoliageA_treeMadronaBaked_canopyOnly_lo.obj";
+    // string testFilename = "../../data/island/pbrt-v4/obj/isMountainB/archives/"
+    //                       "xgFoliageA_treeMadronaBaked_canopyOnly_lo.obj";
+
+    string testFilename =
+        "../../data/island/pbrt-v4/obj/isBeach/archives/xgPebbles_archiveRock0002_geo.obj";
     // string testFilename = "../../data/island/pbrt-v4/obj/osOcean/osOcean.obj";
 
     Mesh *meshes = LoadObj(arena, testFilename, numMeshes, actualNumMeshes);
@@ -2478,6 +2646,7 @@ int main(int argc, char **argv)
     Print("%f\n", t);
 #endif
 
+    // Instances
     u64 count        = 0;
     f64 time         = 0;
     u32 verts        = 0;
