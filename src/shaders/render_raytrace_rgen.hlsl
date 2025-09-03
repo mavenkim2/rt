@@ -36,6 +36,7 @@ ConstantBuffer<ShaderDebugInfo> debugInfo: register(b7);
 //RWStructuredBuffer<uint> feedbackBuffer : register(u12);
 StructuredBuffer<uint> clusterLookupTable : register(t13);
 StructuredBuffer<GPUInstance> gpuInstances : register(t14);
+RWStructuredBuffer<uint> proxyCounts : register(u15);
 
 [[vk::push_constant]] RayPushConstant push;
 
@@ -108,6 +109,13 @@ void main()
         {
             if (query.CandidateType() == CANDIDATE_PROCEDURAL_PRIMITIVE)
             {
+                uint instanceID = query.CandidateInstanceID();
+                if (instanceID >> 31u)
+                {
+                    uint proxyIndex = instanceID & 0x7fffffffu;
+                    InterlockedAdd(proxyCounts[proxyIndex], 1);
+                    continue;
+                }
 #ifndef TRACE_BRICKS
 #error
                 uint levelTableOffset = query.CandidateInstanceID();
@@ -180,7 +188,6 @@ void main()
 #endif
                 }
 #else
-                uint instanceID = query.CandidateInstanceID();
                 uint tableBaseOffset = gpuInstances[instanceID].clusterLookupTableOffset;
                 //uint resourceID = query.CandidateInstanceID();
                 uint primIndex = query.CandidatePrimitiveIndex();

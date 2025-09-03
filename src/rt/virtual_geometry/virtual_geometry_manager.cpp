@@ -25,8 +25,9 @@ static_assert(sizeof(PTLAS_UPDATE_INSTANCE_INFO) ==
 VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
     : physicalPages(arena, maxPages + 2), virtualTable(arena, maxVirtualPages),
       meshInfos(arena, maxInstances), numInstances(0), virtualInstanceOffset(0),
-      currentClusterTotal(0), currentTriangleClusterTotal(0), totalNumVirtualPages(0),
-      totalNumNodes(0), lruHead(-1), lruTail(-1)
+      voxelAddressOffset(0), clusterLookupTableOffset(0), currentClusterTotal(0),
+      currentTriangleClusterTotal(0), totalNumVirtualPages(0), totalNumNodes(0), lruHead(-1),
+      lruTail(-1)
 {
     for (u32 i = 0; i < maxVirtualPages; i++)
     {
@@ -609,6 +610,23 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
         sizeof(u32) * maxPages * MAX_CLUSTERS_PER_PAGE);
     totalNumBytes += moveDstSizes.size;
 
+    AABB aabb;
+    aabb.minX = -1;
+    aabb.minY = -1;
+    aabb.minZ = -1;
+    aabb.maxX = 1;
+    aabb.maxY = 1;
+    aabb.maxZ = 1;
+
+    TransferBuffer tempAabbBuffer = cmd->SubmitBuffer(
+        &aabb,
+        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        sizeof(AABB));
+
+    GPUAccelerationStructurePayload payload = cmd->BuildCustomBLAS(&tempAabbBuffer.buffer, 1);
+    oneBlasBuildAddress                     = payload.as.address;
+
     Print("%llu total bytes\n", totalNumBytes);
 }
 
@@ -877,11 +895,11 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, string 
     meshInfo.numFinestClusters        = clusterFileHeader.numFinestClusters;
     meshInfo.voxelClusterGroupFixups  = fixups;
     meshInfo.voxelBLASBitmask         = 0;
-    meshInfo.voxelAddressOffset       = 0;
-    meshInfo.clusterLookupTableOffset = 0;
+    meshInfo.voxelAddressOffset       = voxelAddressOffset;
+    meshInfo.clusterLookupTableOffset = clusterLookupTableOffset;
 
-    // TODO
-    Assert(meshInfos.Length() == 0);
+    voxelAddressOffset += meshInfo.voxelClusterGroupFixups.Length();
+    clusterLookupTableOffset += numVoxelClusters;
 
     meshInfo.nodes    = nodes;
     meshInfo.numNodes = numNodes;
@@ -1026,6 +1044,50 @@ static Vec3f DecodePosition(u8 *pageData, u32 vertexIndex, Vec3u posBitWidths, V
 
     const float scale = AsFloat((127u - 6u) << 23u);
     return Vec3f(pos + anchor) * scale;
+}
+
+void VirtualGeometryManager::ProcessInstanceRequests(CommandBuffer *cmd)
+{
+    ScratchArena scratch;
+    u32 *proxyCounts         = (u32 *)partitionReadbackBuffer.mappedPtr;
+    const u32 threshold      = 128;
+    const u32 instanceBudget = 16384;
+    u32 numInstancesToUpload = 0;
+
+    u32 total = 0;
+    for (u32 i = 0; i < maxPartitions; i++)
+    {
+        total += proxyCounts[i];
+    }
+    Print("num hits: %u\n", total);
+
+#if 0
+    if (instanceUploadBuffer.size == 0)
+    {
+        instanceUploadBuffer = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                                    sizeof(GPUInstance) * instanceBudget,
+                                                    MemoryUsage::CPU_TO_GPU);
+    }
+
+    for (u32 partitionIndex = 0; i < numPartitions; partitionIndex++)
+    {
+        if (proxyCounts[partitionIndex] > threshold &&
+            !partitionStreamedIn.GetBit(partitionIndex))
+        {
+            for (u32 dataIndex = partitionInstanceGraph.offsets[partitionIndex];
+                 dataIndex < partitionInstanceGraph.offsets[partitionIndex + 1]; dataIndex++)
+            {
+                if (numInstancesToUpload == instanceBudget) break;
+                u32 instanceIndex = partitionInstanceGraph.data[dataIndex];
+
+                u32 srcOffset = sizeof(GPUInstance) * numInstancesToUpload++;
+                MemoryCopy((u8 *)instanceUploadBuffer.mappedPtr + srcOffset,
+                           &gpuinstances[instanceIndex], sizeof(GPUInstance));
+            }
+        }
+        if (numInstancesToUpload == instanceBudget) break;
+    }
+#endif
 }
 
 void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
@@ -2067,8 +2129,9 @@ void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd,
     }
 }
 
-void VirtualGeometryManager::AllocateInstances(StaticArray<GPUInstance> &gpuInstances)
+void VirtualGeometryManager::AllocateInstances(StaticArray<GPUInstance> &inInstances)
 {
+#if 0
     for (GPUInstance &instance : gpuInstances)
     {
         MeshInfo &meshInfo          = meshInfos[instance.resourceID];
@@ -2101,24 +2164,24 @@ void VirtualGeometryManager::AllocateInstances(StaticArray<GPUInstance> &gpuInst
         // Assert(found);
     }
     numInstances += gpuInstances.Length();
+#endif
 }
 
-void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstances,
+void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstancesBuffer,
                                         GPUBuffer *blasSceneBounds,
                                         GPUBuffer *debugReadback) //, GPUBuffer *debugRdbck2)
 {
 
     uint buffer = device->frameCount & 1;
-
     GPUBuffer *lastFrameBitVector =
         buffer ? &ptlasInstanceFrameBitVectorBuffer0 : &ptlasInstanceFrameBitVectorBuffer1;
     GPUBuffer *thisFrameBitVector =
         buffer ? &ptlasInstanceFrameBitVectorBuffer1 : &ptlasInstanceFrameBitVectorBuffer0;
-
-    cmd->ClearBuffer(thisFrameBitVector);
-    cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                 VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-    cmd->FlushBarriers();
+    //
+    // cmd->ClearBuffer(thisFrameBitVector);
+    // cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+    //              VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+    // cmd->FlushBarriers();
 
     // Update/write PTLAS instances
     {
@@ -2138,7 +2201,7 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstan
             .Bind(&ptlasUpdateInfosBuffer)
             .Bind(&blasAccelAddresses)
             .Bind(&blasDataBuffer)
-            .Bind(gpuInstances)
+            .Bind(gpuInstancesBuffer)
             .Bind(blasSceneBounds)
             .Bind(&voxelAddressTable)
             .Bind(&instanceBitmasksBuffer)
@@ -2269,10 +2332,11 @@ struct GetHierarchyNode
     }
 };
 
-void VirtualGeometryManager::BuildHierarchy(ScenePrimitives *scene, PrimRef *refs,
-                                            RecordAOSSplits &record,
+void VirtualGeometryManager::BuildHierarchy(PrimRef *refs, RecordAOSSplits &record,
                                             std::atomic<u32> &numPartitions,
-                                            StaticArray<u32> &partitionIndices, bool parallel)
+                                            StaticArray<u32> &partitionIndices,
+                                            StaticArray<RecordAOSSplits> &records,
+                                            bool parallel)
 {
     typedef HeuristicObjectBinning<PrimRef> Heuristic;
 
@@ -2291,6 +2355,9 @@ void VirtualGeometryManager::BuildHierarchy(ScenePrimitives *scene, PrimRef *ref
         heuristic.FlushState(split);
 
         u32 partitionIndex = numPartitions.fetch_add(1, std::memory_order_relaxed);
+
+        Assert(partitionIndex < records.Length());
+        records[partitionIndex] = record;
 
         for (int i = 0; i < record.count; i++)
         {
@@ -2334,7 +2401,7 @@ void VirtualGeometryManager::BuildHierarchy(ScenePrimitives *scene, PrimRef *ref
     {
         scheduler.ScheduleAndWait(numChildren, 1, [&](u32 jobID) {
             bool childParallel = childRecords[jobID].count >= BUILD_PARALLEL_THRESHOLD;
-            BuildHierarchy(scene, refs, childRecords[jobID], numPartitions, partitionIndices,
+            BuildHierarchy(refs, childRecords[jobID], numPartitions, partitionIndices, records,
                            childParallel);
         });
     }
@@ -2342,16 +2409,16 @@ void VirtualGeometryManager::BuildHierarchy(ScenePrimitives *scene, PrimRef *ref
     {
         for (int i = 0; i < numChildren; i++)
         {
-            BuildHierarchy(scene, refs, childRecords[i], numPartitions, partitionIndices,
+            BuildHierarchy(refs, childRecords[i], numPartitions, partitionIndices, records,
                            false);
         }
     }
 }
 
-void VirtualGeometryManager::Test(ScenePrimitives *scene,
-                                  StaticArray<GPUInstance> &gpuInstances)
+void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
+                                  StaticArray<GPUInstance> &inputInstances)
 {
-    ScratchArena scratch;
+    ScratchArena scratch(&arena, 1);
     scratch.temp.arena->align = 16;
 
     // u32 numInstances;
@@ -2371,38 +2438,27 @@ void VirtualGeometryManager::Test(ScenePrimitives *scene,
             nodeIndex++;
         }
     }
-    PrimRef *refs = PushArrayNoZero(scratch.temp.arena, PrimRef, maxInstances);
+    PrimRef *refs = PushArrayNoZero(scratch.temp.arena, PrimRef, inputInstances.Length());
 
     Bounds geom;
     Bounds cent;
     RecordAOSSplits record;
-    Instance *instances = (Instance *)scene->primitives;
-    for (int i = 0; i < scene->numPrimitives; i++)
+    for (int i = 0; i < inputInstances.Length(); i++)
     {
-        PrimRef &ref       = refs[i];
-        Instance &instance = instances[i];
+        PrimRef &ref          = refs[i];
+        GPUInstance &instance = inputInstances[i];
 
-        u32 sceneIndex = scene->childScenes[instance.id]->sceneIndex;
+        u32 resourceIndex = instance.resourceID;
 
-        Bounds bounds;
-        TempHierarchyNode *child = &nodes[meshInfos[sceneIndex].hierarchyNodeOffset];
+        Bounds bounds(meshInfos[resourceIndex].boundsMin, meshInfos[resourceIndex].boundsMax);
+        AffineSpace transform(instance.worldFromObject[0][0], instance.worldFromObject[0][1],
+                              instance.worldFromObject[0][2], instance.worldFromObject[0][3],
+                              instance.worldFromObject[1][0], instance.worldFromObject[1][1],
+                              instance.worldFromObject[1][2], instance.worldFromObject[1][3],
+                              instance.worldFromObject[2][0], instance.worldFromObject[2][1],
+                              instance.worldFromObject[2][2], instance.worldFromObject[2][3]);
 
-        for (int childIndex = 0; childIndex < CHILDREN_PER_HIERARCHY_NODE; childIndex++)
-        {
-            if (child->node->childRef[childIndex] == ~0u) continue;
-            for (int axis = 0; axis < 3; axis++)
-            {
-                bounds.minP[axis] = Min(child->node->center[childIndex][axis] -
-                                            child->node->extents[childIndex][axis],
-                                        bounds.minP[axis]);
-                bounds.maxP[axis] = Max(child->node->center[childIndex][axis] +
-                                            child->node->extents[childIndex][axis],
-                                        bounds.maxP[axis]);
-            }
-        }
-
-        AffineSpace &transform = scene->affineTransforms[instance.transformIndex];
-        bounds                 = Transform(transform, bounds);
+        bounds = Transform(transform, bounds);
 
         ref.minX   = -bounds.minP[0];
         ref.minY   = -bounds.minP[1];
@@ -2417,25 +2473,83 @@ void VirtualGeometryManager::Test(ScenePrimitives *scene,
     }
     record.geomBounds = Lane8F32(-geom.minP, geom.maxP);
     record.centBounds = Lane8F32(-cent.minP, cent.maxP);
-    record.start      = 0;
-    record.count      = scene->numPrimitives;
-    record.extEnd     = maxInstances;
+    record.SetRange(0, inputInstances.Length());
 
     u32 numNodes                   = 0;
     std::atomic<u32> numPartitions = 0;
-    StaticArray<u32> partitionIndices(scratch.temp.arena, scene->numPrimitives,
-                                      scene->numPrimitives);
-    bool parallel = scene->numPrimitives >= BUILD_PARALLEL_THRESHOLD;
+    StaticArray<u32> partitionIndices(scratch.temp.arena, inputInstances.Length(),
+                                      inputInstances.Length());
+    StaticArray<RecordAOSSplits> records(scratch.temp.arena, inputInstances.Length(),
+                                         inputInstances.Length());
 
-    BuildHierarchy(scene, refs, record, numPartitions, partitionIndices, parallel);
+    bool parallel = inputInstances.Length() >= BUILD_PARALLEL_THRESHOLD;
+
+    BuildHierarchy(refs, record, numPartitions, partitionIndices, records, parallel);
 
     for (u32 i = 0; i < partitionIndices.Length(); i++)
     {
-        GPUInstance &instance   = gpuInstances[i];
+        GPUInstance &instance   = inputInstances[i];
         instance.partitionIndex = partitionIndices[i];
     }
 
     maxPartitions = numPartitions;
+
+    StaticArray<AABB> partitionBounds(scratch.temp.arena, maxPartitions);
+
+    proxyInstances = StaticArray<GPUInstance>(arena, maxPartitions);
+
+    // Store the calculating bounding proxies
+    for (u32 partitionIndex = 0; partitionIndex < maxPartitions; partitionIndex++)
+    {
+        RecordAOSSplits &record = records[partitionIndex];
+        Bounds bounds(record.geomBounds);
+        AABB aabb;
+        aabb.minX = bounds.minP[0];
+        aabb.minY = bounds.minP[1];
+        aabb.minZ = bounds.minP[2];
+        aabb.maxX = bounds.maxP[0];
+        aabb.maxY = bounds.maxP[1];
+        aabb.maxZ = bounds.maxP[2];
+        partitionBounds.Push(aabb);
+
+        GPUInstance gpuInstance = {};
+
+        Vec3<double> minP(ToVec3f(bounds.minP));
+        Vec3<double> maxP(ToVec3f(bounds.maxP));
+        Vec3<double> center  = (maxP + minP) * 0.5;
+        Vec3<double> extents = (maxP - minP) * 0.5;
+
+        AffineSpace transform =
+            AffineSpace::Translate(Vec3f(center)) * AffineSpace::Scale(Vec3f(extents));
+        for (int r = 0; r < 3; r++)
+        {
+            for (int c = 0; c < 4; c++)
+            {
+                gpuInstance.worldFromObject[r][c] = transform[c][r];
+            }
+        }
+        gpuInstance.resourceID     = ~0u;
+        gpuInstance.partitionIndex = partitionIndex;
+        proxyInstances.Push(gpuInstance);
+    }
+
+    instancesBuffer       = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                     VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                 sizeof(GPUInstance) * proxyInstances.Length());
+    partitionBoundsBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                     VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                 sizeof(AABB) * partitionBounds.Length());
+    partitionCountsBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                     VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                                 sizeof(u32) * maxPartitions);
+    partitionReadbackBuffer =
+        device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT, sizeof(u32) * maxPartitions,
+                             MemoryUsage::GPU_TO_CPU);
+
+    cmd->SubmitBuffer(&instancesBuffer, proxyInstances.data,
+                      sizeof(GPUInstance) * proxyInstances.Length());
+    cmd->SubmitBuffer(&partitionBoundsBuffer, partitionBounds.data,
+                      sizeof(AABB) * partitionBounds.Length());
 }
 
 } // namespace rt

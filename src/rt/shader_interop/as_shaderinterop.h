@@ -233,6 +233,12 @@ struct PtlasPushConstant
     uint64_t updateAddress;
 };
 
+struct InstanceCullingPushConstant 
+{
+    uint64_t oneBlasAddress;
+    uint num;
+};
+
 struct NumPushConstant
 {
     uint num;

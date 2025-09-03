@@ -15,7 +15,15 @@ RWStructuredBuffer<BLASData> blasDatas : register(u4);
 StructuredBuffer<AABB> aabbs : register(t5);
 ConstantBuffer<GPUScene> gpuScene : register(b6);
 
-[[vk::push_constant]] NumPushConstant pc;
+RWStructuredBuffer<uint> renderedBitVector : register(u7);
+RWStructuredBuffer<uint> thisFrameBitVector : register(u8);
+RWStructuredBuffer<PTLAS_WRITE_INSTANCE_INFO> ptlasInstanceWriteInfos : register(u9);
+RWStructuredBuffer<PTLAS_UPDATE_INSTANCE_INFO> ptlasInstanceUpdateInfos : register(u10);
+StructuredBuffer<AABB> proxyAABBs : register(t11);
+
+#include "ptlas_write_instances.hlsli"
+
+[[vk::push_constant]] InstanceCullingPushConstant pc;
 
 [numthreads(64, 1, 1)]
 void main(uint3 dtID : SV_DispatchThreadID)
@@ -24,6 +32,26 @@ void main(uint3 dtID : SV_DispatchThreadID)
     if (instanceIndex >= pc.num) return;
 
     GPUInstance instance = gpuInstances[instanceIndex];
+
+    // Proxy
+    if (instance.resourceID == ~0u)
+    {
+        if (pc.oneBlasAddress != 0)
+        {
+            uint proxyIndex = instance.partitionIndex;
+            AABB aabb;
+            aabb.minX = -1;
+            aabb.minY = -1;
+            aabb.minZ = -1;
+            aabb.maxX = 1;
+            aabb.maxY = 1;
+            aabb.maxZ = 1;
+            WritePTLASDescriptors(instance, pc.oneBlasAddress, instanceIndex, instance.partitionIndex | (1u << 31u), 
+                                  //aabb, true, 0x10u);
+                                  aabb, false, 0x0u);
+        }
+        return;
+    }
 
     AABB aabb = aabbs[instance.resourceID];
     bool cull = FrustumCull(gpuScene.clipFromRender, instance.worldFromObject, 

@@ -1209,6 +1209,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                     WriteNanite(state, tempArena, sls, directory, geoFilename);
                 WriteFile(directory, state, originFile ? sls : 0);
 
+#if 0
                 if (state->fileInstances.totalCount)
                 {
                     ScratchArena scratch;
@@ -1242,6 +1243,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                         }
                     }
                 }
+#endif
 
                 ArenaRelease(state->arena);
                 for (u32 i = 0; i < state->numImports; i++)
@@ -2568,6 +2570,7 @@ void LoadPBRT(Arena *arena, string filename)
 
     PerformanceCounter counter = OS_StartCounter();
     LoadPBRT(&sls, directory, baseFile);
+
     f32 time = OS_GetMilliseconds(counter);
     printf("convert time: %fms\n", time);
 
@@ -2646,7 +2649,6 @@ int main(int argc, char **argv)
     Print("%f\n", t);
 #endif
 
-    // Instances
     u64 count        = 0;
     f64 time         = 0;
     u32 verts        = 0;

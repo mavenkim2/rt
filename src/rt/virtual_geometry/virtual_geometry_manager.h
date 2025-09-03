@@ -359,6 +359,18 @@ struct VirtualGeometryManager
     GPUBuffer tlasAccelBuffer;
     GPUBuffer tlasScratchBuffer;
 
+    GPUBuffer partitionReadbackBuffer;
+    GPUBuffer partitionBoundsBuffer;
+    GPUBuffer partitionCountsBuffer;
+    GPUBuffer instancesBuffer;
+    // BitVector partitionStreamedIn;
+    Graph<u32> partitionInstanceGraph;
+    StaticArray<GPUInstance> gpuInstances;
+    StaticArray<GPUInstance> proxyInstances;
+    u32 numStreamedInstances;
+    GPUBuffer instanceUploadBuffer;
+    u64 oneBlasBuildAddress;
+
     // u32 requestBatchWriteIndex;
     // RingBuffer<StreamingRequestBatch> streamingRequestBatches;
     // StaticArray<StreamingRequest, maxQueueBatches * maxStreamingRequestsPerFrame>
@@ -375,6 +387,8 @@ struct VirtualGeometryManager
     StaticArray<Page> physicalPages;
     StaticArray<Range> instanceIDFreeRanges;
     u32 virtualInstanceOffset;
+    u32 voxelAddressOffset;
+    u32 clusterLookupTableOffset;
 
     u32 maxPartitions;
     u32 numInstances;
@@ -385,6 +399,7 @@ struct VirtualGeometryManager
                                  u32 pageIndex, u32 priority);
     bool VerifyPageDependencies(u32 virtualOffset, u32 startPage, u32 numPages);
     bool CheckDuplicatedFixup(u32 virtualOffset, u32 pageIndex, u32 startPage, u32 numPages);
+    void ProcessInstanceRequests(CommandBuffer *cmd);
     void ProcessRequests(CommandBuffer *cmd);
     u32 AddNewMesh(Arena *arena, CommandBuffer *cmd, string filename);
     void FinalizeResources(CommandBuffer *cmd);
@@ -399,10 +414,10 @@ struct VirtualGeometryManager
     void UnlinkLRU(int pageIndex);
     void LinkLRU(int index);
 
-    void Test(ScenePrimitives *scene, StaticArray<GPUInstance> &gpuInstances);
-    void BuildHierarchy(ScenePrimitives *scene, PrimRef *refs, RecordAOSSplits &record,
+    void Test(Arena *arena, CommandBuffer *cmd, StaticArray<GPUInstance> &inputInstances);
+    void BuildHierarchy(PrimRef *refs, RecordAOSSplits &record,
                         std::atomic<u32> &numPartitions, StaticArray<u32> &partitionIndices,
-                        bool parallel);
+                        StaticArray<RecordAOSSplits> &records, bool parallel);
 };
 
 } // namespace rt

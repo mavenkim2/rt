@@ -91,6 +91,44 @@ void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, Geo
     primIndices = PrimitiveIndices(lightHandle, materialHandle, alphaTexture);
 }
 
+static void FlattenInstances(ScenePrimitives *currentScene, const AffineSpace &transform,
+                             Array<GPUInstance> &gpuInstances,
+                             VirtualGeometryManager &virtualGeometryManager)
+{
+    Instance *instances = (Instance *)currentScene->primitives;
+    for (u32 i = 0; i < currentScene->numPrimitives; i++)
+    {
+        Instance &instance = instances[i];
+        AffineSpace newTransform =
+            transform * currentScene->affineTransforms[instance.transformIndex];
+        ScenePrimitives *nextScene = currentScene->childScenes[instance.id];
+
+        if (nextScene->geometryType == GeometryType::Instance)
+        {
+            FlattenInstances(nextScene, newTransform, gpuInstances, virtualGeometryManager);
+        }
+        else
+        {
+            GPUInstance gpuInstance = {};
+            u32 resourceID          = nextScene->sceneIndex;
+            gpuInstance.resourceID  = resourceID;
+
+            for (int r = 0; r < 3; r++)
+            {
+                for (int c = 0; c < 4; c++)
+                {
+                    gpuInstance.worldFromObject[r][c] = transform[c][r];
+                }
+            }
+            VirtualGeometryManager::MeshInfo &meshInfo =
+                virtualGeometryManager.meshInfos[resourceID];
+            gpuInstance.voxelAddressOffset   = meshInfo.voxelAddressOffset;
+            gpuInstance.globalRootNodeOffset = meshInfo.hierarchyNodeOffset;
+            gpuInstances.Push(gpuInstance);
+        }
+    }
+}
+
 void Render(RenderParams2 *params, int numScenes, Image *envMap)
 {
 
@@ -176,7 +214,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     // instance culling
     PushConstant instanceCullingPush = {};
     instanceCullingPush.stage        = ShaderStage::Compute;
-    instanceCullingPush.size         = 4;
+    instanceCullingPush.size         = sizeof(InstanceCullingPushConstant);
     instanceCullingPush.offset       = 0;
 
     DescriptorSetLayout instanceCullingLayout = {};
@@ -187,6 +225,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     }
     instanceCullingLayout.AddBinding(6, DescriptorType::UniformBuffer,
                                      VK_SHADER_STAGE_COMPUTE_BIT);
+    for (int i = 7; i <= 11; i++)
+    {
+        instanceCullingLayout.AddBinding(i, DescriptorType::StorageBuffer,
+                                         VK_SHADER_STAGE_COMPUTE_BIT);
+    }
 
     VkPipeline instanceCullingPipeline =
         device->CreateComputePipeline(&instanceCullingShader, &instanceCullingLayout,
@@ -272,6 +315,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     // layout.AddBinding((u32)RTBindings::Feedback, DescriptorType::StorageBuffer, flags);
     layout.AddBinding(13, DescriptorType::StorageBuffer, flags);
     layout.AddBinding(14, DescriptorType::StorageBuffer, flags);
+    layout.AddBinding(15, DescriptorType::StorageBuffer, flags);
 
     layout.AddImmutableSamplers();
 
@@ -369,6 +413,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         int ptexIndex;
     };
 
+#if 0
     StaticArray<TextureTempData> textureTempData(sceneScratch.temp.arena,
                                                  rootScene->ptexTextures.size(),
                                                  rootScene->ptexTextures.size());
@@ -403,7 +448,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     SortHandles<RequestHandle, false>(handles, numHandles);
 
-#if 0
     u32 ptexFaceDataBytes = 0;
     for (int i = 0; i < numHandles; i++)
     {
@@ -666,7 +710,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     GPUAccelerationStructure tlas = {};
 
     // Build the TLAS over BLAS
-    StaticArray<GPUInstance> gpuInstances(sceneScratch.temp.arena, numInstances);
+    StaticArray<GPUInstance> gpuInstances;
 
 #if 0
     GPUBuffer tlasBuffer = device->CreateBuffer(
@@ -690,37 +734,23 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         tlasAccelSize);
 #endif
 
-    if (tlasScenes.Length() != 0)
+    if (tlasScenes.Length() >= 1)
     {
-        Assert(tlasScenes.Length() == 1);
-        for (int i = 0; i < tlasScenes.Length(); i++)
-        {
-            ScenePrimitives *scene = tlasScenes[i];
-            Instance *instances    = (Instance *)scene->primitives;
-            for (int instanceIndex = 0; instanceIndex < scene->numPrimitives; instanceIndex++)
-            {
-                GPUInstance gpuInstance = {};
-                u32 resourceID = scene->childScenes[instances[instanceIndex].id]->sceneIndex;
-                gpuInstance.resourceID = resourceID;
+        ScratchArena scratch(&sceneScratch.temp.arena, 1);
+        ScenePrimitives *scene = tlasScenes[0];
+        Array<GPUInstance> flattenedInstances(scratch.temp.arena,
+                                              scene->numPrimitives * tlasScenes.Length());
+        AffineSpace transform = AffineSpace::Identity();
 
-                AffineSpace &transform =
-                    scene->affineTransforms[instances[instanceIndex].transformIndex];
-
-                for (int r = 0; r < 3; r++)
-                {
-                    for (int c = 0; c < 4; c++)
-                    {
-                        gpuInstance.worldFromObject[r][c] = transform[c][r];
-                    }
-                }
-                gpuInstance.globalRootNodeOffset =
-                    virtualGeometryManager.meshInfos[resourceID].hierarchyNodeOffset;
-                gpuInstances.Push(gpuInstance);
-            }
-        }
+        FlattenInstances(scene, transform, flattenedInstances, virtualGeometryManager);
+        gpuInstances = StaticArray<GPUInstance>(
+            sceneScratch.temp.arena, flattenedInstances.Length(), flattenedInstances.Length());
+        MemoryCopy(gpuInstances.data, flattenedInstances.data,
+                   sizeof(GPUInstance) * gpuInstances.Length());
     }
     else
     {
+        gpuInstances            = StaticArray<GPUInstance>(sceneScratch.temp.arena, 1);
         GPUInstance gpuInstance = {};
         AffineSpace identity    = AffineSpace::Identity();
         for (int r = 0; r < 3; r++)
@@ -737,12 +767,13 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         Assert(numScenes == 1);
     }
 
-    virtualGeometryManager.Test(tlasScenes[0], gpuInstances);
-    virtualGeometryManager.AllocateInstances(gpuInstances);
+    virtualGeometryManager.Test(sceneScratch.temp.arena, allCommandBuffer, gpuInstances);
+    // virtualGeometryManager.AllocateInstances(gpuInstances);
 
-    TransferBuffer gpuInstancesBuffer =
-        allCommandBuffer->SubmitBuffer(gpuInstances.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                       sizeof(GPUInstance) * gpuInstances.Length());
+    // TransferBuffer gpuInstancesBuffer =
+    //     allCommandBuffer->SubmitBuffer(gpuInstances.data,
+    //     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+    //                                    sizeof(GPUInstance) * gpuInstances.Length());
 
     // allCommandBuffer->SubmitBuffer(
     //     &virtualGeometryManager.instanceRefBuffer,
@@ -1009,23 +1040,31 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             computeCmd->FlushBarriers();
 
             {
-                NumPushConstant instanceCullingPushConstant;
-                instanceCullingPushConstant.num = gpuInstances.Length();
+                // TODO
+                InstanceCullingPushConstant instanceCullingPushConstant;
+                instanceCullingPushConstant.num =
+                    virtualGeometryManager.proxyInstances.Length();
+                instanceCullingPushConstant.oneBlasAddress = 0;
                 device->BeginEvent(computeCmd, "Instance Culling");
 
                 computeCmd
                     ->StartBindingCompute(instanceCullingPipeline, &instanceCullingLayout)
-                    .Bind(&gpuInstancesBuffer.buffer)
+                    .Bind(&virtualGeometryManager.instancesBuffer)
                     .Bind(&virtualGeometryManager.clasGlobalsBuffer)
                     .Bind(&workItemQueueBuffer, 0, sizeof(Vec4u) * MAX_CANDIDATE_NODES)
                     .Bind(&queueBuffer)
                     .Bind(&virtualGeometryManager.blasDataBuffer)
                     .Bind(&aabbBuffer.buffer)
                     .Bind(&sceneTransferBuffers[currentBuffer].buffer)
+                    .Bind(&virtualGeometryManager.ptlasInstanceBitVectorBuffer)
+                    .Bind(&virtualGeometryManager.ptlasInstanceFrameBitVectorBuffer0)
+                    .Bind(&virtualGeometryManager.ptlasWriteInfosBuffer)
+                    .Bind(&virtualGeometryManager.ptlasUpdateInfosBuffer)
+                    .Bind(&virtualGeometryManager.partitionBoundsBuffer)
                     .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
                     .End();
 
-                computeCmd->Dispatch((gpuInstances.Length() + 63) / 64, 1, 1);
+                computeCmd->Dispatch((instanceCullingPushConstant.num + 63) / 64, 1, 1);
                 computeCmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                     VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
@@ -1040,7 +1079,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
             virtualGeometryManager.HierarchyTraversal(
                 computeCmd, &queueBuffer, &sceneTransferBuffers[currentBuffer].buffer,
-                &workItemQueueBuffer, &gpuInstancesBuffer.buffer, &visibleClustersBuffer);
+                &workItemQueueBuffer, &virtualGeometryManager.instancesBuffer,
+                &visibleClustersBuffer);
 
             computeCmd->CopyBuffer(&virtualGeometryManager.readbackBuffer,
                                    &virtualGeometryManager.streamingRequestsBuffer);
@@ -1091,6 +1131,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         cmd->ClearBuffer(&virtualGeometryManager.blasDataBuffer);
         cmd->ClearBuffer(&virtualGeometryManager.resourceBitVector);
         cmd->ClearBuffer(&virtualGeometryManager.instanceBitmasksBuffer);
+        cmd->ClearBuffer(&virtualGeometryManager.partitionCountsBuffer);
         // cmd->ClearBuffer(&tlasBuffer);
         cmd->ClearBuffer(&virtualGeometryManager.ptlasIndirectCommandBuffer);
 
@@ -1100,28 +1141,51 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         cmd->FlushBarriers();
 
         // Streaming
+        virtualGeometryManager.ProcessInstanceRequests(cmd);
         int cpuIndex = TIMED_CPU_RANGE_BEGIN();
         virtualGeometryManager.ProcessRequests(cmd);
         TIMED_RANGE_END(cpuIndex);
 
         // Instance culling
         {
-            NumPushConstant instanceCullingPushConstant;
-            instanceCullingPushConstant.num = gpuInstances.Length();
+            uint buffer = device->frameCount & 1;
+
+            GPUBuffer *lastFrameBitVector =
+                buffer ? &virtualGeometryManager.ptlasInstanceFrameBitVectorBuffer0
+                       : &virtualGeometryManager.ptlasInstanceFrameBitVectorBuffer1;
+            GPUBuffer *thisFrameBitVector =
+                buffer ? &virtualGeometryManager.ptlasInstanceFrameBitVectorBuffer1
+                       : &virtualGeometryManager.ptlasInstanceFrameBitVectorBuffer0;
+
+            cmd->ClearBuffer(thisFrameBitVector);
+            cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                         VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+            cmd->FlushBarriers();
+
+            InstanceCullingPushConstant instanceCullingPushConstant;
+            instanceCullingPushConstant.num = virtualGeometryManager.proxyInstances.Length();
+            instanceCullingPushConstant.oneBlasAddress =
+                virtualGeometryManager.oneBlasBuildAddress;
             device->BeginEvent(cmd, "Instance Culling");
 
             cmd->StartBindingCompute(instanceCullingPipeline, &instanceCullingLayout)
-                .Bind(&gpuInstancesBuffer.buffer)
+                .Bind(&virtualGeometryManager.instancesBuffer)
                 .Bind(&virtualGeometryManager.clasGlobalsBuffer)
                 .Bind(&workItemQueueBuffer, 0, sizeof(Vec4u) * MAX_CANDIDATE_NODES)
                 .Bind(&queueBuffer)
                 .Bind(&virtualGeometryManager.blasDataBuffer)
                 .Bind(&aabbBuffer.buffer)
                 .Bind(&sceneTransferBuffers[currentBuffer].buffer)
+                .Bind(&virtualGeometryManager.ptlasInstanceBitVectorBuffer)
+                .Bind(thisFrameBitVector)
+                .Bind(&virtualGeometryManager.ptlasWriteInfosBuffer)
+                .Bind(&virtualGeometryManager.ptlasUpdateInfosBuffer)
+                .Bind(&virtualGeometryManager.partitionBoundsBuffer)
                 .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
                 .End();
 
-            cmd->Dispatch((gpuInstances.Length() + 63) / 64, 1, 1);
+            cmd->Dispatch((instanceCullingPushConstant.num + 63) / 64, 1, 1);
             cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
                          VK_ACCESS_2_SHADER_READ_BIT);
@@ -1135,10 +1199,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         // if (device->frameCount > 500)
         // {
-        //     GPUBuffer readback0 =
-        //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        //                              gpuInstancesBuffer.buffer.size,
-        //                              MemoryUsage::GPU_TO_CPU);
+        //     GPUBuffer readback0 = device->CreateBuffer(
+        //         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        //         virtualGeometryManager.ptlasWriteInfosBuffer.size, MemoryUsage::GPU_TO_CPU);
         //     //
         //     // GPUBuffer readback2 =
         //     //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -1155,7 +1218,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
         //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
         //     cmd->FlushBarriers();
-        //     cmd->CopyBuffer(&readback0, &gpuInstancesBuffer.buffer);
+        //     cmd->CopyBuffer(&readback0, &virtualGeometryManager.ptlasWriteInfosBuffer);
         //     // cmd->CopyBuffer(&readback, &blasDataBuffer);
         //     // cmd->CopyBuffer(&readback2, thisFrameBitVector);
         //     Semaphore testSemaphore   = device->CreateSemaphore();
@@ -1164,22 +1227,16 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         //     device->SubmitCommandBuffer(cmd);
         //     device->Wait(testSemaphore);
         //
-        //     GPUInstance *data = (GPUInstance *)readback0.mappedPtr;
-        //     u32 count         = 0;
-        //     for (int i = 0; i < gpuInstances.Length(); i++)
-        //     {
-        //         if (data[i].cull) count++;
-        //     }
-        //     // u32 *data2     = (u32 *)readback2.mappedPtr;
-        //     //
-        //     int stop = 5;
+        //     PTLAS_WRITE_INSTANCE_INFO *data = (PTLAS_WRITE_INSTANCE_INFO
+        //     *)readback0.mappedPtr; int stop                        = 5; god fucking damnit
         // }
 
         // Hierarchy traversal
         {
             virtualGeometryManager.HierarchyTraversal(
                 cmd, &queueBuffer, &sceneTransferBuffers[currentBuffer].buffer,
-                &workItemQueueBuffer, &gpuInstancesBuffer.buffer, &visibleClustersBuffer);
+                &workItemQueueBuffer, &virtualGeometryManager.instancesBuffer,
+                &visibleClustersBuffer);
         }
 
         {
@@ -1202,11 +1259,12 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             device->EndEvent(cmd);
         }
 
-        virtualGeometryManager.BuildClusterBLAS(
-            cmd, &visibleClustersBuffer, &gpuInstancesBuffer.buffer, &aabbBuffer.buffer);
+        virtualGeometryManager.BuildClusterBLAS(cmd, &visibleClustersBuffer,
+                                                &virtualGeometryManager.instancesBuffer,
+                                                &aabbBuffer.buffer);
 
-        virtualGeometryManager.BuildPTLAS(cmd, &gpuInstancesBuffer.buffer, &aabbBuffer.buffer,
-                                          &readback); //, &readback2);
+        virtualGeometryManager.BuildPTLAS(cmd, &virtualGeometryManager.instancesBuffer,
+                                          &aabbBuffer.buffer, &readback);
 
         cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                      VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
@@ -1290,7 +1348,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             .Bind(&virtualGeometryManager.clusterPageDataBuffer)
             .Bind(&faceDataBuffer)
             .Bind(&virtualGeometryManager.clusterLookupTableBuffer)
-            .Bind(&gpuInstancesBuffer.buffer);
+            .Bind(&virtualGeometryManager.instancesBuffer)
+            .Bind(&virtualGeometryManager.partitionCountsBuffer);
         // .Bind(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
 
         cmd->BindDescriptorSets(bindPoint, &descriptorSet, rts.layout);
@@ -1311,6 +1370,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         //     &virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
         transferCmd->CopyBuffer(&virtualGeometryManager.readbackBuffer,
                                 &virtualGeometryManager.streamingRequestsBuffer);
+        transferCmd->CopyBuffer(&virtualGeometryManager.partitionReadbackBuffer,
+                                &virtualGeometryManager.partitionCountsBuffer);
         device->SubmitCommandBuffer(transferCmd, true);
 
         device->CopyFrameBuffer(&swapchain, cmd, image);
