@@ -2344,8 +2344,8 @@ void VirtualGeometryManager::BuildHierarchy(PrimRef *refs, RecordAOSSplits &reco
 
     Assert(record.count > 0);
 
-    RecordAOSSplits childRecords[CHILDREN_PER_HIERARCHY_NODE];
-    u32 numChildren = 0;
+    RecordAOSSplits childRecords[2];
+    u32 numChildren = 2;
 
     Split split = heuristic.Bin(record);
 
@@ -2369,33 +2369,6 @@ void VirtualGeometryManager::BuildHierarchy(PrimRef *refs, RecordAOSSplits &reco
     }
 
     heuristic.Split(split, record, childRecords[0], childRecords[1]);
-
-    // N - 1 splits produces N children
-    for (numChildren = 2; numChildren < CHILDREN_PER_HIERARCHY_NODE; numChildren++)
-    {
-        i32 bestChild = -1;
-        f32 maxArea   = neg_inf;
-        for (u32 recordIndex = 0; recordIndex < numChildren; recordIndex++)
-        {
-            RecordAOSSplits &childRecord = childRecords[recordIndex];
-            if (childRecord.count <= CHILDREN_PER_HIERARCHY_NODE) continue;
-
-            f32 childArea = HalfArea(childRecord.geomBounds);
-            if (childArea > maxArea)
-            {
-                bestChild = recordIndex;
-                maxArea   = childArea;
-            }
-        }
-        if (bestChild == -1) break;
-
-        split = heuristic.Bin(childRecords[bestChild]);
-
-        RecordAOSSplits out;
-        heuristic.Split(split, childRecords[bestChild], out, childRecords[numChildren]);
-
-        childRecords[bestChild] = out;
-    }
 
     if (parallel)
     {

@@ -23,10 +23,12 @@
 #include "../parallel.h"
 #include "../graphics/ptex.h"
 #include "../graphics/vulkan.h"
-#include "../virtual_geometry/mesh_simplification.h"
 #include "../handles.h"
 #include "../scene_load.h"
 #include "../mesh.h"
+#ifdef USE_GPU
+#include "../virtual_geometry/mesh_simplification.h"
+#endif
 
 namespace rt
 {
@@ -871,6 +873,195 @@ string ReplaceColons(Arena *arena, string str)
     }
     return newString;
 }
+
+// static ShapeType *PruneDuplicateMeshesAndVertices(PBRTFileInfo *state, Arena *tempArena,
+//                                                   u32 &numMeshes)
+// {
+//     ScratchArena scratch(&tempArena, 1);
+//
+//     Arena **arenas = GetArenaArray(tempArena);
+//
+//     // Remove duplicate meshes
+//     ShapeType *shapes = PushArrayNoZero(tempArena, ShapeType, state->shapes.Length());
+//     state->shapes.Flatten(shapes);
+//
+//     StaticArray<Mesh> meshes(tempArena, state->shapes.Length(), state->shapes.Length());
+//     StaticArray<u32> materialIndices(tempArena, meshes.Length(), meshes.Length());
+//
+//     StaticArray<int> hashes(tempArena, meshes.Length(), meshes.Length());
+//     BitVector shapeCulled(tempArena, meshes.Length());
+//
+//     u32 hashSize = NextPowerOfTwo(meshes.Length());
+//     HashIndex meshHashMap(tempArena, hashSize, hashSize);
+//
+//     Arena **arenas = GetArenaArray(tempArena);
+//
+//     ParallelFor(0, state->shapes.Length(), 32, 32, [&](int jobID, int start, int count) {
+//         Arena *arena = arenas[GetThreadIndex()];
+//         for (int meshIndex = start; meshIndex < start + count; meshIndex++)
+//         {
+//             ShapeType &shape = shapes[meshIndex];
+//             u32 materialIndex =
+//                 shape.materialName.size ? sls->materialMap.Find(shape.materialName)->index :
+//                 0;
+//
+//             materialIndices[meshIndex] = materialIndex;
+//             int posParameterIndex      = CheckForID(&shape.packet, "P"_sid);
+//             Mesh mesh                  = {};
+//             if (posParameterIndex != -1)
+//             {
+//                 mesh.numVertices = shape.packet.sizes[posParameterIndex] / sizeof(Vec3f);
+//                 mesh.p           = (Vec3f *)shape.packet.bytes[posParameterIndex];
+//
+//                 int indexParameterIndex = CheckForID(&shape.packet, "indices"_sid);
+//                 Assert(indexParameterIndex != -1);
+//                 mesh.numIndices = shape.packet.sizes[indexParameterIndex] / sizeof(u32);
+//                 mesh.indices    = (u32 *)shape.packet.bytes[indexParameterIndex];
+//
+//                 int normParameterIndex = CheckForID(&shape.packet, "N"_sid);
+//                 Assert(normParameterIndex != -1);
+//                 Assert(shape.packet.sizes[normParameterIndex] / sizeof(Vec3f) ==
+//                        mesh.numVertices);
+//                 if (normParameterIndex != -1)
+//                     mesh.n = (Vec3f *)shape.packet.bytes[normParameterIndex];
+//
+//                 int uvParameterIndex = CheckForID(&shape.packet, "uv"_sid);
+//                 Assert(uvParameterIndex != -1);
+//                 Assert(shape.packet.sizes[uvParameterIndex] / sizeof(Vec2f) ==
+//                        mesh.numVertices);
+//                 if (uvParameterIndex != -1)
+//                     mesh.uv = (Vec2f *)shape.packet.bytes[uvParameterIndex];
+//             }
+//             else
+//             {
+//                 int fileParameterIndex = CheckForID(&shape.packet, "filename"_sid);
+//                 Assert(fileParameterIndex != -1);
+//                 string filename   = StrConcat(arena, directory,
+//                                               Str8(shape.packet.bytes[fileParameterIndex],
+//                                                    shape.packet.sizes[fileParameterIndex]));
+//                 GeometryType type = ConvertStringIDToGeometryType(shape.packet.type);
+//                 mesh              = LoadPLY(arena, filename, type);
+//             }
+//             meshes[meshIndex] = mesh;
+//
+//             int hash = MurmurHash32((const char *)mesh.p, sizeof(Vec3f) * mesh.numVertices,
+//             0); meshHashMap.AddConcurrent(hash, meshIndex); hashes[meshIndex] = hash;
+//         }
+//     });
+//
+//     ParallelFor(0, meshes.Length(), 32, 32, [&](int jobID, int start, int count) {
+//         for (int meshIndex = start; meshIndex < start + count; meshIndex++)
+//         {
+//             Mesh &mesh = meshes[meshIndex];
+//             int hash = MurmurHash32((const char *)mesh.p, sizeof(Vec3f) * mesh.numVertices,
+//             0); for (int hashIndex = meshHashMap.FirstInHash(hash); hashIndex != -1;
+//                  hashIndex     = meshHashMap.NextInHash(hashIndex))
+//             {
+//                 if (meshIndex != hashIndex && hash == hashes[hashIndex])
+//                 {
+//                     Mesh &otherMesh = meshes[hashIndex];
+//                     if (mesh.numVertices != otherMesh.numVertices) continue;
+//                     if (memcmp(mesh.p, otherMesh.p, sizeof(Vec3f) * mesh.numVertices) == 0)
+//                     {
+//                         if (materialIndices[meshIndex] != 0 &&
+//                             materialIndices[hashIndex] != 0 && meshIndex > hashIndex)
+//                         {
+//                             shapeCulled.SetBit(meshIndex);
+//                             break;
+//                         }
+//                         else if (materialIndices[meshIndex] == 0 &&
+//                                  materialIndices[hashIndex] == 0 && meshIndex > hashIndex)
+//                         {
+//                             shapeCulled.SetBit(meshIndex);
+//                             break;
+//                         }
+//                         else if (materialIndices[meshIndex] == 0 &&
+//                                  materialIndices[hashIndex] != 0)
+//                         {
+//                             shapeCulled.SetBit(meshIndex);
+//                             break;
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+//     });
+//
+//     int newNumMeshes = 0;
+//     for (int meshIndex = 0; meshIndex < meshes.Length(); meshIndex++)
+//     {
+//         if (!shapeCulled.GetBit(meshIndex))
+//         {
+//             meshes[newNumMeshes++] = meshes[meshIndex];
+//         }
+//     }
+//
+//     ParallelFor(0, newNumMeshes, 32, 32, [&](int jobID, int start, int count) {
+//         for (int meshIndex = start; meshIndex < start + count; meshIndex++)
+//         {
+//             ScratchArena scratch;
+//             Mesh &mesh      = meshes[meshIndex];
+//             u32 numVertices = mesh.numVertices;
+//             u32 hashSize    = NextPowerOfTwo(numVertices);
+//             HashIndex hashMap(scratch.temp.arena, hashSize, hashSize);
+//             StaticArray<u32> remap(scratch.temp.arena, numVertices, numVertices);
+//
+//             Vec3f *vertices = mesh.p;
+//             Vec3f *normals  = mesh.n;
+//             Vec2f *uvs      = mesh.uv;
+//
+//             int newVertexCount = 0;
+//             for (int vertexIndex = 0; vertexIndex < numVertices; vertexIndex++)
+//             {
+//                 const Vec3f &vertex = vertices[vertexIndex];
+//                 int hash            = Hash(vertex);
+//                 int newVertexIndex  = -1;
+//                 for (int hashIndex = hashMap.FirstInHash(hash); hashIndex != -1;
+//                      hashIndex     = hashMap.NextInHash(hashIndex))
+//                 {
+//                     if (vertices[hashIndex] == vertex)
+//                     {
+//                         if (normals && normals[hashIndex] != normals[vertexIndex]) continue;
+//                         if (uvs && uvs[hashIndex] != uvs[vertexIndex]) continue;
+//                         newVertexIndex = hashIndex;
+//                         break;
+//                     }
+//                 }
+//
+//                 if (newVertexIndex == -1)
+//                 {
+//                     newVertexIndex = newVertexCount++;
+//                     hashMap.AddInHash(hash, newVertexIndex);
+//                     vertices[newVertexIndex] = vertex;
+//                     if (normals) normals[newVertexIndex] = normals[vertexIndex];
+//                     if (uvs) uvs[newVertexIndex] = uvs[vertexIndex];
+//                 }
+//                 Assert(newVertexIndex != -1);
+//                 remap[vertexIndex] = (u32)newVertexIndex;
+//             }
+//
+//             u32 numIndices = mesh.numIndices;
+//             u32 *indices   = mesh.indices;
+//
+//             for (u32 indexIndex = 0; indexIndex < numIndices; indexIndex++)
+//             {
+//                 indices[indexIndex] = remap[indices[indexIndex]];
+//             }
+//
+//             Mesh newMesh        = {};
+//             newMesh.numVertices = newVertexCount;
+//             newMesh.numIndices  = numIndices;
+//             newMesh.p           = vertices;
+//             newMesh.indices     = indices;
+//             newMesh.n           = normals;
+//             newMesh.uv          = uvs;
+//
+//             meshes[meshIndex] = newMesh;
+//         }
+//     });
+//
+//     ParallelFor(0, newNumMeshes, 32, 32, [&](int jobID, int start, int count) {});
+// }
 
 static string WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState *sls,
                           string directory, string currentFilename)
@@ -1728,7 +1919,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
 #ifndef USE_GPU
                         if (GetFileExtension(plyMeshFile) == "obj" ||
                             CheckQuadPLY(StrConcat(temp.arena, directory, plyMeshFile)))
-                            packet->type = "quadmesh"_sid;
+                            packet->type = "catclark"_sid;
                         else packet->type = "trianglemesh"_sid;
 #else
                         packet->type = "trianglemesh"_sid;
@@ -1739,7 +1930,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 if (packet->type == "trianglemesh"_sid && numVertices && numIndices &&
                     numVertices / 2 == numIndices / 3)
                 {
-                    packet->type = "quadmesh"_sid;
+                    packet->type = "catclark"_sid;
                 }
 #endif
 
@@ -2121,6 +2312,7 @@ void WriteMesh(StringBuilder &builder, StringBuilderMapped &dataBuilder, ShapeTy
             break;
         }
     }
+
     if (!fileMesh)
     {
         u32 numVertices = 0;
@@ -2405,6 +2597,19 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
                 Put(&builder, info->virtualGeoFilename);
                 Put(&builder, " ");
             }
+
+            u32 numMeshes;
+            // ShapeType *shapes = PruneDuplicateMeshesAndVertices(info, temp.arena,
+            // numMeshes);
+            // StringBuilder *builders = PushArray(temp.arena, StringBuilder, taskCount);
+            // ParallelForLoop(0, numMeshes, 32, 32, [&](u32 jobID, u32 index) {
+            //     ShapeType &shape       = shapes[index];
+            //     StringBuilder &builder = builders[GetThreadIndex()];
+            //     WriteShape(PBRTFileInfo * info, ShapeType * shapeType, StringBuilder &
+            //     builder,
+            //                StringBuilderMapped & dataBuilder, string directory);
+            // });
+
             // TODO: need to handle duplicates as well
             for (auto *node = info->shapes.first; node != 0; node = node->next)
             {
@@ -2623,30 +2828,32 @@ int main(int argc, char **argv)
     Vulkan *v           = PushStructConstruct(arena, Vulkan)(mode);
     device              = v;
 
-#if 1
+#if 0
     LoadPBRT(arena, filename);
 #else
-    int numMeshes, actualNumMeshes;
-    // string testFilename = "../../data/island/pbrt-v4/obj/isMountainB/archives/"
-    //                       "xgFoliageA_treeMadronaBaked_canopyOnly_lo.obj";
-
-    string testFilename =
-        "../../data/island/pbrt-v4/obj/isBeach/archives/xgPebbles_archiveRock0002_geo.obj";
-    // string testFilename = "../../data/island/pbrt-v4/obj/osOcean/osOcean.obj";
-
-    Mesh *meshes = LoadObj(arena, testFilename, numMeshes, actualNumMeshes);
-    // Mesh *meshes = LoadObjWithWedges(arena, testFilename, numMeshes); //, actualNumMeshes);
-
-    meshes[0].numFaces = meshes[0].numIndices / 4;
-    Mesh mesh          = ConvertQuadToTriangleMesh(arena, meshes[0]);
-
-    PerformanceCounter counter = OS_StartCounter();
-    StaticArray<u32> materialIndices(arena, 1);
-    materialIndices.Push(0);
-    CreateClusters(&mesh, 1, materialIndices, testFilename);
-
-    f32 t = OS_GetMilliseconds(counter);
-    Print("%f\n", t);
+    ConvolveDisneyDiffuse();
+    // int numMeshes, actualNumMeshes;
+    // // string testFilename = "../../data/island/pbrt-v4/obj/isMountainB/archives/"
+    // //                       "xgFoliageA_treeMadronaBaked_canopyOnly_lo.obj";
+    //
+    // string testFilename =
+    //     "../../data/island/pbrt-v4/obj/isBeach/archives/xgPebbles_archiveRock0002_geo.obj";
+    // // string testFilename = "../../data/island/pbrt-v4/obj/osOcean/osOcean.obj";
+    //
+    // Mesh *meshes = LoadObj(arena, testFilename, numMeshes, actualNumMeshes);
+    // // Mesh *meshes = LoadObjWithWedges(arena, testFilename, numMeshes); //,
+    // actualNumMeshes);
+    //
+    // meshes[0].numFaces = meshes[0].numIndices / 4;
+    // Mesh mesh          = ConvertQuadToTriangleMesh(arena, meshes[0]);
+    //
+    // PerformanceCounter counter = OS_StartCounter();
+    // StaticArray<u32> materialIndices(arena, 1);
+    // materialIndices.Push(0);
+    // CreateClusters(&mesh, 1, materialIndices, testFilename);
+    //
+    // f32 t = OS_GetMilliseconds(counter);
+    // Print("%f\n", t);
 #endif
 
     u64 count        = 0;

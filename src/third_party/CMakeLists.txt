@@ -54,14 +54,16 @@ set (NANOVDB_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/openvdb/nanovdb
 # nvapi
 set (NVAPI_LIBRARY ${CMAKE_CURRENT_SOURCE_DIR}/nvapi/amd64/nvapi64.lib PARENT_SCOPE)
 
+if (USE_GPU)
 # gklib
-add_subdirectory("GKlib")
-set (GKLIB_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/GKlib)
-include_directories(${GKLIB_INCLUDE_DIR})
-set(GK_LIBRARY GKlib PARENT_SCOPE)
+    add_subdirectory("GKlib")
+    set (GKLIB_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/GKlib)
+    include_directories(${GKLIB_INCLUDE_DIR})
+    set(GK_LIBRARY GKlib PARENT_SCOPE)
 
 # metis
-set (METIS_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/METIS/include)
-add_subdirectory("METIS")
-target_include_directories(metis PRIVATE ${METIS_INCLUDE_DIR})
-set (METIS_LIBRARY metis PARENT_SCOPE)
+    set (METIS_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/METIS/include)
+    add_subdirectory("METIS")
+    target_include_directories(metis PRIVATE ${METIS_INCLUDE_DIR})
+    set (METIS_LIBRARY metis PARENT_SCOPE)
+endif()

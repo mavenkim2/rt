@@ -6187,6 +6187,156 @@ void SimplifyInstances(string directory, Instance *instances, u32 numInstances,
     }
 }
 
+static f32 EvaluateSphericalGaussian(const Vec3f &dir, Vec3f &v, f32 sharpness)
+{
+    return FastExp(sharpness * (Dot(dir, v) - 1));
+}
+
+static f32 EvaluateSGGX(const Vec3f &dir, f32 ax, f32 ay)
+{
+    f32 invAx2 = 1.f / Sqr(ax);
+    f32 invAy2 = 1.f / Sqr(ay);
+
+    f32 result = InvPi * 1.f /
+                 (Sqrt(Sqr(ax) * Sqr(ay)) *
+                  Sqr(Sqr(dir.x) * invAx2 + Sqr(dir.y) * invAy2 + Sqr(dir.z)));
+    return result;
+}
+
+void ConvolveDisneyDiffuse()
+{
+    Vec3f w = -Normalize(Vec3f(1, 2, 1));
+
+    Vec3f v0, v1, v2;
+    v2 = Normalize(Vec3f(.4f, .6f, .2f));
+    CoordinateSystem(v2, &v0, &v1);
+
+    Mat3 mat(v0, v1, v2);
+    Mat3 s     = mat * Mat3(Sqr(.1f), Sqr(.8f), 1.f) * Transpose(mat);
+    Vec3f newW = Transpose(mat) * w;
+
+    f32 res0 = EvaluateSGGX(newW, .1f, .8f);
+    f32 res1 = InvPi * 1.f / (Sqrt(Determinant(s)) * Sqr(Dot(w, s.Inverse() * w)));
+
+    Vec3f wj(0, 0, 1);
+
+    Vec3f wjs[] = {
+        Vec3f(0, 0, 1),
+        Vec3f(1, 0, 0),
+        Vec3f(0, 1, 0),
+        Normalize(Vec3f(1, 2, 3)),
+        Normalize(Vec3f(2, 1, 3)),
+        Normalize(Vec3f(0, 2, 3)),
+        Normalize(Vec3f(1, 0, 3)),
+        Normalize(Vec3f(1, 2, 0)),
+        Normalize(Vec3f(3, 2, 1)),
+    };
+    f32 integrals[9];
+
+    f32 epsilon = 1e-4f;
+    f32 dPhi    = 0.0001f;
+    f32 dTheta  = 0.0001f;
+
+    for (int i = 0; i < 20; i++)
+    {
+        for (int j = 0; j < 20; j++)
+        {
+            for (int k = 0; k < 20; k++)
+            {
+                f32 ax               = 0.1f; //(f32)(i + 1) / 20;
+                f32 ay               = 0.7f; //(f32)(j + 1) / 20;
+                f32 sharpness        = 2.f;
+                const int numSamples = 100000;
+                const f32 invPdf     = 4.f * PI / (f32)numSamples;
+                const f32 invGaussianIntegral =
+                    1.f / ((TwoPi / sharpness) * (1.f - FastExp(-2.f * sharpness)));
+
+                // Integrate over sphere
+                for (int x = 0; x < ArrayLength(wjs); x++)
+                {
+                    f64 integral = 0.f;
+                    for (int s = 0; s < numSamples; s++)
+                    {
+                        u32 seed     = 0;
+                        Vec2f sample = GetSobolSample(s, seed);
+                        Vec3f dir    = SampleUniformSphere(sample);
+                        f32 g        = EvaluateSphericalGaussian(wjs[x], dir, sharpness);
+                        f32 dsggx    = EvaluateSGGX(dir, ax, ay);
+                        integral += dsggx * g * invPdf * invGaussianIntegral;
+                    }
+                    // for (f32 theta = 0.f; theta < PI; theta += dTheta)
+                    // for (f32 val = 0.f; val < 1.f; val += dTheta)
+                    // {
+                    //     f32 z        = 1 - 2.f * val;
+                    //     f32 sinTheta = SafeSqrt(1 - Sqr(z));
+                    //     for (f32 phi = 0.f; phi < TwoPi; phi += dPhi)
+                    //     {
+                    //         Vec3f dir(sinTheta * Cos(phi), sinTheta * Sin(phi), z);
+                    //         f32 g     = EvaluateSphericalGaussian(wjs[x], dir, sharpness);
+                    //         f32 dsggx = EvaluateSGGX(dir, ax, ay);
+                    //         integral += dsggx * g * 2 * dTheta * dPhi;
+                    //         // integral += dsggx * 2 * dTheta * dPhi;
+                    //         // integral += 1.f * Sin(theta) * dPhi * dTheta;
+                    //     }
+                    // }
+                    integrals[x] = integral;
+                }
+
+                for (int x = 0; x < ArrayLength(wjs); x++)
+                {
+                    Print("%f\n", integrals[x]);
+                }
+
+                f32 aprimex = ax;
+                f32 aprimey = ay;
+                f32 r       = 0.f;
+                for (int iters = 0; iters < 30; iters++)
+                {
+                    f32 a00 = 0.f;
+                    f32 a01 = 0.f;
+                    f32 a11 = 0.f;
+                    f32 b0  = 0.f;
+                    f32 b1  = 0.f;
+                    r       = 0.f;
+                    for (int x = 0; x < ArrayLength(wjs); x++)
+                    {
+                        f32 estimate = EvaluateSGGX(wjs[x], aprimex, aprimey);
+                        f32 residual = integrals[x] - estimate;
+
+                        // Jacobian estimated with central differences
+                        f32 temp0 = EvaluateSGGX(wjs[x], aprimex - epsilon, aprimey);
+                        f32 temp1 = EvaluateSGGX(wjs[x], aprimex + epsilon, aprimey);
+                        f32 jacX  = (temp1 - temp0) / (2 * epsilon);
+
+                        temp0    = EvaluateSGGX(wjs[x], aprimex, aprimey - epsilon);
+                        temp1    = EvaluateSGGX(wjs[x], aprimex, aprimey + epsilon);
+                        f32 jacY = (temp1 - temp0) / (2 * epsilon);
+
+                        a00 += Sqr(jacX);
+                        a01 += jacX * jacY;
+                        a11 += Sqr(jacY);
+                        b0 += jacX * residual;
+                        b1 += jacY * residual;
+                        r += Sqr(residual);
+                    }
+
+                    f32 invDet = 1.f / (a00 * a11 - Sqr(a01));
+
+                    f32 stepAx = invDet * (a11 * b0 - a01 * b1);
+                    f32 stepAy = invDet * (a00 * b1 - a01 * b0);
+
+                    aprimex += .5f * stepAx;
+                    aprimey += .5f * stepAy;
+
+                    aprimex = Max(aprimex, 1e-4f);
+                    aprimey = Max(aprimey, 1e-4f);
+                }
+                Print("rmse %f\n", r);
+            }
+        }
+    }
+}
+
 #if 0
 void CreateInstanceHierarchy()
 {

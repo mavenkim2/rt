@@ -150,6 +150,7 @@ static void CheckVoxelOccupancy(Arena *arena, ScenePrimitives *scene,
 struct Instance;
 void SimplifyInstances(string directory, Instance *instances, u32 numInstances,
                        AffineSpace *transforms, u32 numTransforms, Mesh &mesh);
+void ConvolveDisneyDiffuse();
 
 } // namespace rt
 

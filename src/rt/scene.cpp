@@ -988,10 +988,10 @@ int LoadScene(RenderParams2 *params, Arena **tempArenas, string directory, strin
     state.scenes.clear();
     SetScenes(scenes);
 
-    for (u32 i = 0; i < numProcessors; i++)
-    {
-        ArenaRelease(tempArenas[i]);
-    }
+    // for (u32 i = 0; i < numProcessors; i++)
+    // {
+    //     ArenaRelease(tempArenas[i]);
+    // }
 
     ScratchEnd(temp);
     return numScenes;

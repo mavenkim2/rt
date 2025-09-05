@@ -3,6 +3,7 @@
 #include "platform.h"
 #include "scene.h"
 #include "simd_integrate.h"
+#include "win32.h"
 
 namespace rt
 {
@@ -91,8 +92,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             for (int i = start; i < start + count; i++)
             {
                 if (scenes[i]->depth.load(std::memory_order_acquire) == depth)
-                    BuildSceneBVHs(params->arenas, scenes[i], params->NDCFromCamera,
-                                   params->cameraFromRender, params->height);
+                    scenes[i]->BuildSceneBVHs(params->arenas, params->NDCFromCamera,
+                                              params->cameraFromRender, params->height);
             }
         });
     }
@@ -193,7 +194,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         maxDepth = Max(maxDepth, scenes[i]->depth.load(std::memory_order_acquire));
     }
 
-    BuildAllSceneBVHs(*params, scenes, numScenes, maxDepth);
+    BuildAllSceneBVHs(params, scenes, numScenes, maxDepth);
 
     f64 totalMiscTime            = 0;
     u64 totalCompressedNodeCount = 0;
@@ -203,7 +204,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     u64 totalInstanceMemory      = 0;
     u64 totalNumSpatialSplits    = 0;
     u64 maxEdgeFactor            = 0;
-    for (u32 i = 0; i < numProcessors; i++)
+    for (u32 i = 0; i < OS_NumProcessors(); i++)
     {
         totalMiscTime += threadLocalStatistics[i].miscF;
         totalCompressedNodeCount += threadLocalStatistics[i].misc;
@@ -224,12 +225,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     printf("total # spatial splits: %llu\n", totalNumSpatialSplits);
     printf("max edge factor:  %llu\n", maxEdgeFactor);
 
-    counter = OS_StartCounter();
-#ifdef USE_GPU
-#else
-    RenderSIMD(params->arenas, params);
-#endif
-    time = OS_GetMilliseconds(counter);
+    PerformanceCounter counter = OS_StartCounter();
+    RenderSIMD(params->arenas, *params);
+    u64 time = OS_GetMilliseconds(counter);
     printf("total render time: %fms\n", time);
 }
 

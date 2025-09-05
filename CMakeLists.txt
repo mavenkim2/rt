@@ -200,18 +200,24 @@ install (TARGETS thread_context EXPORT THREAD_CONTEXT DESTINATION lib)
 install (EXPORT THREAD_CONTEXT DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/thread_context")
 
 # convert
-add_executable(convert 
+set (CONVERT_SOURCE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/cmd/convert.cpp
     ${RT_VULKAN_SOURCE_FILES}
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/graphics/ptex.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/dgfs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/debug.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/virtual_geometry/mesh_simplification.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/bit_packing.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/parallel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/scene/scene.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/bvh/bvh_types.cpp
 )
+
+if (USE_GPU)
+    list (APPEND CONVERT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/virtual_geometry/mesh_simplification.cpp)
+endif()
+
+add_executable(convert ${CONVERT_SOURCE_FILES})
+
 target_include_directories(convert PRIVATE 
     ${PTEX_INCLUDE}
     ${NANOVDB_INCLUDE_DIR}
@@ -253,103 +259,105 @@ if (NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/gen/rgbspectrum_srgb.cpp")
 endif()
 
 # shader compiles
-set(SHADER_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/shaders)
-set(SHADER_SPV_DIR ${CMAKE_CURRENT_BINARY_DIR}/src/shaders)
-set(SHADER_FILES "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl" 
-    "${SHADER_SRC_DIR}/render_raytrace_miss.hlsl"
-    "${SHADER_SRC_DIR}/render_raytrace_hit.hlsl"
-    "${SHADER_SRC_DIR}/clas/decode_dgf_clusters.hlsl"
-    "${SHADER_SRC_DIR}/clas/decode_voxel_aabbs.hlsl"
-    "${SHADER_SRC_DIR}/clas/fill_blas_address_array.hlsl"
-    "${SHADER_SRC_DIR}/clas/fill_cluster_bottom_level_info.hlsl"
-    "${SHADER_SRC_DIR}/clas/fill_cluster_triangle_info.hlsl"
-    "${SHADER_SRC_DIR}/clas/fill_instance_descs.hlsl"
-    "${SHADER_SRC_DIR}/clas/get_blas_address_offset.hlsl"
-    "${SHADER_SRC_DIR}/compress/block_compress.hlsl"
-    "${SHADER_SRC_DIR}/tex/update_page_tables.hlsl"
-    "${SHADER_SRC_DIR}/tex/generate_mips.hlsl"
-    "${SHADER_SRC_DIR}/clas/prepare_indirect.hlsl"
-    "${SHADER_SRC_DIR}/clas/hierarchy_traversal.hlsl"
-    "${SHADER_SRC_DIR}/clas/instance_culling.hlsl"
-    "${SHADER_SRC_DIR}/clas/test.hlsl"
-    "${SHADER_SRC_DIR}/clas/clas_defrag.hlsl"
-    "${SHADER_SRC_DIR}/clas/compute_clas_addresses.hlsl"
-    "${SHADER_SRC_DIR}/clas/write_clas_defrag_addresses.hlsl"
-    "${SHADER_SRC_DIR}/clas/compute_blas_addresses.hlsl"
-    "${SHADER_SRC_DIR}/clas/ptlas_write_instances.hlsl"
-    "${SHADER_SRC_DIR}/clas/cluster_fixup.hlsl"
-    "${SHADER_SRC_DIR}/clas/ptlas_update_unused_instances.hlsl"
-    "${SHADER_SRC_DIR}/clas/ptlas_write_command_infos.hlsl"
-    "${SHADER_SRC_DIR}/clas/initialize_instance_freelist.hlsl"
-    "${SHADER_SRC_DIR}/clas/ptlas_update_partitions.hlsl"
-    "${SHADER_SRC_DIR}/clas/fill_finest_cluster_bottom_level_info.hlsl"
-)
-set_property(SOURCE 
-    "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl" 
-    "${SHADER_SRC_DIR}/render_raytrace_miss.hlsl"
-    "${SHADER_SRC_DIR}/render_raytrace_hit.hlsl"
-    PROPERTY name "rt")
-set_property(SOURCE 
-    "${SHADER_SRC_DIR}/compress/block_compress.hlsl"
-    "${SHADER_SRC_DIR}/tex/update_page_tables.hlsl"
-    "${SHADER_SRC_DIR}/clas/decode_dgf_clusters.hlsl"
-    "${SHADER_SRC_DIR}/clas/decode_voxel_aabbs.hlsl"
-    "${SHADER_SRC_DIR}/clas/fill_blas_address_array.hlsl"
-    "${SHADER_SRC_DIR}/clas/fill_cluster_bottom_level_info.hlsl"
-    "${SHADER_SRC_DIR}/clas/fill_cluster_triangle_info.hlsl"
-    "${SHADER_SRC_DIR}/clas/fill_instance_descs.hlsl"
-    "${SHADER_SRC_DIR}/clas/get_blas_address_offset.hlsl"
-    "${SHADER_SRC_DIR}/tex/generate_mips.hlsl"
-    "${SHADER_SRC_DIR}/clas/prepare_indirect.hlsl"
-    "${SHADER_SRC_DIR}/clas/hierarchy_traversal.hlsl"
-    "${SHADER_SRC_DIR}/clas/instance_culling.hlsl"
-    "${SHADER_SRC_DIR}/clas/test.hlsl"
-    "${SHADER_SRC_DIR}/clas/clas_defrag.hlsl"
-    "${SHADER_SRC_DIR}/clas/compute_clas_addresses.hlsl"
-    "${SHADER_SRC_DIR}/clas/write_clas_defrag_addresses.hlsl"
-    "${SHADER_SRC_DIR}/clas/compute_blas_addresses.hlsl"
-    "${SHADER_SRC_DIR}/clas/ptlas_write_instances.hlsl"
-    "${SHADER_SRC_DIR}/clas/cluster_fixup.hlsl"
-    "${SHADER_SRC_DIR}/clas/ptlas_update_unused_instances.hlsl"
-    "${SHADER_SRC_DIR}/clas/ptlas_write_command_infos.hlsl"
-    "${SHADER_SRC_DIR}/clas/initialize_instance_freelist.hlsl"
-    "${SHADER_SRC_DIR}/clas/ptlas_update_partitions.hlsl"
-    "${SHADER_SRC_DIR}/clas/fill_finest_cluster_bottom_level_info.hlsl"
-    PROPERTY name "cs")
-
-file(GLOB_RECURSE SHADER_INCLUDES "${SHADER_SRC_DIR}/*.hlsl" "${SHADER_SRC_DIR}/*.hlsli")
-file(GLOB_RECURSE SHADER_INTEROP "${CMAKE_CURRENT_SOURCE_DIR}/src/rt/shader_interop/*.h")
-
-if (NOT DEFINED SHADER_COMPILER)
-    set(SHADER_COMPILER "dxc")
-endif()
-
-foreach(SHADER_FILE ${SHADER_FILES})
-    get_filename_component(SHADER_NAME ${SHADER_FILE} NAME_WE)
-    get_property(SHADER_TYPE SOURCE ${SHADER_FILE} PROPERTY name)
-    set(SHADER_SPV ${SHADER_SPV_DIR}/${SHADER_NAME}.spv)
-    # set(SHADER_SPV ${SHADER_SPV_DIR}/${SHADER_NAME}.cso)
-
-    if (${SHADER_TYPE} STREQUAL "rt")
-        set (SHADER_TYPE_FLAG "-T lib_6_6")
-    elseif (${SHADER_TYPE} STREQUAL "cs")
-        set (SHADER_TYPE_FLAG "-T cs_6_6")
-    endif()
-
-    add_custom_command(
-        OUTPUT ${SHADER_SPV}
-        COMMAND ${SHADER_COMPILER} 
-        "-spirv" "-fspv-target-env=vulkan1.3" "-fvk-use-scalar-layout" 
-        "-Wno-parameter-usage"
-        ${SHADER_TYPE_FLAG} "$<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:-Zi>" "-Fo ${SHADER_SPV}" "${SHADER_FILE}" 
-        DEPENDS ${SHADER_FILE} ${SHADER_INCLUDES} ${SHADER_INTEROP}
-        COMMENT "Compiling HLSL shader: ${SHADER_FILE} -> ${SHADER_SPV}"
-        VERBATIM
+if (USE_GPU)
+    set(SHADER_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/shaders)
+    set(SHADER_SPV_DIR ${CMAKE_CURRENT_BINARY_DIR}/src/shaders)
+    set(SHADER_FILES "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl" 
+        "${SHADER_SRC_DIR}/render_raytrace_miss.hlsl"
+        "${SHADER_SRC_DIR}/render_raytrace_hit.hlsl"
+        "${SHADER_SRC_DIR}/clas/decode_dgf_clusters.hlsl"
+        "${SHADER_SRC_DIR}/clas/decode_voxel_aabbs.hlsl"
+        "${SHADER_SRC_DIR}/clas/fill_blas_address_array.hlsl"
+        "${SHADER_SRC_DIR}/clas/fill_cluster_bottom_level_info.hlsl"
+        "${SHADER_SRC_DIR}/clas/fill_cluster_triangle_info.hlsl"
+        "${SHADER_SRC_DIR}/clas/fill_instance_descs.hlsl"
+        "${SHADER_SRC_DIR}/clas/get_blas_address_offset.hlsl"
+        "${SHADER_SRC_DIR}/compress/block_compress.hlsl"
+        "${SHADER_SRC_DIR}/tex/update_page_tables.hlsl"
+        "${SHADER_SRC_DIR}/tex/generate_mips.hlsl"
+        "${SHADER_SRC_DIR}/clas/prepare_indirect.hlsl"
+        "${SHADER_SRC_DIR}/clas/hierarchy_traversal.hlsl"
+        "${SHADER_SRC_DIR}/clas/instance_culling.hlsl"
+        "${SHADER_SRC_DIR}/clas/test.hlsl"
+        "${SHADER_SRC_DIR}/clas/clas_defrag.hlsl"
+        "${SHADER_SRC_DIR}/clas/compute_clas_addresses.hlsl"
+        "${SHADER_SRC_DIR}/clas/write_clas_defrag_addresses.hlsl"
+        "${SHADER_SRC_DIR}/clas/compute_blas_addresses.hlsl"
+        "${SHADER_SRC_DIR}/clas/ptlas_write_instances.hlsl"
+        "${SHADER_SRC_DIR}/clas/cluster_fixup.hlsl"
+        "${SHADER_SRC_DIR}/clas/ptlas_update_unused_instances.hlsl"
+        "${SHADER_SRC_DIR}/clas/ptlas_write_command_infos.hlsl"
+        "${SHADER_SRC_DIR}/clas/initialize_instance_freelist.hlsl"
+        "${SHADER_SRC_DIR}/clas/ptlas_update_partitions.hlsl"
+        "${SHADER_SRC_DIR}/clas/fill_finest_cluster_bottom_level_info.hlsl"
     )
-    list (APPEND SHADER_SPV_FILES ${SHADER_SPV})
-endforeach()
-
-add_custom_target(shaders DEPENDS ${SHADER_SPV_FILES})
+    set_property(SOURCE 
+        "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl" 
+        "${SHADER_SRC_DIR}/render_raytrace_miss.hlsl"
+        "${SHADER_SRC_DIR}/render_raytrace_hit.hlsl"
+        PROPERTY name "rt")
+    set_property(SOURCE 
+        "${SHADER_SRC_DIR}/compress/block_compress.hlsl"
+        "${SHADER_SRC_DIR}/tex/update_page_tables.hlsl"
+        "${SHADER_SRC_DIR}/clas/decode_dgf_clusters.hlsl"
+        "${SHADER_SRC_DIR}/clas/decode_voxel_aabbs.hlsl"
+        "${SHADER_SRC_DIR}/clas/fill_blas_address_array.hlsl"
+        "${SHADER_SRC_DIR}/clas/fill_cluster_bottom_level_info.hlsl"
+        "${SHADER_SRC_DIR}/clas/fill_cluster_triangle_info.hlsl"
+        "${SHADER_SRC_DIR}/clas/fill_instance_descs.hlsl"
+        "${SHADER_SRC_DIR}/clas/get_blas_address_offset.hlsl"
+        "${SHADER_SRC_DIR}/tex/generate_mips.hlsl"
+        "${SHADER_SRC_DIR}/clas/prepare_indirect.hlsl"
+        "${SHADER_SRC_DIR}/clas/hierarchy_traversal.hlsl"
+        "${SHADER_SRC_DIR}/clas/instance_culling.hlsl"
+        "${SHADER_SRC_DIR}/clas/test.hlsl"
+        "${SHADER_SRC_DIR}/clas/clas_defrag.hlsl"
+        "${SHADER_SRC_DIR}/clas/compute_clas_addresses.hlsl"
+        "${SHADER_SRC_DIR}/clas/write_clas_defrag_addresses.hlsl"
+        "${SHADER_SRC_DIR}/clas/compute_blas_addresses.hlsl"
+        "${SHADER_SRC_DIR}/clas/ptlas_write_instances.hlsl"
+        "${SHADER_SRC_DIR}/clas/cluster_fixup.hlsl"
+        "${SHADER_SRC_DIR}/clas/ptlas_update_unused_instances.hlsl"
+        "${SHADER_SRC_DIR}/clas/ptlas_write_command_infos.hlsl"
+        "${SHADER_SRC_DIR}/clas/initialize_instance_freelist.hlsl"
+        "${SHADER_SRC_DIR}/clas/ptlas_update_partitions.hlsl"
+        "${SHADER_SRC_DIR}/clas/fill_finest_cluster_bottom_level_info.hlsl"
+        PROPERTY name "cs")
+    
+    file(GLOB_RECURSE SHADER_INCLUDES "${SHADER_SRC_DIR}/*.hlsl" "${SHADER_SRC_DIR}/*.hlsli")
+    file(GLOB_RECURSE SHADER_INTEROP "${CMAKE_CURRENT_SOURCE_DIR}/src/rt/shader_interop/*.h")
+    
+    if (NOT DEFINED SHADER_COMPILER)
+        set(SHADER_COMPILER "dxc")
+    endif()
+    
+    foreach(SHADER_FILE ${SHADER_FILES})
+        get_filename_component(SHADER_NAME ${SHADER_FILE} NAME_WE)
+        get_property(SHADER_TYPE SOURCE ${SHADER_FILE} PROPERTY name)
+        set(SHADER_SPV ${SHADER_SPV_DIR}/${SHADER_NAME}.spv)
+        # set(SHADER_SPV ${SHADER_SPV_DIR}/${SHADER_NAME}.cso)
+    
+        if (${SHADER_TYPE} STREQUAL "rt")
+            set (SHADER_TYPE_FLAG "-T lib_6_6")
+        elseif (${SHADER_TYPE} STREQUAL "cs")
+            set (SHADER_TYPE_FLAG "-T cs_6_6")
+        endif()
+    
+        add_custom_command(
+            OUTPUT ${SHADER_SPV}
+            COMMAND ${SHADER_COMPILER} 
+            "-spirv" "-fspv-target-env=vulkan1.3" "-fvk-use-scalar-layout" 
+            "-Wno-parameter-usage"
+            ${SHADER_TYPE_FLAG} "$<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:-Zi>" "-Fo ${SHADER_SPV}" "${SHADER_FILE}" 
+            DEPENDS ${SHADER_FILE} ${SHADER_INCLUDES} ${SHADER_INTEROP}
+            COMMENT "Compiling HLSL shader: ${SHADER_FILE} -> ${SHADER_SPV}"
+            VERBATIM
+        )
+        list (APPEND SHADER_SPV_FILES ${SHADER_SPV})
+    endforeach()
+    
+    add_custom_target(shaders DEPENDS ${SHADER_SPV_FILES})
+endif()
 
 # Main executable
 add_executable(rt_exe 
@@ -359,7 +367,12 @@ add_executable(rt_exe
     ${RT_VULKAN_SOURCE_FILES}
 )
 
-add_dependencies(rt_exe shaders)
+if (USE_GPU)
+    add_dependencies(rt_exe shaders)
+else()
+    list (APPEND RT_DEFINITIONS "USE_SUBDIVISION")
+endif()
+
 target_compile_definitions(rt_exe PRIVATE ${RT_DEFINITIONS})
 target_include_directories(rt_exe PRIVATE 
     ${PTEX_INCLUDE}

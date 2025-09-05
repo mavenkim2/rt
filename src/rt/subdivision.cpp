@@ -2,6 +2,7 @@
 #include "scene.h"
 #include "subdivision.h"
 #include "thread_context.h"
+#include "parallel.h"
 
 #define M_PI 3.1415926535897932
 #include <Ptexture.h>

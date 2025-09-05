@@ -2,6 +2,7 @@
 #define CPU_SCENE_H
 
 #include "containers.h"
+#include "math/math_include.h"
 
 namespace rt
 {

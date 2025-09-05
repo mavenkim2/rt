@@ -8,7 +8,7 @@
 #include "../sampling.h"
 #include "../thread_context.h"
 
-#ifndef USE_GPU
+#ifdef USE_SUBDIVISION
 #include "../subdivision.h"
 #endif
 
@@ -90,7 +90,7 @@ BRef *ScenePrimitives::GenerateBuildRefs(Arena *arena, RecordAOSSplits &record)
     return b;
 }
 
-#ifndef USE_GPU
+#ifdef USE_SUBDIVISION
 template <>
 void ScenePrimitives::BuildBVH<GeometryType::CatmullClark>(Arena **arenas)
 {
@@ -344,7 +344,7 @@ void ScenePrimitives::BuildBVH<GeometryType::CatmullClark>(Arena **arenas)
     record.centBounds = Lane8F32(-threadBounds.centBounds.minP, threadBounds.centBounds.maxP);
     record.SetRange(0, totalRefCount);
 
-    nodePtr = BuildQuantizedCatmullClarkBVH(settings, arenas, scene, refs, record);
+    nodePtr = BuildQuantizedCatmullClarkBVH(settings, arenas, this, refs, record);
     using IntersectorType =
         typename IntersectorHelper<GeometryType::CatmullClark, PrimRef>::IntersectorType;
     intersectFunc = &IntersectorType::Intersect;
@@ -456,13 +456,13 @@ void ScenePrimitives::BuildSceneBVHs(Arena **arenas, const Mat4 &NDCFromCamera,
             BuildTriangleBVH(arenas);
         }
         break;
-#ifndef USE_GPU
+#ifdef USE_SUBDIVISION
         case GeometryType::CatmullClark:
         {
             primitives = AdaptiveTessellation(arenas, this, NDCFromCamera, cameraFromRender,
                                               screenHeight, tessellationParams,
-                                              (Mesh *)primitves, numPrimitives);
-            BuildCatClarkBVH(arenas, scene);
+                                              (Mesh *)primitives, numPrimitives);
+            BuildCatClarkBVH(arenas);
         }
 #endif
         break;
@@ -516,7 +516,7 @@ Bounds ScenePrimitives::GetSceneBounds()
         break;
         case GeometryType::TriangleMesh:
         case GeometryType::QuadMesh:
-#ifndef USE_GPU
+#ifdef USE_SUBDIVISION
         case GeometryType::CatmullClark:
         {
             Mesh *meshes = (Mesh *)primitives;
