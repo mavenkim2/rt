@@ -19,7 +19,6 @@ RWStructuredBuffer<uint> renderedBitVector : register(u7);
 RWStructuredBuffer<uint> thisFrameBitVector : register(u8);
 RWStructuredBuffer<PTLAS_WRITE_INSTANCE_INFO> ptlasInstanceWriteInfos : register(u9);
 RWStructuredBuffer<PTLAS_UPDATE_INSTANCE_INFO> ptlasInstanceUpdateInfos : register(u10);
-StructuredBuffer<AABB> proxyAABBs : register(t11);
 
 #include "ptlas_write_instances.hlsli"
 

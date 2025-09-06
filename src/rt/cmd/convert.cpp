@@ -2828,7 +2828,7 @@ int main(int argc, char **argv)
     Vulkan *v           = PushStructConstruct(arena, Vulkan)(mode);
     device              = v;
 
-#if 0
+#if 1
     LoadPBRT(arena, filename);
 #else
     ConvolveDisneyDiffuse();

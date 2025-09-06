@@ -2459,13 +2459,21 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
 
     BuildHierarchy(refs, record, numPartitions, partitionIndices, records, parallel);
 
+    gpuInstances = StaticArray<GPUInstance>(arena, inputInstances.Length());
     for (u32 i = 0; i < partitionIndices.Length(); i++)
     {
         GPUInstance &instance   = inputInstances[i];
         instance.partitionIndex = partitionIndices[i];
+        if (instance.partitionIndex < 10)
+        {
+            // instance.worldFromObject[0][0] *= 20.f;
+            // instance.worldFromObject[1][1] *= 20.f;
+            // instance.worldFromObject[2][2] *= 20.f;
+            gpuInstances.Push(instance);
+        }
     }
 
-    maxPartitions = numPartitions;
+    maxPartitions = 16; // numPartitions;
 
     StaticArray<AABB> partitionBounds(scratch.temp.arena, maxPartitions);
 
@@ -2506,12 +2514,14 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
         proxyInstances.Push(gpuInstance);
     }
 
+    Print("%f %f %f %f %f %f\n", partitionBounds[0].minX, partitionBounds[0].minY,
+          partitionBounds[0].minZ, partitionBounds[0].maxX, partitionBounds[0].maxY,
+          partitionBounds[0].maxZ);
+
     instancesBuffer       = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                                      VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                                 sizeof(GPUInstance) * proxyInstances.Length());
-    partitionBoundsBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                     VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                                 sizeof(AABB) * partitionBounds.Length());
+                                                 sizeof(GPUInstance) * gpuInstances.Length());
+    numInstances          = gpuInstances.Length();
     partitionCountsBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                                  sizeof(u32) * maxPartitions);
@@ -2519,10 +2529,8 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT, sizeof(u32) * maxPartitions,
                              MemoryUsage::GPU_TO_CPU);
 
-    cmd->SubmitBuffer(&instancesBuffer, proxyInstances.data,
-                      sizeof(GPUInstance) * proxyInstances.Length());
-    cmd->SubmitBuffer(&partitionBoundsBuffer, partitionBounds.data,
-                      sizeof(AABB) * partitionBounds.Length());
+    cmd->SubmitBuffer(&instancesBuffer, gpuInstances.data,
+                      sizeof(GPUInstance) * gpuInstances.Length());
 }
 
 } // namespace rt

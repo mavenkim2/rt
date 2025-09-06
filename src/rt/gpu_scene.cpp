@@ -117,7 +117,7 @@ static void FlattenInstances(ScenePrimitives *currentScene, const AffineSpace &t
             {
                 for (int c = 0; c < 4; c++)
                 {
-                    gpuInstance.worldFromObject[r][c] = transform[c][r];
+                    gpuInstance.worldFromObject[r][c] = newTransform[c][r];
                 }
             }
             VirtualGeometryManager::MeshInfo &meshInfo =
@@ -225,7 +225,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     }
     instanceCullingLayout.AddBinding(6, DescriptorType::UniformBuffer,
                                      VK_SHADER_STAGE_COMPUTE_BIT);
-    for (int i = 7; i <= 11; i++)
+    for (int i = 7; i <= 10; i++)
     {
         instanceCullingLayout.AddBinding(i, DescriptorType::StorageBuffer,
                                          VK_SHADER_STAGE_COMPUTE_BIT);
@@ -904,7 +904,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         // Input
         {
-            f32 speed = 5000.f;
+            f32 speed = 500.f;
 
             f32 rotationSpeed = 0.001f * PI;
             camera.RotateCamera(dMouseP, rotationSpeed);
@@ -947,6 +947,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             AffineSpace cameraFromRender =
                 AffineSpace(axis, Vec3f(0)) * Translate(-camera.position);
 
+            Print("camera : %f %f %f\n", camera.position[0], camera.position[1],
+                  camera.position[2]);
             gpuScene.cameraP          = camera.position;
             gpuScene.renderFromCamera = Inverse(cameraFromRender);
             gpuScene.cameraFromRender = cameraFromRender;
@@ -1042,8 +1044,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             {
                 // TODO
                 InstanceCullingPushConstant instanceCullingPushConstant;
-                instanceCullingPushConstant.num =
-                    virtualGeometryManager.proxyInstances.Length();
+                instanceCullingPushConstant.num = virtualGeometryManager.numInstances;
                 instanceCullingPushConstant.oneBlasAddress = 0;
                 device->BeginEvent(computeCmd, "Instance Culling");
 
@@ -1060,7 +1061,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     .Bind(&virtualGeometryManager.ptlasInstanceFrameBitVectorBuffer0)
                     .Bind(&virtualGeometryManager.ptlasWriteInfosBuffer)
                     .Bind(&virtualGeometryManager.ptlasUpdateInfosBuffer)
-                    .Bind(&virtualGeometryManager.partitionBoundsBuffer)
                     .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
                     .End();
 
@@ -1164,7 +1164,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             cmd->FlushBarriers();
 
             InstanceCullingPushConstant instanceCullingPushConstant;
-            instanceCullingPushConstant.num = virtualGeometryManager.proxyInstances.Length();
+            instanceCullingPushConstant.num = virtualGeometryManager.numInstances;
             instanceCullingPushConstant.oneBlasAddress =
                 virtualGeometryManager.oneBlasBuildAddress;
             device->BeginEvent(cmd, "Instance Culling");
@@ -1181,7 +1181,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 .Bind(thisFrameBitVector)
                 .Bind(&virtualGeometryManager.ptlasWriteInfosBuffer)
                 .Bind(&virtualGeometryManager.ptlasUpdateInfosBuffer)
-                .Bind(&virtualGeometryManager.partitionBoundsBuffer)
                 .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
                 .End();
 

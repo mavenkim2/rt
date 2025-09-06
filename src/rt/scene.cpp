@@ -681,6 +681,10 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                 scene->affineTransforms[i] = *renderFromWorld * dataTransforms[i];
             }
         }
+        else
+        {
+            MemoryCopy(scene->affineTransforms, dataTransforms, sizeof(AffineSpace) * count);
+        }
     }
     else if (FindSubstring(filename, "_rtshape_", 0, MatchFlag_CaseInsensitive) !=
              filename.size)

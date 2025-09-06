@@ -6189,7 +6189,7 @@ void SimplifyInstances(string directory, Instance *instances, u32 numInstances,
 
 static f32 EvaluateSphericalGaussian(const Vec3f &dir, Vec3f &v, f32 sharpness)
 {
-    return FastExp(sharpness * (Dot(dir, v) - 1));
+    return std::exp(sharpness * (Dot(dir, v) - 1));
 }
 
 static f32 EvaluateSGGX(const Vec3f &dir, f32 ax, f32 ay)
@@ -6203,9 +6203,23 @@ static f32 EvaluateSGGX(const Vec3f &dir, f32 ax, f32 ay)
     return result;
 }
 
+template <typename T>
+static T EvaluateSGGXTest(const Vec3f &dir, T ax, T ay)
+{
+    T invAx2 = 1.f / (ax * ax);
+    T invAy2 = 1.f / (ay * ay);
+
+    T denom = Sqr(dir.x) * invAx2 + Sqr(dir.y) * invAy2 + Sqr(dir.z);
+
+    T result = InvPi * 1.f / ((ax * ay) * denom * denom);
+
+    return result;
+}
+
 void ConvolveDisneyDiffuse()
 {
-    Vec3f w = -Normalize(Vec3f(1, 2, 1));
+#if 0
+    Vec3f w = -Normalize(Vec3f(1, 2, 3));
 
     Vec3f v0, v1, v2;
     v2 = Normalize(Vec3f(.4f, .6f, .2f));
@@ -6218,24 +6232,24 @@ void ConvolveDisneyDiffuse()
     f32 res0 = EvaluateSGGX(newW, .1f, .8f);
     f32 res1 = InvPi * 1.f / (Sqrt(Determinant(s)) * Sqr(Dot(w, s.Inverse() * w)));
 
+    f32 l = EvaluateSGGX(Vec3f(0, 0, -1), .1f, .8f);
+
     Vec3f wj(0, 0, 1);
 
-    Vec3f wjs[] = {
-        Vec3f(0, 0, 1),
-        Vec3f(1, 0, 0),
-        Vec3f(0, 1, 0),
-        Normalize(Vec3f(1, 2, 3)),
-        Normalize(Vec3f(2, 1, 3)),
-        Normalize(Vec3f(0, 2, 3)),
-        Normalize(Vec3f(1, 0, 3)),
-        Normalize(Vec3f(1, 2, 0)),
-        Normalize(Vec3f(3, 2, 1)),
-    };
-    f32 integrals[9];
+    const int sampleDirections = 16;
+    Vec3f wjs[sampleDirections];
 
-    f32 epsilon = 1e-4f;
-    f32 dPhi    = 0.0001f;
-    f32 dTheta  = 0.0001f;
+    RNG rng;
+    for (int i = 0; i < 16; i++)
+    {
+        Vec2f sample(rng.Uniform<f32>(), rng.Uniform<f32>());
+        wjs[i] = SampleUniformSphere(sample);
+    }
+    f32 integrals[sampleDirections];
+
+    const f32 epsilon = 1e-4f;
+    f32 dPhi          = 0.0001f;
+    f32 dTheta        = 0.0001f;
 
     for (int i = 0; i < 20; i++)
     {
@@ -6243,13 +6257,13 @@ void ConvolveDisneyDiffuse()
         {
             for (int k = 0; k < 20; k++)
             {
-                f32 ax               = 0.1f; //(f32)(i + 1) / 20;
-                f32 ay               = 0.7f; //(f32)(j + 1) / 20;
-                f32 sharpness        = 2.f;
+                f32 ax               = .1f; //(f32)(i + 1) / 20;
+                f32 ay               = .7f; //(f32)(j + 1) / 20;
+                f32 sharpness        = 1.f;
                 const int numSamples = 100000;
                 const f32 invPdf     = 4.f * PI / (f32)numSamples;
                 const f32 invGaussianIntegral =
-                    1.f / ((TwoPi / sharpness) * (1.f - FastExp(-2.f * sharpness)));
+                    sharpness / (TwoPi * (1.f - FastExp(-2.f * sharpness)));
 
                 // Integrate over sphere
                 for (int x = 0; x < ArrayLength(wjs); x++)
@@ -6257,12 +6271,12 @@ void ConvolveDisneyDiffuse()
                     f64 integral = 0.f;
                     for (int s = 0; s < numSamples; s++)
                     {
-                        u32 seed     = 0;
+                        u32 seed     = MixBits(s);
                         Vec2f sample = GetSobolSample(s, seed);
                         Vec3f dir    = SampleUniformSphere(sample);
                         f32 g        = EvaluateSphericalGaussian(wjs[x], dir, sharpness);
                         f32 dsggx    = EvaluateSGGX(dir, ax, ay);
-                        integral += dsggx * g * invPdf * invGaussianIntegral;
+                        integral += dsggx * g * invPdf;// * invGaussianIntegral;
                     }
                     // for (f32 theta = 0.f; theta < PI; theta += dTheta)
                     // for (f32 val = 0.f; val < 1.f; val += dTheta)
@@ -6300,6 +6314,8 @@ void ConvolveDisneyDiffuse()
                     r       = 0.f;
                     for (int x = 0; x < ArrayLength(wjs); x++)
                     {
+                        f32 estimate0 = EvaluateSGGX(wjs[x], .3f, .8f);
+
                         f32 estimate = EvaluateSGGX(wjs[x], aprimex, aprimey);
                         f32 residual = integrals[x] - estimate;
 
@@ -6307,6 +6323,11 @@ void ConvolveDisneyDiffuse()
                         f32 temp0 = EvaluateSGGX(wjs[x], aprimex - epsilon, aprimey);
                         f32 temp1 = EvaluateSGGX(wjs[x], aprimex + epsilon, aprimey);
                         f32 jacX  = (temp1 - temp0) / (2 * epsilon);
+
+                        Dual<f32, 2> dualaprimex(aprimex, 1, 0);
+                        Dual<f32, 2> dualaprimey(aprimey, 0, 1);
+
+                        auto temp2 = EvaluateSGGXTest(wjs[x], dualaprimex, dualaprimey);
 
                         temp0    = EvaluateSGGX(wjs[x], aprimex, aprimey - epsilon);
                         temp1    = EvaluateSGGX(wjs[x], aprimex, aprimey + epsilon);
@@ -6325,8 +6346,10 @@ void ConvolveDisneyDiffuse()
                     f32 stepAx = invDet * (a11 * b0 - a01 * b1);
                     f32 stepAy = invDet * (a00 * b1 - a01 * b0);
 
-                    aprimex += .5f * stepAx;
-                    aprimey += .5f * stepAy;
+                    // aprimex += .5f * stepAx;
+                    // aprimey += .5f * stepAy;
+                    aprimex += stepAx;
+                    aprimey += stepAy;
 
                     aprimex = Max(aprimex, 1e-4f);
                     aprimey = Max(aprimey, 1e-4f);
@@ -6335,6 +6358,7 @@ void ConvolveDisneyDiffuse()
             }
         }
     }
+#endif
 }
 
 #if 0
