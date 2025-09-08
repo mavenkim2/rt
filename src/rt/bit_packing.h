@@ -13,6 +13,7 @@ struct BitVector
 {
     u32 *bits;
     u32 maxNumBits;
+    BitVector() {}
     BitVector(Arena *arena, u32 maxNumBits);
     void SetBit(u32 bit);
     void UnsetBit(u32 bit);

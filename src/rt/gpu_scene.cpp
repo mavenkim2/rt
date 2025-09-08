@@ -852,6 +852,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     Semaphore transferSem   = device->CreateSemaphore();
     transferSem.signalValue = 1;
+
+    u32 testCount = 0;
     for (;;)
     {
         ScratchArena frameScratch;
@@ -947,8 +949,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             AffineSpace cameraFromRender =
                 AffineSpace(axis, Vec3f(0)) * Translate(-camera.position);
 
-            Print("camera : %f %f %f\n", camera.position[0], camera.position[1],
-                  camera.position[2]);
             gpuScene.cameraP          = camera.position;
             gpuScene.renderFromCamera = Inverse(cameraFromRender);
             gpuScene.cameraFromRender = cameraFromRender;
@@ -974,11 +974,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         if (!device->BeginFrame(false))
         {
             Assert(0);
-        }
-
-        if (device->frameCount > 250)
-        {
-            int stop = 5;
         }
 
         Print("frame: %u\n", device->frameCount);
@@ -1027,6 +1022,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             computeCmd->ClearBuffer(&virtualGeometryManager.clasGlobalsBuffer);
             computeCmd->ClearBuffer(&virtualGeometryManager.streamingRequestsBuffer);
             computeCmd->ClearBuffer(&virtualGeometryManager.blasDataBuffer);
+            computeCmd->ClearBuffer(&virtualGeometryManager.streamingRequestsBuffer);
             // computeCmd->ClearBuffer(&virtualGeometryManager.virtualInstanceTableBuffer,
             // ~0u);
             computeCmd->ClearBuffer(&virtualGeometryManager.ptlasInstanceBitVectorBuffer);
@@ -1127,7 +1123,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         cmd->ClearBuffer(&workItemQueueBuffer, ~0u);
         cmd->ClearBuffer(&queueBuffer);
         cmd->ClearBuffer(&virtualGeometryManager.clasGlobalsBuffer);
-        cmd->ClearBuffer(&virtualGeometryManager.streamingRequestsBuffer);
+        // cmd->ClearBuffer(&virtualGeometryManager.streamingRequestsBuffer);
         cmd->ClearBuffer(&virtualGeometryManager.blasDataBuffer);
         cmd->ClearBuffer(&virtualGeometryManager.resourceBitVector);
         cmd->ClearBuffer(&virtualGeometryManager.instanceBitmasksBuffer);
@@ -1141,9 +1137,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         cmd->FlushBarriers();
 
         // Streaming
-        virtualGeometryManager.ProcessInstanceRequests(cmd);
+        bool test    = virtualGeometryManager.ProcessInstanceRequests(cmd);
         int cpuIndex = TIMED_CPU_RANGE_BEGIN();
-        virtualGeometryManager.ProcessRequests(cmd);
+
+        virtualGeometryManager.ProcessRequests(cmd, testCount);
         TIMED_RANGE_END(cpuIndex);
 
         // Instance culling
@@ -1196,40 +1193,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             device->EndEvent(cmd);
         }
 
-        // if (device->frameCount > 500)
-        // {
-        //     GPUBuffer readback0 = device->CreateBuffer(
-        //         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        //         virtualGeometryManager.ptlasWriteInfosBuffer.size, MemoryUsage::GPU_TO_CPU);
-        //     //
-        //     // GPUBuffer readback2 =
-        //     //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        //     //     thisFrameBitVector->size,
-        //     //                          MemoryUsage::GPU_TO_CPU);
-        //     // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-        //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //     //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-        //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-        //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-        //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-        //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     cmd->FlushBarriers();
-        //     cmd->CopyBuffer(&readback0, &virtualGeometryManager.ptlasWriteInfosBuffer);
-        //     // cmd->CopyBuffer(&readback, &blasDataBuffer);
-        //     // cmd->CopyBuffer(&readback2, thisFrameBitVector);
-        //     Semaphore testSemaphore   = device->CreateSemaphore();
-        //     testSemaphore.signalValue = 1;
-        //     cmd->SignalOutsideFrame(testSemaphore);
-        //     device->SubmitCommandBuffer(cmd);
-        //     device->Wait(testSemaphore);
-        //
-        //     PTLAS_WRITE_INSTANCE_INFO *data = (PTLAS_WRITE_INSTANCE_INFO
-        //     *)readback0.mappedPtr; int stop                        = 5; god fucking damnit
-        // }
-
         // Hierarchy traversal
         {
             virtualGeometryManager.HierarchyTraversal(
@@ -1237,6 +1200,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 &workItemQueueBuffer, &virtualGeometryManager.instancesBuffer,
                 &visibleClustersBuffer);
         }
+
+        testCount += test;
 
         {
             // Prepare indirect args
@@ -1364,6 +1329,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             device->BeginCommandBuffer(QueueType_Copy, "feedback copy cmd");
         cmd->Signal(transferSem);
         transferCmd->Wait(transferSem);
+        transferSem.signalValue++;
         // transferCmd->CopyBuffer(
         //     &virtualTextureManager.feedbackBuffers[currentBuffer].stagingBuffer,
         //     &virtualTextureManager.feedbackBuffers[currentBuffer].buffer);

@@ -45,7 +45,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
             aabb.maxX = 1;
             aabb.maxY = 1;
             aabb.maxZ = 1;
-            WritePTLASDescriptors(instance, pc.oneBlasAddress, instanceIndex, instance.partitionIndex | (1u << 31u), 
+            WritePTLASDescriptors(instance, pc.oneBlasAddress, instanceIndex, instanceIndex,
                                   //aabb, true, 0x10u);
                                   aabb, false, 0x0u);
         }

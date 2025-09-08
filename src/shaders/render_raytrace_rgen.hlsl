@@ -110,10 +110,10 @@ void main()
             if (query.CandidateType() == CANDIDATE_PROCEDURAL_PRIMITIVE)
             {
                 uint instanceID = query.CandidateInstanceID();
-                if (instanceID >> 31u)
+                uint resourceID = gpuInstances[instanceID].resourceID;
+                InterlockedAdd(proxyCounts[gpuInstances[instanceID].partitionIndex], 1);
+                if (resourceID == ~0u)
                 {
-                    uint proxyIndex = instanceID & 0x7fffffffu;
-                    InterlockedAdd(proxyCounts[proxyIndex], 1);
                     continue;
                 }
 #ifndef TRACE_BRICKS

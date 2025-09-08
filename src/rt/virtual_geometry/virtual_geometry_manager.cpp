@@ -514,22 +514,10 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
         sizeof(VoxelAddressTableEntry) * MAX_CLUSTERS_PER_PAGE * maxPages);
     totalNumBytes += voxelAddressTable.size;
 
-    resourceBitVector = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1024);
-    resourceBuffer    = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1024);
+    instanceUploadBuffer = {};
+    resourceBitVector    = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1024);
+    resourceBuffer       = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1024);
 
-    u32 tlasScratchSize, tlasAccelSize;
-    device->GetPTLASBuildSizes(1u << 21u, 1u << 17u, 16u, 0, tlasScratchSize, tlasAccelSize);
-
-    tlasScratchBuffer = device->CreateBuffer(
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        tlasScratchSize);
-    tlasAccelBuffer =
-        device->CreateBuffer(VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
-                                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                             tlasAccelSize);
-    totalNumBytes += tlasAccelBuffer.size;
-    totalNumBytes += tlasScratchBuffer.size;
     ptlasIndirectCommandBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
@@ -540,12 +528,12 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        sizeof(PTLAS_WRITE_INSTANCE_INFO) * (1u << 18u));
+        sizeof(PTLAS_WRITE_INSTANCE_INFO) * maxInstances);
     totalNumBytes += ptlasWriteInfosBuffer.size;
     ptlasUpdateInfosBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        sizeof(PTLAS_UPDATE_INSTANCE_INFO) * (1u << 18u));
+        sizeof(PTLAS_UPDATE_INSTANCE_INFO) * maxInstances);
     totalNumBytes += ptlasUpdateInfosBuffer.size;
     ptlasInstanceBitVectorBuffer =
         device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, ((1u << 24u) + 7u) >> 3u);
@@ -1046,60 +1034,155 @@ static Vec3f DecodePosition(u8 *pageData, u32 vertexIndex, Vec3u posBitWidths, V
     return Vec3f(pos + anchor) * scale;
 }
 
-void VirtualGeometryManager::ProcessInstanceRequests(CommandBuffer *cmd)
+bool VirtualGeometryManager::ProcessInstanceRequests(CommandBuffer *cmd)
 {
     ScratchArena scratch;
-    u32 *proxyCounts         = (u32 *)partitionReadbackBuffer.mappedPtr;
-    const u32 threshold      = 128;
-    const u32 instanceBudget = 16384;
+    u32 *proxyCounts    = (u32 *)partitionReadbackBuffer.mappedPtr;
+    const u32 threshold = 128;
+
+    // u32 total = 0;
+    // for (u32 i = 0; i < maxPartitions; i++)
+    // {
+    //     total += proxyCounts[i];
+    // }
+    // Print("num hits: %u\n", total);
+
+    Array<u32> newPartitions(scratch.temp.arena, 128);
+    Array<u32> emptyPartitions(scratch.temp.arena, 128);
     u32 numInstancesToUpload = 0;
 
-    u32 total = 0;
-    for (u32 i = 0; i < maxPartitions; i++)
+    for (u32 partitionIndex = 0; partitionIndex < maxPartitions; partitionIndex++)
     {
-        total += proxyCounts[i];
-    }
-    Print("num hits: %u\n", total);
-
-#if 0
-    if (instanceUploadBuffer.size == 0)
-    {
-        instanceUploadBuffer = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                                    sizeof(GPUInstance) * instanceBudget,
-                                                    MemoryUsage::CPU_TO_GPU);
-    }
-
-    for (u32 partitionIndex = 0; i < numPartitions; partitionIndex++)
-    {
-        if (proxyCounts[partitionIndex] > threshold &&
-            !partitionStreamedIn.GetBit(partitionIndex))
+        if (proxyCounts[partitionIndex] && !partitionStreamedIn.GetBit(partitionIndex))
         {
-            for (u32 dataIndex = partitionInstanceGraph.offsets[partitionIndex];
-                 dataIndex < partitionInstanceGraph.offsets[partitionIndex + 1]; dataIndex++)
-            {
-                if (numInstancesToUpload == instanceBudget) break;
-                u32 instanceIndex = partitionInstanceGraph.data[dataIndex];
-
-                u32 srcOffset = sizeof(GPUInstance) * numInstancesToUpload++;
-                MemoryCopy((u8 *)instanceUploadBuffer.mappedPtr + srcOffset,
-                           &gpuinstances[instanceIndex], sizeof(GPUInstance));
-            }
+            newPartitions.Push(partitionIndex);
+            numInstancesToUpload += partitionInstanceGraph.offsets[partitionIndex + 1] -
+                                    partitionInstanceGraph.offsets[partitionIndex];
         }
-        if (numInstancesToUpload == instanceBudget) break;
+        else if (proxyCounts[partitionIndex] == 0 &&
+                 partitionStreamedIn.GetBit(partitionIndex))
+        {
+            emptyPartitions.Push(partitionIndex);
+        }
     }
-#endif
+
+    if (numInstancesToUpload == 0) return false;
+
+    if (instanceUploadBuffer.size)
+    {
+        device->DestroyBuffer(&instanceUploadBuffer);
+    }
+
+    instanceUploadBuffer = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                                sizeof(GPUInstance) * numInstancesToUpload,
+                                                MemoryUsage::CPU_TO_GPU);
+
+    u32 partitionIndex = 0;
+    u32 offset         = 0;
+    u32 toCopy         = 0;
+    BufferToBufferCopy copy;
+    copy.srcOffset = 0;
+    copy.dstOffset = sizeof(GPUInstance) * numInstances;
+
+    while (partitionIndex < newPartitions.Length() && numInstances < maxInstances)
+    {
+        u32 partition = newPartitions[partitionIndex];
+        u32 count     = partitionInstanceGraph.offsets[partition + 1] -
+                    partitionInstanceGraph.offsets[partition];
+        toCopy = Min(count, maxInstances - numInstances);
+        if (toCopy == count)
+        {
+            partitionStreamedIn.SetBit(partition);
+            partitionIndex++;
+        }
+
+        MemoryCopy((u8 *)instanceUploadBuffer.mappedPtr + offset,
+                   partitionInstanceGraph.data + partitionInstanceGraph.offsets[partition],
+                   sizeof(GPUInstance) * toCopy);
+
+        u32 virtualOffset = proxyVirtualOffsets[partition];
+        for (u32 i = 0; i < toCopy; i++)
+        {
+            instanceVirtualTable[virtualOffset + i] = numInstances++;
+        }
+
+        offset += sizeof(GPUInstance) * toCopy;
+    }
+    copy.size = offset;
+    if (copy.size)
+    {
+        cmd->CopyBuffer(&instancesBuffer, &instanceUploadBuffer, &copy, 1);
+    }
+
+    if (partitionIndex < newPartitions.Length())
+    {
+        StaticArray<BufferToBufferCopy> bufferToBufferCopies(scratch.temp.arena,
+                                                             numInstancesToUpload);
+        u32 emptyPartitionIndex = 0;
+        for (; partitionIndex < newPartitions.Length(); partitionIndex++)
+        {
+            if (emptyPartitionIndex == emptyPartitions.Length()) break;
+            u32 partition              = newPartitions[partitionIndex];
+            u32 currentPartitionOffset = 0;
+            u32 count                  = partitionInstanceGraph.offsets[partition + 1] -
+                        partitionInstanceGraph.offsets[partition];
+
+            MemoryCopy((u8 *)instanceUploadBuffer.mappedPtr + offset,
+                       partitionInstanceGraph.data + partitionInstanceGraph.offsets[partition],
+                       sizeof(GPUInstance) * count);
+            u32 numCopied = 0;
+
+            for (; emptyPartitionIndex < emptyPartitions.Length(); emptyPartitionIndex++)
+            {
+                u32 emptyPartition   = emptyPartitions[emptyPartitionIndex];
+                u32 virtualOffset    = proxyVirtualOffsets[emptyPartition];
+                u32 maxVirtualOffset = proxyVirtualOffsets[emptyPartition + 1];
+                while (virtualOffset < maxVirtualOffset &&
+                       instanceVirtualTable[virtualOffset] == ~0u)
+                    virtualOffset++;
+
+                u32 toCopy =
+                    Min(count - currentPartitionOffset, maxVirtualOffset - virtualOffset);
+
+                if (toCopy)
+                {
+                    for (u32 virtualIndex = virtualOffset;
+                         virtualIndex < virtualOffset + toCopy; virtualIndex++)
+                    {
+                        u32 index = instanceVirtualTable[virtualIndex];
+                        BufferToBufferCopy copy;
+                        copy.srcOffset = offset + sizeof(GPUInstance) * numCopied++;
+                        copy.dstOffset = sizeof(GPUInstance) * index;
+                        copy.size      = sizeof(GPUInstance);
+                        bufferToBufferCopies.Push(copy);
+                    }
+
+                    MemorySet(instanceVirtualTable + virtualOffset, 0xff,
+                              sizeof(u32) * toCopy);
+
+                    currentPartitionOffset += toCopy;
+                    if (currentPartitionOffset == count)
+                    {
+                        break;
+                    }
+                }
+
+                partitionedStreamedIn.UnsetBit(emptyPartition);
+            }
+            offset += sizeof(GPUInstance) * count;
+        }
+        // TODO: do this all on the GPU
+        // need to unset bit vector on gpu, set partition virtual offsets, and set the
+        // partition index properly on gpu
+        cmd->CopyBuffer(&instancesBuffer, &instanceUploadBuffer, bufferToBufferCopies.data,
+                        bufferToBufferCopies.Length());
+    }
+
+    return true;
 }
 
-void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
+void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd, bool test)
 {
-    // TODO:
-    // if your min group id is greater than another instance's max group id,
-    // then you can substitute the other instance's cluster blas with your cluster blas
-    // the thing is though this is a trade off no?
-    // it wouldn't have to be group id, it would have to be cluster id
-    // where the cluster id is monotonically increasing as the level increases,
-    // so then it would be flipped? if your max is less than their min
-
     StreamingRequest *requests = (StreamingRequest *)readbackBuffer.mappedPtr;
     u32 numRequests            = requests[0].pageIndex_numPages;
     numRequests                = Min(numRequests, maxStreamingRequestsPerFrame - 1u);
@@ -1971,8 +2054,9 @@ void VirtualGeometryManager::HierarchyTraversal(CommandBuffer *cmd, GPUBuffer *q
 
     cmd->Dispatch(1440, 1, 1);
     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                 VK_ACCESS_2_SHADER_READ_BIT);
+                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                 VK_ACCESS_2_SHADER_WRITE_BIT,
+                 VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_TRANSFER_READ_BIT);
     cmd->FlushBarriers();
 
     device->EndEvent(cmd);
@@ -2321,6 +2405,42 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstan
     cmd->BuildPTLAS(&tlasAccelBuffer, &tlasScratchBuffer, &ptlasIndirectCommandBuffer,
                     &clasGlobalsBuffer, sizeof(u32) * GLOBALS_PTLAS_OP_TYPE_COUNT_INDEX,
                     (1u << 21), (1u << 21u) / maxPartitions, maxPartitions, 0);
+
+    // if (test)
+    // {
+    //     GPUBuffer readback0 =
+    //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+    //         ptlasWriteInfosBuffer.size,
+    //                              MemoryUsage::GPU_TO_CPU);
+    //
+    //     // GPUBuffer readback2 =
+    //     //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+    //     //     thisFrameBitVector->size,
+    //     //                          MemoryUsage::GPU_TO_CPU);
+    //     // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+    //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+    //     //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+    //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
+    //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+    //     VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+    //                  VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+    //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+    //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+    //     // VK_ACCESS_2_SHADER_WRITE_BIT,
+    //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
+    //     cmd->FlushBarriers();
+    //     cmd->CopyBuffer(&readback0, &ptlasWriteInfosBuffer);
+    //     // cmd->CopyBuffer(&readback, &blasDataBuffer);
+    //     // cmd->CopyBuffer(&readback2, thisFrameBitVector);
+    //     Semaphore testSemaphore   = device->CreateSemaphore();
+    //     testSemaphore.signalValue = 1;
+    //     cmd->SignalOutsideFrame(testSemaphore);
+    //     device->SubmitCommandBuffer(cmd);
+    //     device->Wait(testSemaphore);
+    //
+    //     PTLAS_WRITE_INSTANCE_INFO *data = (PTLAS_WRITE_INSTANCE_INFO *)readback0.mappedPtr;
+    //     int stop                        = 5;
+    // }
 }
 
 struct GetHierarchyNode
@@ -2394,6 +2514,8 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
     ScratchArena scratch(&arena, 1);
     scratch.temp.arena->align = 16;
 
+    partitionStreamedIn = BitVector(arena, inputInstances.Length());
+
     // u32 numInstances;
     // Instance *instances = PushArrayNoZero(scratch.temp.arena, Instance, numInstances);
     // AffineSpace *transforms;
@@ -2459,23 +2581,22 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
 
     BuildHierarchy(refs, record, numPartitions, partitionIndices, records, parallel);
 
-    gpuInstances = StaticArray<GPUInstance>(arena, inputInstances.Length());
-    for (u32 i = 0; i < partitionIndices.Length(); i++)
-    {
-        GPUInstance &instance   = inputInstances[i];
-        instance.partitionIndex = partitionIndices[i];
-        if (instance.partitionIndex < 10)
-        {
-            // instance.worldFromObject[0][0] *= 20.f;
-            // instance.worldFromObject[1][1] *= 20.f;
-            // instance.worldFromObject[2][2] *= 20.f;
-            gpuInstances.Push(instance);
-        }
-    }
+    gpuInstances = inputInstances;
 
-    maxPartitions = 16; // numPartitions;
+    partitionInstanceGraph.InitializeStatic(
+        arena, inputInstances.Length(), numPartitions.load(),
+        [&](u32 instanceIndex, u32 *offsets, u32 *data = 0) {
+            u32 partition = partitionIndices[instanceIndex];
+            u32 dataIndex = offsets[partition]++;
+            if (data)
+            {
+                gpuInstances[instanceIndex].partitionIndex = partition;
+                data[dataIndex]                            = instanceIndex;
+            }
+            return 1;
+        });
 
-    StaticArray<AABB> partitionBounds(scratch.temp.arena, maxPartitions);
+    maxPartitions = 512;
 
     proxyInstances = StaticArray<GPUInstance>(arena, maxPartitions);
 
@@ -2491,7 +2612,6 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
         aabb.maxX = bounds.maxP[0];
         aabb.maxY = bounds.maxP[1];
         aabb.maxZ = bounds.maxP[2];
-        partitionBounds.Push(aabb);
 
         GPUInstance gpuInstance = {};
 
@@ -2501,7 +2621,7 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
         Vec3<double> extents = (maxP - minP) * 0.5;
 
         AffineSpace transform =
-            AffineSpace::Translate(Vec3f(center)) * AffineSpace::Scale(Vec3f(extents));
+            AffineSpace::Translate(Vec3f(center)) * AffineSpace::Scale(Vec3f(2. * extents));
         for (int r = 0; r < 3; r++)
         {
             for (int c = 0; c < 4; c++)
@@ -2514,14 +2634,24 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
         proxyInstances.Push(gpuInstance);
     }
 
-    Print("%f %f %f %f %f %f\n", partitionBounds[0].minX, partitionBounds[0].minY,
-          partitionBounds[0].minZ, partitionBounds[0].maxX, partitionBounds[0].maxY,
-          partitionBounds[0].maxZ);
+    u32 tlasScratchSize, tlasAccelSize;
+    device->GetPTLASBuildSizes(maxInstances, maxInstances / maxPartitions, maxPartitions, 0,
+                               tlasScratchSize, tlasAccelSize);
+
+    tlasScratchBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+        tlasScratchSize);
+    tlasAccelBuffer =
+        device->CreateBuffer(VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                             tlasAccelSize);
+    // totalNumBytes += tlasAccelBuffer.size;
+    // totalNumBytes += tlasScratchBuffer.size;
 
     instancesBuffer       = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                                      VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                                 sizeof(GPUInstance) * gpuInstances.Length());
-    numInstances          = gpuInstances.Length();
+                                                 sizeof(GPUInstance) * maxInstances);
     partitionCountsBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                                  sizeof(u32) * maxPartitions);
@@ -2529,8 +2659,9 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT, sizeof(u32) * maxPartitions,
                              MemoryUsage::GPU_TO_CPU);
 
-    cmd->SubmitBuffer(&instancesBuffer, gpuInstances.data,
-                      sizeof(GPUInstance) * gpuInstances.Length());
+    cmd->SubmitBuffer(&instancesBuffer, proxyInstances.data,
+                      sizeof(GPUInstance) * proxyInstances.Length());
+    numInstances = proxyInstances.Length();
 }
 
 } // namespace rt

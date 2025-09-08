@@ -360,13 +360,16 @@ struct VirtualGeometryManager
     GPUBuffer tlasScratchBuffer;
 
     GPUBuffer partitionReadbackBuffer;
-    GPUBuffer partitionBoundsBuffer;
     GPUBuffer partitionCountsBuffer;
     GPUBuffer instancesBuffer;
-    // BitVector partitionStreamedIn;
-    Graph<u32> partitionInstanceGraph;
-    StaticArray<GPUInstance> gpuInstances;
+    BitVector partitionStreamedIn;
+    Graph<GPUInstance> partitionInstanceGraph;
+    // StaticArray<GPUInstance> gpuInstances;
     StaticArray<GPUInstance> proxyInstances;
+
+    StaticArray<u32> proxyVirtualOffsets;
+    StaticArray<u32> instanceVirtualTable;
+
     u32 numStreamedInstances;
     GPUBuffer instanceUploadBuffer;
     u64 oneBlasBuildAddress;
@@ -399,8 +402,8 @@ struct VirtualGeometryManager
                                  u32 pageIndex, u32 priority);
     bool VerifyPageDependencies(u32 virtualOffset, u32 startPage, u32 numPages);
     bool CheckDuplicatedFixup(u32 virtualOffset, u32 pageIndex, u32 startPage, u32 numPages);
-    void ProcessInstanceRequests(CommandBuffer *cmd);
-    void ProcessRequests(CommandBuffer *cmd);
+    bool ProcessInstanceRequests(CommandBuffer *cmd);
+    void ProcessRequests(CommandBuffer *cmd, bool test);
     u32 AddNewMesh(Arena *arena, CommandBuffer *cmd, string filename);
     void FinalizeResources(CommandBuffer *cmd);
     void HierarchyTraversal(CommandBuffer *cmd, GPUBuffer *queueBuffer,
