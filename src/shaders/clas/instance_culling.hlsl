@@ -32,6 +32,8 @@ void main(uint3 dtID : SV_DispatchThreadID)
 
     GPUInstance instance = gpuInstances[instanceIndex];
 
+    if (instance.partitionIndex == ~0u) return;
+
     // Proxy
     if (instance.resourceID == ~0u)
     {
@@ -47,7 +49,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
             aabb.maxZ = 1;
             WritePTLASDescriptors(instance, pc.oneBlasAddress, instanceIndex, instanceIndex,
                                   //aabb, true, 0x10u);
-                                  aabb, false, 0x0u);
+                                  aabb, false, 0x0u, 0);
         }
         return;
     }

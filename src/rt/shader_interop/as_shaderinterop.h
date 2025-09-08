@@ -233,10 +233,16 @@ struct PtlasPushConstant
     uint64_t updateAddress;
 };
 
-struct InstanceCullingPushConstant 
+struct InstanceCullingPushConstant
 {
     uint64_t oneBlasAddress;
     uint num;
+};
+
+struct InstanceStreamingPushConstant
+{
+    uint numEvictedPartitions;
+    uint numNewInstances;
 };
 
 struct NumPushConstant
@@ -269,6 +275,7 @@ struct GPUInstance
     uint partitionIndex;
     uint voxelAddressOffset;
     uint clusterLookupTableOffset;
+    uint groupIndex;
     bool cull;
 };
 
@@ -340,7 +347,7 @@ struct VoxelAddressTableEntry
 #define GLOBALS_PTLAS_UPDATE_COUNT_INDEX 22
 #define GLOBALS_PTLAS_WRITE_COUNT_INDEX  23
 
-#define GLOBALS_VISIBLE_INSTANCE_COUNT 24
+#define GLOBALS_NEW_INSTANCE_COUNT 24
 
 #define GLOBALS_SIZE 26
 

@@ -290,6 +290,7 @@ if (USE_GPU)
         "${SHADER_SRC_DIR}/clas/initialize_instance_freelist.hlsl"
         "${SHADER_SRC_DIR}/clas/ptlas_update_partitions.hlsl"
         "${SHADER_SRC_DIR}/clas/fill_finest_cluster_bottom_level_info.hlsl"
+        "${SHADER_SRC_DIR}/clas/instance_streaming.hlsl"
     )
     set_property(SOURCE 
         "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl" 
@@ -322,6 +323,7 @@ if (USE_GPU)
         "${SHADER_SRC_DIR}/clas/initialize_instance_freelist.hlsl"
         "${SHADER_SRC_DIR}/clas/ptlas_update_partitions.hlsl"
         "${SHADER_SRC_DIR}/clas/fill_finest_cluster_bottom_level_info.hlsl"
+        "${SHADER_SRC_DIR}/clas/instance_streaming.hlsl"
         PROPERTY name "cs")
     
     file(GLOB_RECURSE SHADER_INCLUDES "${SHADER_SRC_DIR}/*.hlsl" "${SHADER_SRC_DIR}/*.hlsli")

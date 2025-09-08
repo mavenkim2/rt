@@ -111,7 +111,7 @@ void main()
             {
                 uint instanceID = query.CandidateInstanceID();
                 uint resourceID = gpuInstances[instanceID].resourceID;
-                InterlockedAdd(proxyCounts[gpuInstances[instanceID].partitionIndex], 1);
+                InterlockedAdd(proxyCounts[gpuInstances[instanceID].groupIndex], 1);
                 if (resourceID == ~0u)
                 {
                     continue;

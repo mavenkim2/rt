@@ -377,6 +377,13 @@ struct Array
     }
 
     void Push(T &element) { Add(element); }
+    __forceinline T Pop()
+    {
+        Assert(size > 0);
+        T result = std::move(data[size - 1]);
+        size--;
+        return result;
+    }
 
     __forceinline bool PushUnique(T &element)
     {

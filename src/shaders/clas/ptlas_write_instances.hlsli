@@ -1,10 +1,8 @@
 #ifndef PTLAS_WRITE_INSTANCES_HLSLI_
 #define PTLAS_WRITE_INSTANCES_HLSLI_
 
-void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint instanceIndex, uint instanceID, AABB aabb, bool update, uint flags)
+void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint instanceIndex, uint instanceID, AABB aabb, bool update, uint flags, uint partition)
 {
-    uint partition = instance.partitionIndex;
-
     uint2 offsets = uint2(instanceIndex >> 5u, instanceIndex & 31u);
 
     bool wasRendered = renderedBitVector[offsets.x] & (1u << offsets.y);

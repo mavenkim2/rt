@@ -289,6 +289,10 @@ struct VirtualGeometryManager
     DescriptorSetLayout fillFinestClusterBLASInfoLayout = {};
     VkPipeline fillFinestClusterBLASInfoPipeline;
 
+    PushConstant instanceStreamingPush;
+    DescriptorSetLayout instanceStreamingLayout = {};
+    VkPipeline instanceStreamingPipeline;
+
     GPUBuffer evictedPagesBuffer;
     GPUBuffer hierarchyNodeBuffer;
     GPUBuffer clusterPageDataBuffer;
@@ -366,12 +370,12 @@ struct VirtualGeometryManager
     Graph<GPUInstance> partitionInstanceGraph;
     // StaticArray<GPUInstance> gpuInstances;
     StaticArray<GPUInstance> proxyInstances;
-
-    StaticArray<u32> proxyVirtualOffsets;
-    StaticArray<u32> instanceVirtualTable;
+    StaticArray<u32> allocatedPartitionIndices;
 
     u32 numStreamedInstances;
     GPUBuffer instanceUploadBuffer;
+    GPUBuffer tempInstanceBuffer;
+    GPUBuffer evictedPartitionsBuffer;
     u64 oneBlasBuildAddress;
 
     // u32 requestBatchWriteIndex;
@@ -394,6 +398,8 @@ struct VirtualGeometryManager
     u32 clusterLookupTableOffset;
 
     u32 maxPartitions;
+    u32 finalNumPartitions;
+    u32 numAllocatedPartitions;
     u32 numInstances;
 
     VirtualGeometryManager(CommandBuffer *cmd, Arena *arena);
