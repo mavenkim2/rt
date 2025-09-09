@@ -2,9 +2,9 @@
 #define PTEX_H_
 
 #include <Ptexture.h>
-#include "../rt.h"
 #include "../platform.h"
 #include "vulkan.h"
+#include "../image.h"
 #include "../shader_interop/virtual_textures_shaderinterop.h"
 
 namespace Utils

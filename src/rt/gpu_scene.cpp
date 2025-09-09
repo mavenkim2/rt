@@ -1137,7 +1137,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         cmd->FlushBarriers();
 
         // Streaming
-        bool test    = virtualGeometryManager.ProcessInstanceRequests(cmd);
+        // bool test    = virtualGeometryManager.ProcessInstanceRequests(cmd);
         int cpuIndex = TIMED_CPU_RANGE_BEGIN();
 
         virtualGeometryManager.ProcessRequests(cmd, testCount);
@@ -1201,7 +1201,40 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 &visibleClustersBuffer);
         }
 
-        testCount += test;
+        // if (test)
+        // {
+        //     GPUBuffer readback0 =
+        //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        //                              visibleClustersBuffer.size, MemoryUsage::GPU_TO_CPU);
+        //
+        //     // GPUBuffer readback2 =
+        //     //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        //     //     thisFrameBitVector->size,
+        //     //                          MemoryUsage::GPU_TO_CPU);
+        //     // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        //     //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+        //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
+        //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+        //                  VK_ACCESS_2_TRANSFER_READ_BIT);
+        //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+        //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        //     // VK_ACCESS_2_SHADER_WRITE_BIT,
+        //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
+        //     cmd->FlushBarriers();
+        //     cmd->CopyBuffer(&readback0, &visibleClustersBuffer);
+        //     // cmd->CopyBuffer(&readback, &blasDataBuffer);
+        //     // cmd->CopyBuffer(&readback2, thisFrameBitVector);
+        //     Semaphore testSemaphore   = device->CreateSemaphore();
+        //     testSemaphore.signalValue = 1;
+        //     cmd->SignalOutsideFrame(testSemaphore);
+        //     device->SubmitCommandBuffer(cmd);
+        //     device->Wait(testSemaphore);
+        //
+        //     VisibleCluster *data = (VisibleCluster *)readback0.mappedPtr;
+        //     int stop             = 5;
+        // }
 
         {
             // Prepare indirect args

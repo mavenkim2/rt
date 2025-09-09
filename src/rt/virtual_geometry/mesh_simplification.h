@@ -151,6 +151,7 @@ struct Instance;
 void SimplifyInstances(string directory, Instance *instances, u32 numInstances,
                        AffineSpace *transforms, u32 numTransforms, Mesh &mesh);
 void ConvolveDisneyDiffuse();
+void SimplifyScene(Arena *arena, string directory, string filename);
 
 } // namespace rt
 

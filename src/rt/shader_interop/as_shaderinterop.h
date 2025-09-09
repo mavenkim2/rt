@@ -48,7 +48,6 @@ struct ClusterFileHeader
     uint numPages;
     uint numNodes;
     uint numVoxelClusters;
-    uint numFinestClusters;
 };
 
 struct DecodeClusterData

@@ -3,7 +3,7 @@
 
 #include "algo.h"
 #include "math/spherical_harmonics.h"
-#include "rt.h"
+#include "image.h"
 #include "surface_interaction.h"
 #include "spectrum.h"
 

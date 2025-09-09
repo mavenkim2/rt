@@ -153,6 +153,7 @@ set (RT_SOURCE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/bit_packing.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/virtual_geometry/virtual_geometry_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/scene/scene.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/image.cpp
 )
 
 if (NOT USE_GPU)
@@ -198,35 +199,6 @@ set(deps
 
 install (TARGETS thread_context EXPORT THREAD_CONTEXT DESTINATION lib)
 install (EXPORT THREAD_CONTEXT DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/thread_context")
-
-# convert
-set (CONVERT_SOURCE_FILES
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/cmd/convert.cpp
-    ${RT_VULKAN_SOURCE_FILES}
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/graphics/ptex.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/dgfs.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/debug.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/bit_packing.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/parallel.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/scene/scene.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/bvh/bvh_types.cpp
-)
-
-if (USE_GPU)
-    list (APPEND CONVERT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/virtual_geometry/mesh_simplification.cpp)
-endif()
-
-add_executable(convert ${CONVERT_SOURCE_FILES})
-
-target_include_directories(convert PRIVATE 
-    ${PTEX_INCLUDE}
-    ${NANOVDB_INCLUDE_DIR}
-    ${ZLIB_INCLUDE_DIR}
-    ${VULKAN_INCLUDE_DIR}
-)
-target_link_libraries(convert PRIVATE ${PTEX_LIBRARY} ${GK_LIBRARY} ${METIS_LIBRARY})
-target_compile_definitions(convert PRIVATE ${RT_DEFINITIONS})
-target_compile_options(convert PRIVATE ${RT_CXX_FLAGS})
 
 # generate_uvs
 add_executable(generate_uvs 
@@ -360,6 +332,43 @@ if (USE_GPU)
     
     add_custom_target(shaders DEPENDS ${SHADER_SPV_FILES})
 endif()
+
+# convert
+set (CONVERT_SOURCE_FILES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/cmd/convert.cpp
+    ${RT_VULKAN_SOURCE_FILES}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/graphics/ptex.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/dgfs.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/debug.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/bit_packing.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/parallel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/scene/scene.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/bvh/bvh_types.cpp
+)
+
+if (USE_GPU)
+    list (APPEND CONVERT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/virtual_geometry/mesh_simplification.cpp)
+    list (APPEND CONVERT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/scene.cpp)
+    list (APPEND CONVERT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/spectrum.cpp)
+    list (APPEND CONVERT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/lights.cpp)
+    list (APPEND CONVERT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/gen/rgbspectrum_srgb.cpp)
+    list (APPEND CONVERT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/image.cpp)
+    #list (APPEND CONVERT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/low_discrepancy.cpp)
+    #list (APPEND CONVERT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/tables/primes.hpp)
+    #list (APPEND CONVERT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/tables/sobolmatrices.hpp)
+endif()
+
+add_executable(convert ${CONVERT_SOURCE_FILES})
+
+target_include_directories(convert PRIVATE 
+    ${PTEX_INCLUDE}
+    ${NANOVDB_INCLUDE_DIR}
+    ${ZLIB_INCLUDE_DIR}
+    ${VULKAN_INCLUDE_DIR}
+)
+target_link_libraries(convert PRIVATE ${PTEX_LIBRARY} ${GK_LIBRARY} ${METIS_LIBRARY})
+target_compile_definitions(convert PRIVATE ${RT_DEFINITIONS})
+target_compile_options(convert PRIVATE ${RT_CXX_FLAGS})
 
 # Main executable
 add_executable(rt_exe 

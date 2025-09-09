@@ -136,6 +136,7 @@ struct StringBuilderMapped
     u64 totalSize;
     u64 currentLimit;
 
+    StringBuilderMapped() = default;
     StringBuilderMapped(string filename);
 };
 

@@ -267,6 +267,11 @@ struct MeshHashNode
 {
     Mesh *meshes;
     u32 numMeshes;
+
+    InstanceType *instances;
+    u32 numInstances;
+    AffineSpace *transforms;
+
     string idFilename;
 
     string filename;
@@ -435,7 +440,29 @@ struct MeshHashMap
 
         return false;
     }
-    bool Find(Mesh *&meshes, u32 &numMeshes, string filename)
+    u32 AddInstances(Arena *arena, InstanceType *instances, u32 numInstances,
+                     AffineSpace *transforms, string idFilename)
+    {
+        u32 fileHash  = Hash(idFilename);
+        u32 fileIndex = fileHash & (count - 1);
+        BeginWMutex(&mutexes[fileIndex]);
+        MeshHashNode **fileNode = &filenameMap[fileIndex];
+
+        while (*fileNode)
+        {
+            fileNode = &(*fileNode)->next;
+        }
+        *fileNode                 = PushStruct(arena, MeshHashNode);
+        (*fileNode)->idFilename   = PushStr8Copy(arena, idFilename);
+        (*fileNode)->transforms   = transforms;
+        (*fileNode)->instances    = instances;
+        (*fileNode)->numInstances = numInstances;
+        EndWMutex(&mutexes[fileIndex]);
+
+        return false;
+    }
+
+    MeshHashNode *Find(string filename)
     {
         u32 fileHash  = Hash(filename);
         u32 fileIndex = fileHash & (count - 1);
@@ -445,14 +472,12 @@ struct MeshHashMap
         {
             if (fileNode->idFilename == filename)
             {
-                meshes    = fileNode->meshes;
-                numMeshes = fileNode->numMeshes;
-                return true;
+                return fileNode;
             }
             fileNode = fileNode->next;
         }
         EndRMutex(&mutexes[fileIndex]);
-        return false;
+        return 0;
     }
 };
 
@@ -1400,6 +1425,25 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                     WriteNanite(state, tempArena, sls, directory, geoFilename);
                 WriteFile(directory, state, originFile ? sls : 0);
 
+                if (state->fileInstances.totalCount)
+                {
+                    InstanceType instance;
+                    AffineSpace *transforms = PushArrayNoZero(threadArena, AffineSpace,
+                                                              state->transforms.totalCount);
+                    state->transforms.Flatten(transforms);
+                    InstanceType *instances = PushArrayNoZero(threadArena, InstanceType,
+                                                              state->fileInstances.totalCount);
+                    state->fileInstances.Flatten(instances);
+
+                    for (u32 i = 0; i < state->fileInstances.totalCount; i++)
+                    {
+                        InstanceType &instance = instances[i];
+                        instance.filename      = PushStr8Copy(threadArena, instance.filename);
+                    }
+                    sls->meshMap.AddInstances(threadArena, instances,
+                                              state->fileInstances.totalCount, transforms,
+                                              state->filename);
+                }
 #if 0
                 if (state->fileInstances.totalCount)
                 {
@@ -2830,6 +2874,11 @@ int main(int argc, char **argv)
 
 #if 1
     LoadPBRT(arena, filename);
+    // string directory = Str8PathChopPastLastSlash(filename);
+    // string baseFile  = PathSkipLastSlash(filename);
+
+    // string rtSceneFilename = PushStr8F(arena, "%S.rtscene", RemoveFileExtension(filename));
+    // SimplifyScene(arena, directory, rtSceneFilename);
 #else
     ConvolveDisneyDiffuse();
     // int numMeshes, actualNumMeshes;

@@ -2,6 +2,7 @@
 #include "radix_sort.h"
 #include "scene.h"
 #include "win32.h"
+#include "color.h"
 #include "simd_integrate.h"
 
 namespace rt

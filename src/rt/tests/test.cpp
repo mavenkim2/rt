@@ -1,4 +1,5 @@
 #include "../base.h"
+#include "../rt.h"
 #include "../math/matx.h"
 #include "../scene.h"
 #include "../sampler.h"

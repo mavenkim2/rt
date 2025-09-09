@@ -820,7 +820,7 @@ struct ChunkedLinkedList
     }
 
     inline u32 Length() const { return totalCount; }
-    inline void Flatten(T *out)
+    inline void Flatten(T *out) const
     {
         T *ptr = out;
         for (ChunkNode *node = first; node != 0; node = node->next)
@@ -829,7 +829,7 @@ struct ChunkedLinkedList
             ptr += node->count;
         }
     }
-    inline void Flatten(StaticArray<T> &array)
+    inline void Flatten(StaticArray<T> &array) const
     {
         u32 runningCount = 0;
         for (ChunkNode *node = first; node != 0; node = node->next)

@@ -1,7 +1,7 @@
 #ifndef COLOR_H
 #define COLOR_H
 
-#include "rt.h"
+#include "image.h"
 
 namespace rt
 {
@@ -90,6 +90,28 @@ inline Vec3f GetOctahedralRGB(const Image *image, Vec2f uv)
 inline f32 CalculateLuminance(const Vec3f &rgb)
 {
     return rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+}
+
+inline Vec3f LinearToSRGB(const Vec3f &v) { return Vec3f(Sqrt(v.x), Sqrt(v.y), Sqrt(v.z)); }
+
+inline f32 ExactLinearToSRGB(f32 l)
+{
+    if (l < 0.0f)
+    {
+        l = 0.0f;
+    }
+
+    if (l > 1.0f)
+    {
+        l = 1.0f;
+    }
+
+    f32 s = l * 12.92f;
+    if (l > 0.0031308f)
+    {
+        s = 1.055f * Pow(l, 1.0f / 2.4f) - 0.055f;
+    }
+    return s;
 }
 
 } // namespace rt

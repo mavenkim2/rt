@@ -6,6 +6,7 @@ RWStructuredBuffer<uint> globals : register(u2);
 StructuredBuffer<GPUInstance> gpuInstances : register(t3);
 RWStructuredBuffer<Resource> resources : register(u4);
 RWStructuredBuffer<uint> resourceBitVector : register(u5);
+StructuredBuffer<uint> instanceBitmasks : register(t6);
 
 [[vk::push_constant]] AddressPushConstant pc;
 
@@ -19,9 +20,10 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
     if (blas.clusterCount == 0) return;
 
+    uint bitMask = instanceBitmasks[blas.instanceID];
     uint resourceID = gpuInstances[blas.instanceID].resourceID;
 
-    if (resources[resourceID].maxClusters == blas.clusterCount)
+    if (bitMask == 1)
     {
         uint wasSet;
         uint bit = 1u << (resourceID & 31u);

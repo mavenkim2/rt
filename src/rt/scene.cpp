@@ -629,7 +629,6 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                  bool baseFile = false)
 
 {
-    // TODO: add totals so we don't have to use linked lists
     scene->filename = filename;
     Assert(GetFileExtension(filename) == "rtscene");
 

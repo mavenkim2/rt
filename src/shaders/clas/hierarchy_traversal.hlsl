@@ -286,6 +286,10 @@ struct ClusterCull
         uint clusterOffset;
         WaveInterlockedAddScalarTest(globals[GLOBALS_VISIBLE_CLUSTER_COUNT_INDEX], isValid, 1, clusterOffset);
 
+        if (isValid)
+        {
+            InterlockedOr(instanceBitmasks[instanceID], 1u << depth);
+        }
         if (isValid && !isVoxel)
         {
             bool isVoxel = (bool)header.numBricks;
@@ -295,10 +299,12 @@ struct ClusterCull
             InterlockedAdd(blasDatas[blasIndex].clusterCount, 1);
 
             selectedClusters[clusterOffset] = cluster;
-        }
-        else if (isValid && isVoxel)
-        {
-            InterlockedOr(instanceBitmasks[instanceID], 1u << depth);
+#if 0
+            // Instances
+            uint instanceOffset;
+            WaveInterlockedAddScalarTest(globals[GLOBALS_VISIBLE_INSTANCE_COUNT_INDEX], isValid, 1, instanceOffset);
+            visibleInstances[instanceOffset] = instanceIndex;
+#endif
         }
     }
 };

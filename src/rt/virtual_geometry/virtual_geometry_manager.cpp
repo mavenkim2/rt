@@ -262,7 +262,7 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
     fillFinestClusterBottomLevelInfoPush.size   = sizeof(AddressPushConstant);
     fillFinestClusterBottomLevelInfoPush.stage  = ShaderStage::Compute;
 
-    for (int i = 0; i <= 5; i++)
+    for (int i = 0; i <= 6; i++)
     {
         fillFinestClusterBLASInfoLayout.AddBinding(i, DescriptorType::StorageBuffer,
                                                    VK_SHADER_STAGE_COMPUTE_BIT);
@@ -899,7 +899,6 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, string 
     meshInfo.totalNumVoxelClusters    = numVoxelClusters;
     meshInfo.boundsMin                = boundsMin;
     meshInfo.boundsMax                = boundsMax;
-    meshInfo.numFinestClusters        = clusterFileHeader.numFinestClusters;
     meshInfo.voxelClusterGroupFixups  = fixups;
     meshInfo.voxelBLASBitmask         = 0;
     meshInfo.voxelAddressOffset       = voxelAddressOffset;
@@ -925,8 +924,8 @@ void VirtualGeometryManager::FinalizeResources(CommandBuffer *cmd)
     StaticArray<Resource> resources(scratch.temp.arena, meshInfos.Length());
     for (MeshInfo &meshInfo : meshInfos)
     {
-        Resource resource    = {};
-        resource.maxClusters = meshInfo.numFinestClusters;
+        Resource resource = {};
+        // resource.maxClusters = meshInfo.numFinestClusters;
         resources.Push(resource);
     }
     cmd->SubmitBuffer(&resourceBuffer, resources.data, sizeof(Resource) * meshInfos.Length());
@@ -1066,7 +1065,7 @@ bool VirtualGeometryManager::ProcessInstanceRequests(CommandBuffer *cmd)
     // }
     // Print("num hits: %u\n", total);
 
-    StaticArray<u32> newPartitions(scratch.temp.arena, maxPartitions);
+    Array<u32> newPartitions(scratch.temp.arena, maxPartitions);
     Array<u32> emptyPartitions(scratch.temp.arena, 128);
     u32 numInstancesToUpload    = 0;
     u32 numInstancesToStreamOut = 0;
@@ -2187,6 +2186,7 @@ void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd,
             .Bind(gpuInstancesBuffer)
             .Bind(&resourceBuffer)
             .Bind(&resourceBitVector)
+            .Bind(&instanceBitmasksBuffer)
             .PushConstants(&fillFinestClusterBottomLevelInfoPush, &pc)
             .End();
 
@@ -2467,42 +2467,6 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstan
                  VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
     cmd->FlushBarriers();
 
-    // if (test)
-    // {
-    //     GPUBuffer readback0 =
-    //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-    //         ptlasWriteInfosBuffer.size,
-    //                              MemoryUsage::GPU_TO_CPU);
-    //
-    //     // GPUBuffer readback2 =
-    //     //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-    //     //     thisFrameBitVector->size,
-    //     //                          MemoryUsage::GPU_TO_CPU);
-    //     // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-    //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-    //     //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-    //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-    //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-    //     VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-    //                  VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-    //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-    //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-    //     // VK_ACCESS_2_SHADER_WRITE_BIT,
-    //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-    //     cmd->FlushBarriers();
-    //     cmd->CopyBuffer(&readback0, &ptlasWriteInfosBuffer);
-    //     // cmd->CopyBuffer(&readback, &blasDataBuffer);
-    //     // cmd->CopyBuffer(&readback2, thisFrameBitVector);
-    //     Semaphore testSemaphore   = device->CreateSemaphore();
-    //     testSemaphore.signalValue = 1;
-    //     cmd->SignalOutsideFrame(testSemaphore);
-    //     device->SubmitCommandBuffer(cmd);
-    //     device->Wait(testSemaphore);
-    //
-    //     PTLAS_WRITE_INSTANCE_INFO *data = (PTLAS_WRITE_INSTANCE_INFO *)readback0.mappedPtr;
-    //     int stop                        = 5;
-    // }
-
     cmd->BuildPTLAS(&tlasAccelBuffer, &tlasScratchBuffer, &ptlasIndirectCommandBuffer,
                     &clasGlobalsBuffer, sizeof(u32) * GLOBALS_PTLAS_OP_TYPE_COUNT_INDEX,
                     (1u << 21), (1u << 21u) / maxPartitions, maxPartitions, 0);
@@ -2653,8 +2617,10 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
             u32 dataIndex = offsets[partition]++;
             if (data)
             {
-                data[dataIndex]            = inputInstances[instanceIndex];
-                data[dataIndex].groupIndex = partition;
+                data[dataIndex] = inputInstances[instanceIndex];
+                // TODO temp
+                inputInstances[instanceIndex].partitionIndex = partition;
+                data[dataIndex].groupIndex                   = partition;
             }
             return 1;
         });
@@ -2688,7 +2654,7 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
         Vec3<double> extents = (maxP - minP) * 0.5;
 
         AffineSpace transform =
-            AffineSpace::Translate(Vec3f(center)) * AffineSpace::Scale(Vec3f(2. * extents));
+            AffineSpace::Translate(Vec3f(center)) * AffineSpace::Scale(Vec3f(extents));
         for (int r = 0; r < 3; r++)
         {
             for (int c = 0; c < 4; c++)
@@ -2729,9 +2695,12 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                              sizeof(u32) * finalNumPartitions, MemoryUsage::GPU_TO_CPU);
 
-    cmd->SubmitBuffer(&instancesBuffer, proxyInstances.data,
-                      sizeof(GPUInstance) * proxyInstances.Length());
-    numInstances = proxyInstances.Length();
+    // cmd->SubmitBuffer(&instancesBuffer, proxyInstances.data,
+    //                   sizeof(GPUInstance) * proxyInstances.Length());
+    // numInstances = proxyInstances.Length();
+    cmd->SubmitBuffer(&instancesBuffer, inputInstances.data,
+                      sizeof(GPUInstance) * inputInstances.Length());
+    numInstances = inputInstances.Length();
 }
 
 } // namespace rt
