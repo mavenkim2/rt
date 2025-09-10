@@ -3509,8 +3509,8 @@ void Vulkan::GetCLASBuildSizes(CLASOpMode opMode, int maxNumClusters, u32 maxNum
     CLASOpInput opInput;
     opInput.triangleClusters.maxNumTriangles     = maxNumTriangles;
     opInput.triangleClusters.maxNumVertices      = maxNumVertices;
-    opInput.triangleClusters.maxClusterTriangles = MAX_CLUSTER_TRIANGLES;
-    opInput.triangleClusters.maxClusterVertices  = MAX_CLUSTER_VERTICES;
+    opInput.triangleClusters.maxClusterTriangles = maxClusterTriangles;
+    opInput.triangleClusters.maxClusterVertices  = maxClusterVertices;
     opInput.maxAccelerationStructureCount        = maxNumClusters;
 
     u32 updateScratchSize;

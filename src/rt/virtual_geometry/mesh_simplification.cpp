@@ -1,5 +1,6 @@
 #include "../hash.h"
 #include "../math/math_include.h"
+#include "../math/sphere.h"
 #include "../math/ray.h"
 #include "../math/eigen.h"
 #include "../thread_context.h"
@@ -1568,103 +1569,6 @@ void MeshSimplifier::Finalize(u32 &finalNumVertices, u32 &finalNumIndices, u32 *
     // Print("%u %u\n", finalNumVertices, finalNumIndices);
 }
 
-inline Vec4f ConstructSphereFromPoints(Vec3f *points, u32 numPoints)
-{
-    u32 min[3] = {};
-    u32 max[3] = {};
-    for (u32 i = 0; i < numPoints; i++)
-    {
-        for (u32 axis = 0; axis < 3; axis++)
-        {
-            min[axis] = points[i][axis] < points[min[axis]][axis] ? i : min[axis];
-            max[axis] = points[i][axis] > points[max[axis]][axis] ? i : max[axis];
-        }
-    }
-
-    f32 largestDistSqr = 0.f;
-    u32 chosenAxis     = 0;
-    for (u32 axis = 0; axis < 3; axis++)
-    {
-        f32 distSqr = LengthSquared(points[min[axis]] - points[max[axis]]);
-        if (distSqr > largestDistSqr)
-        {
-            largestDistSqr = distSqr;
-            chosenAxis     = axis;
-        }
-    }
-
-    Vec3f center  = 0.5f * (points[min[chosenAxis]] + points[max[chosenAxis]]);
-    f32 radius    = Length(center - points[min[chosenAxis]]);
-    f32 radiusSqr = Sqr(radius);
-
-    for (u32 i = 0; i < numPoints; i++)
-    {
-        f32 distSqr = LengthSquared(center - points[i]);
-        if (distSqr > radiusSqr)
-        {
-            f32 dist = Sqrt(distSqr);
-            f32 t    = 0.5f + 0.5f * (radius / dist);
-            center   = Lerp(t, points[i], center);
-            radius   = 0.5f * (radius + dist);
-        }
-    }
-
-    return Vec4f(center, radius);
-}
-
-inline Vec4f ConstructSphereFromSpheres(Vec4f *spheres, u32 numSpheres)
-{
-    u32 min[3] = {};
-    u32 max[3] = {};
-    for (u32 i = 0; i < numSpheres; i++)
-    {
-        for (u32 axis = 0; axis < 3; axis++)
-        {
-            min[axis] = spheres[i][axis] < spheres[min[axis]][axis] ? i : min[axis];
-            max[axis] = spheres[i][axis] > spheres[max[axis]][axis] ? i : max[axis];
-        }
-    }
-
-    f32 largestDistSqr = 0.f;
-    u32 chosenAxis     = 0;
-    for (u32 axis = 0; axis < 3; axis++)
-    {
-        f32 distSqr = LengthSquared(spheres[min[axis]].xyz - spheres[max[axis]].xyz);
-        if (distSqr > largestDistSqr)
-        {
-            largestDistSqr = distSqr;
-            chosenAxis     = axis;
-        }
-    }
-
-    // Start adding spheres
-    auto AddSpheres = [&](const Vec4f &sphere0, const Vec4f &sphere1) {
-        Vec3f toOther = sphere1.xyz - sphere0.xyz;
-        f32 distSqr   = LengthSquared(toOther);
-        if (Sqr(sphere0.w - sphere1.w) >= distSqr)
-        {
-            return sphere0.w < sphere1.w ? sphere1 : sphere0;
-        }
-        f32 dist        = Sqrt(distSqr);
-        f32 newRadius   = (dist + sphere0.w + sphere1.w) * 0.5f;
-        Vec3f newCenter = sphere0.xyz;
-        if (dist > 1e-8f) newCenter += toOther * ((newRadius - sphere0.w) / dist);
-        f32 tolerance = 1e-4f;
-
-        return Vec4f(newCenter, newRadius);
-    };
-
-    Vec4f newSphere = spheres[min[chosenAxis]];
-    newSphere       = AddSpheres(newSphere, spheres[max[chosenAxis]]);
-
-    for (u32 i = 0; i < numSpheres; i++)
-    {
-        newSphere = AddSpheres(newSphere, spheres[i]);
-    }
-
-    return newSphere;
-}
-
 struct ClusterGroup
 {
     Vec4f lodBounds;
@@ -3023,6 +2927,8 @@ struct ClusterWriteOutput
     StaticArray<GroupPart> parts;
     Graph<ClusterFixup> pageToParentClusterGraph;
     Graph<u32> pageToParentPageGraph;
+    u32 numParentPages;
+    u32 numParentClusters;
     u32 numPages;
 
     StaticArray<PackedHierarchyNode> hierarchy;
@@ -3113,8 +3019,7 @@ PackClustersToPages(Arena *arena, ClusterizationOutput &output, string filename,
 
     SortHandles(groupHandles, clusterGroups.Length());
 
-    string outFilename =
-        PushStr8F(scratch.temp.arena, "%S.geo", RemoveFileExtension(filename));
+    string outFilename = PushStr8F(arena, "%S.geo", RemoveFileExtension(filename));
     StringBuilderMapped builder(outFilename);
     u64 fileHeaderOffset = AllocateSpace(&builder, sizeof(ClusterFileHeader));
 
@@ -3521,6 +3426,8 @@ PackClustersToPages(Arena *arena, ClusterizationOutput &output, string filename,
     clusterWriteOutput.parts                    = parts;
     clusterWriteOutput.pageToParentPageGraph    = pageToParentPageGraph;
     clusterWriteOutput.pageToParentClusterGraph = pageToParentClusterGraph;
+    clusterWriteOutput.numParentPages           = numParentPages;
+    clusterWriteOutput.numParentClusters        = numParentClusters;
     clusterWriteOutput.numPages                 = pageInfos.Length();
     clusterWriteOutput.voxelClusterGroupFixups  = voxelClusterGroupFixups;
     return clusterWriteOutput;
@@ -3792,8 +3699,8 @@ static void WriteClustersToDisk(ClusterizationOutput &output,
     auto &pageToParentClusterGraph = clusterWriteOutput.pageToParentClusterGraph;
     auto &voxelClusterGroupFixups  = clusterWriteOutput.voxelClusterGroupFixups;
 
-    u32 numParentPages    = pageToParentPageGraph.offsets[numPages];
-    u32 numParentClusters = pageToParentClusterGraph.offsets[numPages];
+    u32 numParentPages    = clusterWriteOutput.numParentPages;
+    u32 numParentClusters = clusterWriteOutput.numParentClusters;
 
     u32 totalNumVoxelClusters = output.numVoxelClusters;
     ClusterFileHeader *fileHeader =
@@ -3842,7 +3749,8 @@ static void WriteClustersToDisk(ClusterizationOutput &output,
 // also prevent the builder from solving to a garbage position
 static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMeshes,
                                            StaticArray<u32> &materialIndices, string filename,
-                                           StaticArray<DenseGeometryBuildData> &buildDatas)
+                                           StaticArray<DenseGeometryBuildData> &buildDatas,
+                                           bool useVoxels = false, u32 rootClusterMax = 128)
 {
     // if (OS_FileExists(filename))
     // {
@@ -4071,7 +3979,7 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
         clusters.Push(cluster);
     }
 
-#if 1
+#if 0
     ArrayView<ClusterGroup> levelClusterGroups(clusterGroups, 0, 1);
     u32 vertexCount = combinedMesh.numVertices;
     u32 indexCount  = combinedMesh.numIndices;
@@ -4114,7 +4022,7 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
                 u32 numPrimitives = levelClusters[0].triangleIndices.Length() +
                                     levelClusters[0].compressedVoxels.Length();
                 // TODO
-                // if (numPrimitives < 64)
+                if (numPrimitives <= rootClusterMax)
                 {
                     levelClusters[0].groupIndex = clusterGroups.Length();
                     ClusterGroup rootGroup;
@@ -4588,7 +4496,7 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
                             }
                         }
 
-                        if (numIslands > 1)
+                        if (numIslands > 1) // || useVoxels)
                         {
                             potentialVoxelGroupCount.fetch_add(1);
                         }
@@ -4614,9 +4522,14 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
                         groupData.mesh_   = groupMesh;
                         groupData.geomIDs = geomIDs;
 
+                        // groupData.simplifiedMesh = SimplifyTriangleMesh(
+                        //     tempArena, partitionResult, range, groupMesh, numAttributes,
+                        //     MAX_CLUSTER_TRIANGLES, clusterExternalEdges, clusterToGroupID,
+                        //     levelClusters, edges, geomIDs, groupData.error,
+                        //     groupData.simplifiedGeomIDs);
                         groupData.simplifiedMesh = SimplifyTriangleMesh(
                             tempArena, partitionResult, range, groupMesh, numAttributes,
-                            MAX_CLUSTER_TRIANGLES, clusterExternalEdges, clusterToGroupID,
+                            rootClusterMax, clusterExternalEdges, clusterToGroupID,
                             levelClusters, edges, geomIDs, groupData.error,
                             groupData.simplifiedGeomIDs);
 
@@ -4786,7 +4699,7 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
                             voxelSize *= 1.1f;
                         }
 
-                        if (voxelSize < simplifyError)
+                        if (voxelSize < simplifyError) // || useVoxels)
                         {
                             voxelGroupCount.fetch_add(1);
                         }
@@ -5240,7 +5153,7 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
 }
 
 void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndices,
-                    string filename)
+                    string filename, bool useVoxels, u32 rootClusterMax)
 {
     ScratchArena scratch;
 
@@ -5253,8 +5166,9 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
         buildDatas.Push(DenseGeometryBuildData(arenas[i]));
     }
 
-    ClusterizationOutput output = CreateClusters(scratch.temp.arena, meshes, numMeshes,
-                                                 materialIndices, filename, buildDatas);
+    ClusterizationOutput output =
+        CreateClusters(scratch.temp.arena, meshes, numMeshes, materialIndices, filename,
+                       buildDatas, useVoxels, rootClusterMax);
     ClusterWriteOutput clusterWriteOutput =
         PackClustersToPages(scratch.temp.arena, output, filename, buildDatas);
     WriteHierarchies(scratch.temp.arena, output, clusterWriteOutput);
@@ -5451,7 +5365,7 @@ static void CheckVoxelOccupancy(Arena *arena, ScenePrimitives *scene,
                                 f32 voxelSize)
 {
     ScratchArena scratch(&arena, 1);
-    const u32 numRays = 16;
+    const u32 numRays = 128;
 
     struct SGGX
     {
@@ -5747,7 +5661,7 @@ static void BuildInstanceHierarchy(PrimRef *refs, RecordAOSSplits &record,
 
     Split split = heuristic.Bin(record);
 
-    if (record.count <= 1024)
+    if (record.count <= 2048)
     {
         u32 threadIndex = GetThreadIndex();
         heuristic.FlushState(split);
@@ -5872,6 +5786,194 @@ static void FlattenInstances(ScenePrimitives *currentScene, const AffineSpace &t
     }
 }
 
+// static void SimplifyInstances(Instance *instances, u32 numInstances,
+//                               ScenePrimitives **childScenes, u32 numChildScenes,
+//                               AffineSpace *transforms, f32 error)
+// {
+//     ScratchArena scratch;
+//     Arena **arenas = GetArenaArray(scratch.temp.arena);
+//
+//     ScenePrimitives scene = {};
+//     scene.primitives      = instances;
+//     scene.numPrimitives   = numInstances;
+//     scene.childScenes     = childScenes;
+//     scene.numChildScenes  = numChildScenes;
+//
+//     for (u32 childSceneIndex = 0; childSceneIndex < numChildScenes; childSceneIndex++)
+//     {
+//         ScenePrimitive *childScene = scene.childScenes[childScenes];
+//         childScene->BuildTriangleBVH(arenas);
+//     }
+//
+//     scene.BuildTLASBVH(arenas);
+//
+//     u32 totalNumVertices = 0;
+//     u32 totalNumIndices  = 0;
+//     for (u32 childSceneIndex = 0; childSceneIndex < tlasScene->numChildScenes;
+//          childSceneIndex++)
+//     {
+//         ScenePrimitives *childScene = tlasScene->childScenes[childSceneIndex];
+//         Mesh *meshes                = (Mesh *)childScene->primitives;
+//         for (u32 meshIndex = 0; meshIndex < childScene->numPrimitives; meshIndex++)
+//         {
+//             Mesh &mesh = meshes[meshIndex];
+//             totalNumVertices += mesh.numVertices;
+//             totalNumIndices += mesh.numIndices;
+//         }
+//     }
+//
+//     Vec3f *newP = PushArrayNoZero(scratch.temp.arena, Vec3f, numInstances *
+//     totalNumVertices); u32 *newIndices = PushArrayNoZero(scratch.temp.arena, u32,
+//     numInstances * totalNumIndices); u32 hashSize    = NextPowerOfTwo(numInstances *
+//     totalNumVertices); HashIndex vertexHash(scratch.temp.arena, hashSize, hashSize); u32
+//     vertexCount = 0; u32 indexCount  = 0;
+//
+//     Instance *instances     = (Instance *)tlasScene->primitives;
+//     AffineSpace *transforms = tlasScene->affineTransforms;
+//     Bounds partitionBounds;
+//
+//     for (u32 instanceIndex = 0; instanceIndex < numInstances; instanceIndex++)
+//     {
+//         Instance &instance     = instances[instanceIndex];
+//         AffineSpace &transform = transforms[instance.transformIndex];
+//
+//         ScenePrimitives *childScene = tlasScene->childScenes[instance.id];
+//         u32 numMeshes               = childScene->numPrimitives;
+//         Mesh *meshes                = (Mesh *)childScene->primitives;
+//         for (u32 meshIndex = 0; meshIndex < numMeshes; meshIndex++)
+//         {
+//             Mesh &mesh = meshes[meshIndex];
+//             Assert(mesh.numIndices);
+//             for (u32 indexIndex = 0; indexIndex < mesh.numIndices; indexIndex++)
+//             {
+//                 const Vec3f &p     = mesh.p[mesh.indices[indexIndex]];
+//                 Vec3f transformedP = TransformP(transform, p);
+//                 partitionBounds.Extend(Lane4F32(transformedP));
+//
+//                 int hash = Hash(transformedP);
+//
+//                 int index = -1;
+//                 for (int hashIndex = vertexHash.FirstInHash(hash); hashIndex != -1;
+//                      hashIndex     = vertexHash.NextInHash(hashIndex))
+//                 {
+//                     if (newP[hashIndex] == transformedP)
+//                     {
+//                         index = hashIndex;
+//                         break;
+//                     }
+//                 }
+//                 if (index == -1)
+//                 {
+//                     index       = vertexCount++;
+//                     newP[index] = transformedP;
+//                     vertexHash.AddInHash(hash, index);
+//                 }
+//                 newIndices[indexCount++] = index;
+//             }
+//         }
+//     }
+//     Vec3f partitionCenter = ToVec3f((partitionBounds.minP + partitionBounds.maxP) / 2.f);
+//     for (int i = 0; i < vertexCount; i++)
+//     {
+//         newP[i] -= partitionCenter;
+//     }
+//
+//     Mesh mesh        = {};
+//     mesh.p           = newP;
+//     mesh.numVertices = vertexCount;
+//     mesh.indices     = newIndices;
+//     mesh.numIndices  = indexCount;
+//
+//     {
+//         // 0, partitionResult.ranges.Length(), 1, 1, [&](int jobID, int groupIndex) {
+//         {
+//             u32 threadIndex  = GetThreadIndex();
+//             Arena *arena     = arenas[threadIndex];
+//             Arena *tempArena = tempArenas[threadIndex];
+//             ScratchArena scratch;
+//
+//             PartitionRange range = partitionResult.ranges[groupIndex];
+//             u32 newGroupIndex    = groupIndex + totalNumGroups;
+//
+//             f32 totalSurfaceArea = 0.f;
+//             u32 numTris          = tempGroupData.mesh_.numIndices / 3;
+//             for (u32 tri = 0; tri < numTris; tri++)
+//             {
+//                 Vec3f p0 = mesh.p[mesh.indices[3 * tri + 0]];
+//                 Vec3f p1 = mesh.p[mesh.indices[3 * tri + 1]];
+//                 Vec3f p2 = mesh.p[mesh.indices[3 * tri + 2]];
+//                 f32 area = 0.5f * Length(Cross(p1 - p0, p2 - p0));
+//                 totalSurfaceArea += area;
+//             }
+//
+//             u32 clusterTotalVoxelCount = 0;
+//             f32 maxLodError            = 0.f;
+//             for (int clusterIndexIndex = range.begin; clusterIndexIndex < range.end;
+//                  clusterIndexIndex++)
+//             {
+//                 int clusterIndex       = partitionResult.clusterIndices[clusterIndexIndex];
+//                 const Cluster &cluster = levelClusters[clusterIndex];
+//                 maxLodError            = Max(maxLodError, cluster.lodError);
+//
+//                 for (const CompressedVoxel &voxel : cluster.compressedVoxels)
+//                 {
+//                     clusterTotalVoxelCount +=
+//                         PopCount(voxel.bitMask) + PopCount(voxel.bitMask >> 32u);
+//                 }
+//             }
+//
+//             u32 targetNumVoxels = ((mesh.numVertices) * 3) / 4;
+//             f32 voxelSize       = Sqrt(totalSurfaceArea / targetNumVoxels) * .75f;
+//             voxelSize           = Max(error, voxelSize);
+//
+//             u32 numSlots = NextPowerOfTwo(mesh.numIndices / 3);
+//
+//             f32 simplifyError = FLT_MAX;
+//
+//             u32 targetNumBricks = numInstances;
+//             Assert(numSlots);
+//
+//             for (;;)
+//             {
+//                 SimpleHashSet<Vec3i> voxelHashSet(scratch.temp.arena, numSlots);
+//                 f32 rcpVoxelSize = 1.f / voxelSize;
+//                 // Gather voxels
+//                 if (mesh.numIndices)
+//                 {
+//                     VoxelizeTriangles(
+//                         scratch.temp.arena, voxelHashSet, (f32 *)tempGroupData.mesh_.p,
+//                         tempGroupData.mesh_.indices, tempGroupData.mesh_.numIndices / 3,
+//                         numAttributes, voxelSize);
+//                 }
+//
+//                 CheckVoxelOccupancy(tempArena, &scene, voxelHashSet, tempGroupData.voxels,
+//                                     tempGroupData.extraVoxels, voxelSize);
+//
+//                 if (tempGroupData.voxels.Length())
+//                 {
+//                     tempGroupData.voxelMesh = CompressVoxels(
+//                         tempArena, tempGroupData.voxels, tempGroupData.voxelGeomIDs,
+//                         tempGroupData.compressedVoxels, voxelSize, tempGroupData.coverages,
+//                         tempGroupData.sggx);
+//                 }
+//
+//                 if (tempGroupData.voxels.Length() < targetNumVoxels &&
+//                     tempGroupData.compressedVoxels.Length() < targetNumBricks)
+//                 {
+//                     break;
+//                 }
+//                 voxelSize *= 1.1f;
+//             }
+//
+//             if (voxelSize < simplifyError)
+//             {
+//                 voxelGroupCount.fetch_add(1);
+//             }
+//             voxelSize = voxelSize;
+//         }
+//     }
+// }
+
 void SimplifyScene(Arena *arena, string directory, string filename)
 {
     scene_ = PushStructConstruct(arena, Scene)();
@@ -5907,6 +6009,41 @@ void SimplifyScene(Arena *arena, string directory, string filename)
         blasScenes.Push(scene);
     }
 
+#if 0
+    std::atomic<u32> numClusterizationOutputs(0);
+    StaticArray<ClusterizationOutput> clusterizationOutputs(
+        scratch.temp.arena, tlasScenes.Length(), tlasScenes.Length());
+
+    Arena **arenas = GetArenaArray(scratch.temp.arena);
+    StaticArray<DenseGeometryBuildData> buildDatas(scratch.temp.arena, OS_NumProcessors());
+    for (int i = 0; i < buildDatas.capacity; i++)
+    {
+        buildDatas.Push(DenseGeometryBuildData(arenas[i]));
+    }
+
+    // ParallelForLoop(0, tlasScenes.Length(), 1, 1, [&](u32 jobID, u32 tlasSceneIndex) {
+    for (u32 tlasSceneIndex = 0; tlasSceneIndex < tlasScenes.Length(); tlasSceneIndex++)
+    {
+        ScenePrimitives *tlasScene = tlasScenes[tlasSceneIndex];
+        if (tlasScene->childScenes[0]->geometryType == GeometryType::Instance)
+        {
+            continue;
+        }
+
+        ScratchArena scratch;
+
+        u32 numInstances = tlasScene->numPrimitives;
+
+        StaticArray<u32> materialIndices(scratch.temp.arena, 1);
+        materialIndices.Push(0);
+
+        u32 outputIndex = numClusterizationOutputs.fetch_add(1, std::memory_order_relaxed);
+        clusterizationOutputs[outputIndex] = CreateClusters(
+            arenas[GetThreadIndex()], &newMesh, 1, materialIndices, filename, buildDatas);
+    } //);
+#endif
+
+#if 1
     ScenePrimitives *scene = tlasScenes[0];
     Array<Instance> instances(scratch.temp.arena, scene->numPrimitives * tlasScenes.Length());
     Array<AffineSpace> transforms(scratch.temp.arena,
@@ -6012,16 +6149,6 @@ void SimplifyScene(Arena *arena, string directory, string filename)
 
         ScratchArena instanceScratch;
 
-        Vec3f *newP     = PushArrayNoZero(instanceScratch.temp.arena, Vec3f,
-                                          numInstancesInPartition * mesh.numVertices);
-        u32 *newIndices = PushArrayNoZero(instanceScratch.temp.arena, u32,
-                                          numInstancesInPartition * mesh.numIndices);
-        u32 hashSize    = NextPowerOfTwo(numInstancesInPartition * mesh.numVertices);
-        HashIndex vertexHash(instanceScratch.temp.arena, hashSize, hashSize);
-        u32 vertexCount = 0;
-        u32 indexCount  = 0;
-        Bounds partitionBounds;
-
         for (u32 dataIndex = instanceGraph.offsets[partition];
              dataIndex < instanceGraph.offsets[partition + 1]; dataIndex++)
         {
@@ -6029,75 +6156,20 @@ void SimplifyScene(Arena *arena, string directory, string filename)
             Instance &instance = instances[instanceIndex];
 
             AffineSpace &transform = transforms[instance.transformIndex];
-            // Voxels
-            if (mesh.indices == 0)
-            {
-                Assert(0);
-            }
-            // Triangles
-            else
-            {
-                for (u32 indexIndex = 0; indexIndex < mesh.numIndices; indexIndex++)
-                {
-                    const Vec3f &p     = mesh.p[mesh.indices[indexIndex]];
-                    Vec3f transformedP = TransformP(transform, p);
-                    partitionBounds.Extend(Lane4F32(transformedP));
-
-                    int hash = Hash(transformedP);
-
-                    int index = -1;
-                    for (int hashIndex = vertexHash.FirstInHash(hash); hashIndex != -1;
-                         hashIndex     = vertexHash.NextInHash(hashIndex))
-                    {
-                        if (newP[hashIndex] == transformedP)
-                        {
-                            index = hashIndex;
-                            break;
-                        }
-                    }
-                    if (index == -1)
-                    {
-                        index       = vertexCount++;
-                        newP[index] = transformedP;
-                        vertexHash.AddInHash(hash, index);
-                    }
-                    newIndices[indexCount++] = index;
-                }
-            }
         }
-
-        Vec3f partitionCenter = ToVec3f((partitionBounds.minP + partitionBounds.maxP) / 2.f);
-        for (int i = 0; i < vertexCount; i++)
-        {
-            newP[i] -= partitionCenter;
-        }
-        Mesh newMesh        = {};
-        newMesh.p           = newP;
-        newMesh.numVertices = vertexCount;
-        newMesh.indices     = newIndices;
-        newMesh.numIndices  = indexCount;
-
-        StaticArray<u32> materialIndices(instanceScratch.temp.arena, 1);
-        materialIndices.Push(0);
 
         string filename = PushStr8F(instanceScratch.temp.arena, "%Sinstance_test_%u.geo\n",
                                     directory, partition);
-        clusterizationOutputs[partition] = CreateClusters(
-            arenas[GetThreadIndex()], &newMesh, 1, materialIndices, filename, buildDatas);
+        // SimplifyInstances();
+        // clusterizationOutputs[partition] = CreateClusters(
+        //     arenas[GetThreadIndex()], &newMesh, 1, materialIndices, filename, buildDatas);
     });
+#endif
 
     ReleaseArenaArray(params.arenas);
     ReleaseArenaArray(tempArenas);
 
     // Create the hierarchy, write the pages
-    // how does this work? i definitely need to prune the depth 0 clusters. either i
-    // can
-    // 1. keep everything else
-    //      - now that i think about it a hierarchy makes no sense and probably
-    //      would just be wasteful. you just need to check every level and see if
-    //      the error is too large.
-    // 2. keep a small portion of the mip tail
-    //      - if i do this, then i
 
     struct InstanceHierarchyNode
     {
@@ -6129,11 +6201,6 @@ void SimplifyScene(Arena *arena, string directory, string filename)
     u32 clusterOffset = 0;
     u32 groupOffset   = 0;
 
-    PackClustersToPages(scratch.temp.arena, combinedOutput, filename, buildDatas);
-
-    StaticArray<InstanceHierarchyNode> instanceHierarchyNodes(scratch.temp.arena,
-                                                              numInstanceHierarchyNodes);
-
     // assume that the clusters have already been assigned to pages somehow
     for (ClusterizationOutput &output : clusterizationOutputs)
     {
@@ -6144,6 +6211,19 @@ void SimplifyScene(Arena *arena, string directory, string filename)
         u32 numClusterGroups = output.clusterGroups.Length() - 1;
         MemoryCopy(combinedOutput.clusterGroups.data + groupOffset,
                    output.clusterGroups.data + 1, sizeof(ClusterGroup) * numClusterGroups);
+
+        for (u32 clusterIndex = clusterOffset; clusterIndex < clusterOffset + numClusters;
+             clusterIndex++)
+        {
+            Cluster &cluster = combinedOutput.clusters[clusterIndex];
+        }
+        for (u32 groupIndex = groupOffset; groupIndex < groupOffset + numClusterGroups;
+             groupIndex++)
+        {
+            ClusterGroup &group = combinedOutput.clusterGroups[groupIndex];
+            group.clusterStartIndex += groupOffset - output.numBaseClusters;
+            group.rangeIndex = -1;
+        }
 
         u32 clusterIndex = output.numBaseClusters;
         for (u32 depth = 1; depth < output.maxDepth; depth++)
@@ -6172,12 +6252,17 @@ void SimplifyScene(Arena *arena, string directory, string filename)
             node.leafInfo = BitFieldPackU32(node.leafInfo, numPages, bitOffset, 16);
             node.leafInfo = BitFieldPackU32(node.leafInfo, numPages, bitOffset, 8);
 
-            instanceHierarchyNodes.Push(node);
+            // instanceHierarchyNodes.Push(node);
         }
 
         clusterOffset += numClusters;
         groupOffset += numClusterGroups;
     }
+
+    PackClustersToPages(scratch.temp.arena, combinedOutput, filename, buildDatas);
+
+    StaticArray<InstanceHierarchyNode> instanceHierarchyNodes(scratch.temp.arena,
+                                                              numInstanceHierarchyNodes);
 
     // WriteClustersToDisk(combinedOutput, filename);
 

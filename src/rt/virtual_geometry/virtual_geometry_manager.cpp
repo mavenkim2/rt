@@ -248,7 +248,7 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
     fillClusterBottomLevelInfoPush.size   = sizeof(AddressPushConstant);
     fillClusterBottomLevelInfoPush.stage  = ShaderStage::Compute;
 
-    for (int i = 0; i <= 4; i++)
+    for (int i = 0; i <= 5; i++)
     {
         fillClusterBLASInfoLayout.AddBinding(i, DescriptorType::StorageBuffer,
                                              VK_SHADER_STAGE_COMPUTE_BIT);
@@ -1274,12 +1274,15 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd, bool test)
     };
 
     StaticArray<VirtualPageHandle> pages(scratch.temp.arena, maxVirtualPages);
+    u32 minPage = 200;
     for (u32 requestIndex = 0; requestIndex < numRequests; requestIndex++)
     {
         StreamingRequest &request = requests[requestIndex];
         u32 pageCount =
             BitFieldExtractU32(request.pageIndex_numPages, MAX_PARTS_PER_GROUP_BITS, 0);
         u32 pageStartIndex = request.pageIndex_numPages >> MAX_PARTS_PER_GROUP_BITS;
+
+        minPage = Min(minPage, pageStartIndex);
 
         for (u32 pageIndex = pageStartIndex; pageIndex < pageStartIndex + pageCount;
              pageIndex++)
@@ -2089,6 +2092,42 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd, bool test)
                        maxNumVertices, newClasOffset);
         device->EndEvent(cmd);
     }
+
+    // if (device->frameCount > 100)
+    // {
+    //     GPUBuffer readback0 =
+    //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+    //         clusterAccelAddresses.size,
+    //                              MemoryUsage::GPU_TO_CPU);
+    //
+    //     // GPUBuffer readback2 =
+    //     //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+    //     //     thisFrameBitVector->size,
+    //     //                          MemoryUsage::GPU_TO_CPU);
+    //     // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+    //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+    //     //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+    //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
+    //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+    //     VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+    //                  VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+    //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+    //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+    //     // VK_ACCESS_2_SHADER_WRITE_BIT,
+    //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
+    //     cmd->FlushBarriers();
+    //     cmd->CopyBuffer(&readback0, &clusterAccelAddresses);
+    //     // cmd->CopyBuffer(&readback, &blasDataBuffer);
+    //     // cmd->CopyBuffer(&readback2, thisFrameBitVector);
+    //     Semaphore testSemaphore   = device->CreateSemaphore();
+    //     testSemaphore.signalValue = 1;
+    //     cmd->SignalOutsideFrame(testSemaphore);
+    //     device->SubmitCommandBuffer(cmd);
+    //     device->Wait(testSemaphore);
+    //
+    //     u64 *data = (u64 *)readback0.mappedPtr;
+    //     int stop  = 5;
+    // }
 }
 
 void VirtualGeometryManager::HierarchyTraversal(CommandBuffer *cmd, GPUBuffer *queueBuffer,
@@ -2209,6 +2248,7 @@ void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd,
             .Bind(&clasGlobalsBuffer)
             .Bind(gpuInstancesBuffer)
             .Bind(&resourceBuffer)
+            .Bind(&instanceBitmasksBuffer)
             .PushConstants(&fillClusterBottomLevelInfoPush, &pc)
             .End();
 
@@ -2673,6 +2713,20 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
     u32 tlasScratchSize, tlasAccelSize;
     device->GetPTLASBuildSizes(maxInstances, maxInstances / maxPartitions, maxPartitions, 0,
                                tlasScratchSize, tlasAccelSize);
+
+    VkAccelerationStructureGeometryKHR geometry = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+    geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+    auto &triangles       = geometry.geometry.triangles;
+    triangles.sType     = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+    triangles.indexType = VK_INDEX_TYPE_UINT16;
+
+    u32 count = 16 * 1024;
+    u32 test0, test1;
+    device->GetCLASBuildSizes(CLASOpMode::ExplicitDestinations, 1, 32, 18, 32, 18, test0,
+                              test1);
+    device->GetBuildSizes(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, &geometry, 1, 0,
+                          &count, test0, test1);
 
     tlasScratchBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |

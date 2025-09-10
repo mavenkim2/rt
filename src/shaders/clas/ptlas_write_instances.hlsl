@@ -32,7 +32,8 @@ void main(uint3 dtID : SV_DispatchThreadID)
 
     uint64_t address = 0;
     uint tableOffset = 0;
-    if (bitMask)
+    // TODO: this needs to remove the bottom n bits, where n is the number of voxel-free levels
+    if (bitMask & ~1)
     {
         while (bitMask)
         {

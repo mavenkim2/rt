@@ -124,7 +124,7 @@ struct MeshSimplifier
 };
 
 void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndices,
-                    string filename);
+                    string filename, bool useVoxels = false, u32 rootClusterMax = 128);
 
 struct SGGXCompact
 {
@@ -148,8 +148,6 @@ static void CheckVoxelOccupancy(Arena *arena, ScenePrimitives *scene,
                                 StaticArray<Vec3i> &extraVoxels, f32 voxelSize);
 
 struct Instance;
-void SimplifyInstances(string directory, Instance *instances, u32 numInstances,
-                       AffineSpace *transforms, u32 numTransforms, Mesh &mesh);
 void ConvolveDisneyDiffuse();
 void SimplifyScene(Arena *arena, string directory, string filename);
 
