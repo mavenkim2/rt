@@ -225,7 +225,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     }
     instanceCullingLayout.AddBinding(6, DescriptorType::UniformBuffer,
                                      VK_SHADER_STAGE_COMPUTE_BIT);
-    for (int i = 7; i <= 10; i++)
+    for (int i = 7; i <= 11; i++)
     {
         instanceCullingLayout.AddBinding(i, DescriptorType::StorageBuffer,
                                          VK_SHADER_STAGE_COMPUTE_BIT);
@@ -316,6 +316,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     layout.AddBinding(13, DescriptorType::StorageBuffer, flags);
     layout.AddBinding(14, DescriptorType::StorageBuffer, flags);
     layout.AddBinding(15, DescriptorType::StorageBuffer, flags);
+    layout.AddBinding(16, DescriptorType::StorageBuffer, flags);
+    layout.AddBinding(17, DescriptorType::StorageBuffer, flags);
+    layout.AddBinding(18, DescriptorType::StorageBuffer, flags);
+    layout.AddBinding(19, DescriptorType::StorageBuffer, flags);
+    layout.AddBinding(20, DescriptorType::StorageBuffer, flags);
 
     layout.AddImmutableSamplers();
 
@@ -677,10 +682,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     }
     virtualGeometryManager.FinalizeResources(dgfTransferCmd);
 
-    TransferBuffer aabbBuffer =
-        dgfTransferCmd->SubmitBuffer(blasSceneBounds.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                     sizeof(AABB) * blasSceneBounds.Length());
-
     GPUBuffer visibleClustersBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         MAX_VISIBLE_CLUSTERS * sizeof(VisibleCluster));
@@ -1002,6 +1003,41 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             envMapBindlessIndex = device->BindlessIndex(&gpuEnvMap);
         }
 
+        // if (device->frameCount > 0)
+        // {
+        //     GPUBuffer readback0 = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        //                                                virtualGeometryManager.debugBuffer.size,
+        //                                                MemoryUsage::GPU_TO_CPU);
+        //
+        //     // GPUBuffer readback2 =
+        //     //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        //     //     thisFrameBitVector->size,
+        //     //                          MemoryUsage::GPU_TO_CPU);
+        //     cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        //                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+        //                  VK_ACCESS_2_TRANSFER_READ_BIT);
+        //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+        //                  VK_ACCESS_2_TRANSFER_READ_BIT);
+        //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+        //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        //     // VK_ACCESS_2_SHADER_WRITE_BIT,
+        //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
+        //     cmd->FlushBarriers();
+        //     cmd->CopyBuffer(&readback0, &virtualGeometryManager.debugBuffer);
+        //     // cmd->CopyBuffer(&readback, &blasDataBuffer);
+        //     // cmd->CopyBuffer(&readback2, thisFrameBitVector);
+        //     Semaphore testSemaphore   = device->CreateSemaphore();
+        //     testSemaphore.signalValue = 1;
+        //     cmd->SignalOutsideFrame(testSemaphore);
+        //     device->SubmitCommandBuffer(cmd);
+        //     device->Wait(testSemaphore);
+        //
+        //     Vec2f *data = (Vec2f *)readback0.mappedPtr;
+        //     int stop    = 5;
+        // }
+
         u32 currentBuffer = device->GetCurrentBuffer();
 
         if (device->frameCount == 0)
@@ -1051,12 +1087,13 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     .Bind(&workItemQueueBuffer, 0, sizeof(Vec4u) * MAX_CANDIDATE_NODES)
                     .Bind(&queueBuffer)
                     .Bind(&virtualGeometryManager.blasDataBuffer)
-                    .Bind(&aabbBuffer.buffer)
+                    .Bind(&virtualGeometryManager.resourceAABBBuffer)
                     .Bind(&sceneTransferBuffers[currentBuffer].buffer)
                     .Bind(&virtualGeometryManager.ptlasInstanceBitVectorBuffer)
                     .Bind(&virtualGeometryManager.ptlasInstanceFrameBitVectorBuffer0)
                     .Bind(&virtualGeometryManager.ptlasWriteInfosBuffer)
                     .Bind(&virtualGeometryManager.ptlasUpdateInfosBuffer)
+                    .Bind(&virtualGeometryManager.mergedPartitionDeviceAddresses)
                     .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
                     .End();
 
@@ -1172,12 +1209,13 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 .Bind(&workItemQueueBuffer, 0, sizeof(Vec4u) * MAX_CANDIDATE_NODES)
                 .Bind(&queueBuffer)
                 .Bind(&virtualGeometryManager.blasDataBuffer)
-                .Bind(&aabbBuffer.buffer)
+                .Bind(&virtualGeometryManager.resourceAABBBuffer)
                 .Bind(&sceneTransferBuffers[currentBuffer].buffer)
                 .Bind(&virtualGeometryManager.ptlasInstanceBitVectorBuffer)
                 .Bind(thisFrameBitVector)
                 .Bind(&virtualGeometryManager.ptlasWriteInfosBuffer)
                 .Bind(&virtualGeometryManager.ptlasUpdateInfosBuffer)
+                .Bind(&virtualGeometryManager.mergedPartitionDeviceAddresses)
                 .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
                 .End();
 
@@ -1222,11 +1260,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         }
 
         virtualGeometryManager.BuildClusterBLAS(cmd, &visibleClustersBuffer,
-                                                &virtualGeometryManager.instancesBuffer,
-                                                &aabbBuffer.buffer);
+                                                &virtualGeometryManager.instancesBuffer);
 
         virtualGeometryManager.BuildPTLAS(cmd, &virtualGeometryManager.instancesBuffer,
-                                          &aabbBuffer.buffer, &readback);
+                                          &readback);
 
         cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                      VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
@@ -1311,7 +1348,12 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             .Bind(&faceDataBuffer)
             .Bind(&virtualGeometryManager.clusterLookupTableBuffer)
             .Bind(&virtualGeometryManager.instancesBuffer)
-            .Bind(&virtualGeometryManager.partitionCountsBuffer);
+            .Bind(&virtualGeometryManager.partitionCountsBuffer)
+            .Bind(&virtualGeometryManager.resourceTruncatedEllipsoidsBuffer)
+            .Bind(&virtualGeometryManager.instanceTransformsBuffer)
+            .Bind(&virtualGeometryManager.instanceGroupTransformOffsets)
+            .Bind(&virtualGeometryManager.debugBuffer)
+            .Bind(&virtualGeometryManager.clasGlobalsBuffer);
         // .Bind(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
 
         cmd->BindDescriptorSets(bindPoint, &descriptorSet, rts.layout);

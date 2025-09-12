@@ -152,7 +152,8 @@ struct ClusterCull
 
             test = minScale;
 
-            edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, maxScale, test, instance.cull);
+            bool cull = instance.flags & GPU_INSTANCE_FLAG_CULL;
+            edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, maxScale, test, cull);
 
             float threshold = maxParentError * minScale * gpuScene.lodScale;
 
@@ -278,7 +279,9 @@ struct ClusterCull
         float maxScale = max(scale.x, max(scale.y, scale.z));
 
         float test;
-        float2 edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, maxScale, test, instance.cull);
+
+        bool cull = instance.flags & GPU_INSTANCE_FLAG_CULL;
+        float2 edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, maxScale, test, cull);
 
         uint depth = header.depth;
         bool isValid = (edgeScales.x > gpuScene.lodScale * lodError * minScale) || (header.flags & CLUSTER_STREAMING_LEAF_FLAG);

@@ -37,6 +37,12 @@ ConstantBuffer<ShaderDebugInfo> debugInfo: register(b7);
 StructuredBuffer<uint> clusterLookupTable : register(t13);
 StructuredBuffer<GPUInstance> gpuInstances : register(t14);
 RWStructuredBuffer<uint> proxyCounts : register(u15);
+StructuredBuffer<GPUTruncatedEllipsoid> truncatedEllipsoids : register(t16);
+StructuredBuffer<row_major float3x4> instanceTransforms : register(t17);
+StructuredBuffer<uint> instanceGroupTransformOffsets : register(t18);
+
+RWStructuredBuffer<float2> debugBuffer : register(u19);
+RWStructuredBuffer<uint> globals : register(u20);
 
 [[vk::push_constant]] RayPushConstant push;
 
@@ -105,15 +111,78 @@ void main()
         uint hitKind = 0;
 
         float hitT = FLT_MAX;
+
         while (query.Proceed())
         {
             if (query.CandidateType() == CANDIDATE_PROCEDURAL_PRIMITIVE)
             {
                 uint instanceID = query.CandidateInstanceID();
-                uint resourceID = gpuInstances[instanceID].resourceID;
+                GPUInstance instance = gpuInstances[instanceID];
+                // TODO: 
+                uint resourceID = 0u;//instance.resourceID;
+
+#if 0
                 InterlockedAdd(proxyCounts[gpuInstances[instanceID].groupIndex], 1);
                 if (resourceID == ~0u)
                 {
+                    continue;
+                }
+#endif
+
+                if (1)//instance.flags & GPU_INSTANCE_FLAG_MERGED)
+                {
+                    GPUTruncatedEllipsoid ellipsoid = truncatedEllipsoids[resourceID];
+                    uint primIndex = query.CandidatePrimitiveIndex();
+                    float3x4 worldFromObject = instanceTransforms[instanceGroupTransformOffsets[instance.groupIndex] + primIndex];
+                    float3x4 objectFromWorld_ = Inverse(worldFromObject);
+                    float4x4 objectFromWorld = float4x4(
+                        objectFromWorld_[0][0], objectFromWorld_[0][1], objectFromWorld_[0][2], objectFromWorld_[0][3], 
+                        objectFromWorld_[1][0], objectFromWorld_[1][1], objectFromWorld_[1][2], objectFromWorld_[1][3], 
+                        objectFromWorld_[2][0], objectFromWorld_[2][1], objectFromWorld_[2][2], objectFromWorld_[2][3], 
+                        0, 0, 0, 1.f);
+                    float3x4 ellipsoidFromWorld = mul(ellipsoid.transform, objectFromWorld);
+
+                    
+                    // TODO: clip against bounding box?
+                    float3 rayPos = mul(ellipsoidFromWorld, float4(query.WorldRayOrigin(), 1.f));
+                    float3 rayDir = mul(ellipsoidFromWorld, float4(query.WorldRayDirection(), 0.f));
+                    rayPos -= ellipsoid.sphere.xyz;
+
+                    // Ray sphere test
+                    float a = dot(rayDir, rayDir);
+                    float b = 2.f * dot(rayDir, rayPos);
+                    float c = dot(rayPos, rayPos) - ellipsoid.sphere.w;
+                    float l = length(rayPos - b / (2 * a) * rayDir);
+                    float discrim = 4 * a * (ellipsoid.sphere.w + l) * (ellipsoid.sphere.w - l);
+
+
+                    if (discrim < 0.f) continue;
+                    discrim = sqrt(discrim);
+                    float q = -.5f * (b < 0.f ? b - discrim : b + discrim);
+                    float t0 = q / a;
+                    float t1 = c / q;
+                    if (t0 > t1)
+                    {
+                        float temp = t0;
+                        t0 = t1;
+                        t1 = temp;
+                    }
+                    if (t0 > hitT || t1 <= 0.f) continue;
+                    float tHit = t0;
+                    if (tHit <= 0.f)
+                    {
+                        tHit = t1;
+                        if (t1 > hitT) continue;
+                    }
+                    hitT = tHit;
+                    query.CommitProceduralPrimitiveHit(tHit);
+
+                    uint debugIndex;
+                    InterlockedAdd(globals[GLOBALS_DEBUG], 1, debugIndex);
+                    if (debugIndex < 1u << 21u)
+                    {
+                        debugBuffer[debugIndex] = float2(t0, t1);
+                    }
                     continue;
                 }
 #ifndef TRACE_BRICKS
@@ -450,63 +519,93 @@ void main()
         }
         else if (query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
         {
-#ifndef TRACE_BRICKS
-#error
-            uint primIndex = query.CommittedPrimitiveIndex();
-            uint brickIndex = primIndex >> 6u;
-            hitKind = primIndex & 63u;
-#else
-            uint primIndex = query.CandidatePrimitiveIndex();
-            uint brickIndex = primIndex & 127;
-            uint tableOffset = primIndex >> 7;
-#endif
-            uint instanceID = query.CandidateInstanceID();
-            uint tableBaseOffset = gpuInstances[instanceID].clusterLookupTableOffset;
-            uint clusterID = clusterLookupTable[tableBaseOffset + tableOffset];
-
-            uint pageIndex = GetPageIndexFromClusterID(clusterID); 
-            uint clusterIndex = GetClusterIndexFromClusterID(clusterID);
-
-            uint basePageAddress = GetClusterPageBaseAddress(pageIndex);
-            uint numClusters = GetNumClustersInPage(basePageAddress);
-            DenseGeometry dg = GetDenseGeometryHeader(basePageAddress, numClusters, clusterIndex);
-
-            materialID = dg.DecodeMaterialID(brickIndex);
-            Brick brick = dg.DecodeBrick(brickIndex);
-
-            uint vertexOffset = GetVoxelVertexOffset(brick.vertexOffset, brick.bitMask, hitKind);
+            uint instanceID = query.CommittedInstanceID();
 
             hitInfo.hitP = query.CommittedObjectRayOrigin() + objectRayDir * rayT;
 
-#if 1
-            float2x3 wBasis = BuildOrthonormalBasis(-objectRayDir);
-            float3 wk = wBasis[0];
-            float3 wj = wBasis[1];
-            SGGX sggx = dg.DecodeSGGX(vertexOffset);
-
-            float3 wm = sggx.SampleSGGX(-objectRayDir, wk, wj, rng.Uniform2D());
-
-            if (any(isnan(wm)) || any(isinf(wm)))
+            if (gpuInstances[instanceID].flags & GPU_INSTANCE_FLAG_MERGED)
             {
-                hitInfo.n = dg.DecodeNormal(vertexOffset);
+                uint primIndex = query.CommittedPrimitiveIndex();
+                GPUInstance instance = gpuInstances[instanceID];
+                uint resourceID = instance.resourceID;
+                GPUTruncatedEllipsoid ellipsoid = truncatedEllipsoids[resourceID];
+
+                float3x4 worldFromObject = instanceTransforms[instanceGroupTransformOffsets[instance.groupIndex] + primIndex];
+                float3x4 objectFromWorld_ = Inverse(worldFromObject);
+                float4x4 objectFromWorld = float4x4(
+                    objectFromWorld_[0][0], objectFromWorld_[0][1], objectFromWorld_[0][2], objectFromWorld_[0][3], 
+                    objectFromWorld_[1][0], objectFromWorld_[1][1], objectFromWorld_[1][2], objectFromWorld_[1][3], 
+                    objectFromWorld_[2][0], objectFromWorld_[2][1], objectFromWorld_[2][2], objectFromWorld_[2][3], 
+                    0, 0, 0, 1.f);
+                float3x4 inverseTransform = mul(ellipsoid.transform, objectFromWorld);
+                float3 sphereNormal = normalize(mul(inverseTransform, float4(query.WorldRayOrigin(), 1.f)) - ellipsoid.sphere.xyz);
+                float3x3 normalTransform = transpose(float3x3(inverseTransform[0].xyz, inverseTransform[1].xyz, inverseTransform[2].xyz));
+                float3 normal = normalize(mul(normalTransform, sphereNormal));
+
+                hitInfo.n = normal;
                 hitInfo.gn = hitInfo.n;
+                float2x3 tb = BuildOrthonormalBasis(hitInfo.n);
+                hitInfo.ss = tb[0];
+                hitInfo.ts = tb[1];
             }
             else 
             {
-                hitInfo.n = wm;
-                hitInfo.gn = dg.DecodeNormal(vertexOffset);
-            }
-            float2x3 tb = BuildOrthonormalBasis(hitInfo.n);
-            hitInfo.ss = tb[0];
-            hitInfo.ts = tb[1];
+#ifndef TRACE_BRICKS
+#error
+                uint primIndex = query.CommittedPrimitiveIndex();
+                uint brickIndex = primIndex >> 6u;
+                hitKind = primIndex & 63u;
+#else
+                uint primIndex = query.CandidatePrimitiveIndex();
+                uint brickIndex = primIndex & 127;
+                uint tableOffset = primIndex >> 7;
+#endif
+                uint tableBaseOffset = gpuInstances[instanceID].clusterLookupTableOffset;
+                uint clusterID = clusterLookupTable[tableBaseOffset + tableOffset];
+
+                uint pageIndex = GetPageIndexFromClusterID(clusterID); 
+                uint clusterIndex = GetClusterIndexFromClusterID(clusterID);
+
+                uint basePageAddress = GetClusterPageBaseAddress(pageIndex);
+                uint numClusters = GetNumClustersInPage(basePageAddress);
+                DenseGeometry dg = GetDenseGeometryHeader(basePageAddress, numClusters, clusterIndex);
+
+                materialID = dg.DecodeMaterialID(brickIndex);
+                Brick brick = dg.DecodeBrick(brickIndex);
+
+                uint vertexOffset = GetVoxelVertexOffset(brick.vertexOffset, brick.bitMask, hitKind);
+                float3 normal = dg.DecodeNormal(vertexOffset);
+
+#if 1
+                float2x3 wBasis = BuildOrthonormalBasis(-objectRayDir);
+                float3 wk = wBasis[0];
+                float3 wj = wBasis[1];
+                SGGX sggx = dg.DecodeSGGX(vertexOffset);
+
+                float3 wm = sggx.SampleSGGX(-objectRayDir, wk, wj, rng.Uniform2D());
+
+                if (any(isnan(wm)) || any(isinf(wm)))
+                {
+                    hitInfo.n = normal;
+                    hitInfo.gn = hitInfo.n;
+                }
+                else 
+                {
+                    hitInfo.n = wm;
+                    hitInfo.gn = normal;
+                }
+                float2x3 tb = BuildOrthonormalBasis(hitInfo.n);
+                hitInfo.ss = tb[0];
+                hitInfo.ts = tb[1];
 
 #else
-            hitInfo.n = dg.DecodeNormal(vertexOffset);
-            hitInfo.gn = hitInfo.n;
-            float2x3 tb = BuildOrthonormalBasis(hitInfo.n);
-            hitInfo.ss = tb[0];
-            hitInfo.ts = tb[1];
+                hitInfo.n = dg.DecodeNormal(vertexOffset);
+                hitInfo.gn = hitInfo.n;
+                float2x3 tb = BuildOrthonormalBasis(hitInfo.n);
+                hitInfo.ss = tb[0];
+                hitInfo.ts = tb[1];
 #endif
+            }
         }
 
         // Get material

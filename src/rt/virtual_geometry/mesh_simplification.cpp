@@ -2900,6 +2900,12 @@ static Mesh SimplifyTriangleMesh(Arena *arena, GraphPartitionResult &partitionRe
     return simplifiedMesh;
 }
 
+struct TruncatedEllipsoid
+{
+    AffineSpace transform;
+    Vec4f sphere;
+};
+
 struct ClusterizationOutput
 {
     StaticArray<Cluster> clusters;
@@ -2907,6 +2913,8 @@ struct ClusterizationOutput
     u32 numBaseClusters;
     u32 maxDepth;
     u32 numVoxelClusters;
+    TruncatedEllipsoid ellipsoid;
+    bool hasEllpsoid;
 };
 
 struct VoxelClusterGroupFixup
@@ -3705,10 +3713,11 @@ static void WriteClustersToDisk(ClusterizationOutput &output,
     u32 totalNumVoxelClusters = output.numVoxelClusters;
     ClusterFileHeader *fileHeader =
         (ClusterFileHeader *)GetMappedPtr(&builder, fileHeaderOffset);
-    fileHeader->magic            = CLUSTER_FILE_MAGIC;
-    fileHeader->numPages         = numPages;
-    fileHeader->numNodes         = numNodes;
-    fileHeader->numVoxelClusters = totalNumVoxelClusters;
+    fileHeader->magic                 = CLUSTER_FILE_MAGIC;
+    fileHeader->numPages              = numPages;
+    fileHeader->numNodes              = numNodes;
+    fileHeader->numVoxelClusters      = totalNumVoxelClusters;
+    fileHeader->hasTruncatedEllipsoid = output.hasEllpsoid;
 
     // Write hierarchy to disk
     u64 hierarchyOffset = AllocateSpace(&builder, sizeof(PackedHierarchyNode) * numNodes);
@@ -3740,6 +3749,13 @@ static void WriteClustersToDisk(ClusterizationOutput &output,
     ptr += sizeof(u32);
     MemoryCopy(ptr, voxelClusterGroupFixups.data,
                sizeof(VoxelClusterGroupFixup) * voxelClusterGroupFixups.Length());
+
+    if (output.hasEllpsoid)
+    {
+        u64 ellipsoidOffset = AllocateSpace(&builder, sizeof(TruncatedEllipsoid));
+        ptr                 = (u8 *)GetMappedPtr(&builder, ellipsoidOffset);
+        MemoryCopy(ptr, &output.ellipsoid, sizeof(TruncatedEllipsoid));
+    }
 
     OS_UnmapFile(builder.ptr);
     OS_ResizeFile(builder.filename, builder.totalSize);
@@ -5137,6 +5153,7 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
     }
 
     ClusterizationOutput output;
+    output.hasEllpsoid     = false;
     output.clusters        = StaticArray<Cluster>(arena, clusters.Length(), clusters.Length());
     output.numBaseClusters = numFinestClusters;
     MemoryCopy(output.clusters.data, clusters.data, sizeof(Cluster) * clusters.Length());
@@ -5146,6 +5163,98 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
                sizeof(ClusterGroup) * clusterGroups.Length());
     output.maxDepth         = depth;
     output.numVoxelClusters = numVoxelClusters.load();
+
+    if (numMeshes == 1)
+    {
+        Mesh &mesh = meshes[0];
+        Vec3f center(0.f);
+        for (u32 i = 0; i < mesh.numVertices; i++)
+        {
+            center += mesh.p[i];
+        }
+        center /= (f32)mesh.numVertices;
+
+        f32 cxx = 0.f;
+        f32 cxy = 0.f;
+        f32 cxz = 0.f;
+        f32 cyy = 0.f;
+        f32 cyz = 0.f;
+        f32 czz = 0.f;
+
+        for (u32 i = 0; i < mesh.numVertices; i++)
+        {
+            Vec3f diff = mesh.p[i] - center;
+            cxx += Sqr(diff.x);
+            cxy += diff.x * diff.y;
+            cxz += diff.x * diff.z;
+            cyy += Sqr(diff.y);
+            cyz += diff.y * diff.z;
+            czz += Sqr(diff.z);
+        }
+        cxx /= mesh.numVertices;
+        cxy /= mesh.numVertices;
+        cxz /= mesh.numVertices;
+        cyy /= mesh.numVertices;
+        cyz /= mesh.numVertices;
+        czz /= mesh.numVertices;
+
+        float m[9] = {
+            cxx, cxy, cxz, cxy, cyy, cyz, cxz, cyz, czz,
+        };
+        float eigenVectors[9] = {};
+        float eigenValues[3]  = {};
+
+        Eigen::jacobiEigenSolver(m, eigenValues, eigenVectors, 1e-8f);
+
+        f32 maxValue        = 0.f;
+        int maxAxis         = 0;
+        float maxEigenValue = 0.f;
+        for (int axis = 0; axis < 3; axis++)
+        {
+            if (Abs(eigenValues[axis]) > maxEigenValue)
+            {
+                maxEigenValue = Abs(eigenValues[axis]);
+                maxAxis       = 2;
+            }
+        }
+
+        u32 nextAxis     = (1 << maxAxis) & 3;
+        u32 nextNextAxis = (1 << nextAxis) & 3;
+        LinearSpace3f basis(Vec3f(eigenVectors[3 * nextAxis], eigenVectors[3 * nextAxis + 1],
+                                  eigenVectors[3 * nextAxis + 2]),
+                            Vec3f(eigenVectors[3 * nextNextAxis],
+                                  eigenVectors[3 * nextNextAxis + 1],
+                                  eigenVectors[3 * nextNextAxis + 2]),
+                            Vec3f(eigenVectors[3 * maxAxis], eigenVectors[3 * maxAxis + 1],
+                                  eigenVectors[3 * maxAxis + 2]));
+
+        Bounds bounds;
+        for (u32 i = 0; i < mesh.numVertices; i++)
+        {
+            mesh.p[i] = basis.ToLocal(mesh.p[i] - center);
+            // mesh.p[i] -= center;
+            bounds.Extend(Lane4F32(mesh.p[i]));
+        }
+        Vec3f extents = ToVec3f(bounds.maxP - bounds.minP);
+        for (u32 i = 0; i < mesh.numVertices; i++)
+        {
+            mesh.p[i] = mesh.p[i] / extents;
+        }
+        Vec4f sphere = ConstructSphereFromPoints(mesh.p, mesh.numVertices);
+
+        AffineSpace transform(Transpose(basis), 0.f);
+
+        transform =
+            AffineSpace::Scale(1.f / extents) * transform * AffineSpace::Translate(-center);
+
+        output.ellipsoid.transform = transform;
+        output.ellipsoid.sphere    = sphere;
+        output.hasEllpsoid         = true;
+
+        // ScratchArena scratch;
+        // WriteTriOBJ(mesh, PushStr8F(scratch.temp.arena, "%S_ellipsoid.obj",
+        //                             RemoveFileExtension(virtualGeoFilename)));
+    }
 
     ReleaseArenaArray(arenas);
 

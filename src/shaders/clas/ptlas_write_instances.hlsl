@@ -57,5 +57,5 @@ void main(uint3 dtID : SV_DispatchThreadID)
     if (address == 0) return;
 
     AABB aabb = aabbs[instance.resourceID];
-    WritePTLASDescriptors(instance, address, blasData.instanceID, blasData.instanceID, aabb, true, 0x10u, instance.partitionIndex);
+    WritePTLASDescriptors(instance, address, blasData.instanceID, blasData.instanceID, aabb, true, 0x10u);
 }

@@ -57,6 +57,12 @@ struct HierarchyFixup
     }
 };
 
+struct TruncatedEllipsoid
+{
+    AffineSpace transform;
+    Vec4f sphere;
+};
+
 struct VoxelClusterGroupFixup
 {
     u32 clusterStartIndex;
@@ -200,6 +206,8 @@ struct VirtualGeometryManager
 
         StaticArray<VoxelClusterGroupFixup> voxelClusterGroupFixups;
 
+        TruncatedEllipsoid ellipsoid;
+
         u32 voxelBLASBitmask;
         u32 voxelAddressOffset;
         u32 clusterLookupTableOffset;
@@ -293,6 +301,9 @@ struct VirtualGeometryManager
     DescriptorSetLayout instanceStreamingLayout = {};
     VkPipeline instanceStreamingPipeline;
 
+    DescriptorSetLayout decodeMergedInstancesLayout = {};
+    VkPipeline decodeMergedInstancesPipeline;
+
     GPUBuffer evictedPagesBuffer;
     GPUBuffer hierarchyNodeBuffer;
     GPUBuffer clusterPageDataBuffer;
@@ -363,14 +374,22 @@ struct VirtualGeometryManager
     GPUBuffer tlasAccelBuffer;
     GPUBuffer tlasScratchBuffer;
 
+    GPUBuffer resourceAABBBuffer;
+    GPUBuffer resourceTruncatedEllipsoidsBuffer;
+    GPUBuffer instanceGroupTransformOffsets;
     GPUBuffer partitionReadbackBuffer;
+    GPUBuffer instanceTransformsBuffer;
     GPUBuffer partitionCountsBuffer;
+    GPUBuffer partitionErrorThresholdsBuffer;
+    GPUBuffer mergedPartitionDeviceAddresses;
     GPUBuffer instancesBuffer;
     BitVector partitionStreamedIn;
     Graph<GPUInstance> partitionInstanceGraph;
     // StaticArray<GPUInstance> gpuInstances;
     StaticArray<GPUInstance> proxyInstances;
     StaticArray<u32> allocatedPartitionIndices;
+
+    GPUBuffer mergedInstancesAABBBuffer;
 
     u32 numStreamedInstances;
     GPUBuffer instanceUploadBuffer;
@@ -398,7 +417,6 @@ struct VirtualGeometryManager
     u32 clusterLookupTableOffset;
 
     u32 maxPartitions;
-    u32 finalNumPartitions;
     u32 numAllocatedPartitions;
     u32 numInstances;
 
@@ -416,9 +434,9 @@ struct VirtualGeometryManager
                             GPUBuffer *gpuSceneBuffer, GPUBuffer *workItemQueueBuffer,
                             GPUBuffer *gpuInstancesBuffer, GPUBuffer *visibleClustersBuffer);
     void BuildClusterBLAS(CommandBuffer *cmd, GPUBuffer *visibleClustersBuffer,
-                          GPUBuffer *gpuInstancesBuffer, GPUBuffer *aabbBuffer);
+                          GPUBuffer *gpuInstancesBuffer);
     void AllocateInstances(StaticArray<GPUInstance> &gpuInstances);
-    void BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstances, GPUBuffer *blasSceneBounds,
+    void BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstances,
                     GPUBuffer *debugReadback); //, GPUBuffer *debugRdbck2);
     void UnlinkLRU(int pageIndex);
     void LinkLRU(int index);

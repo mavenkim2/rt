@@ -48,6 +48,7 @@ struct ClusterFileHeader
     uint numPages;
     uint numNodes;
     uint numVoxelClusters;
+    bool hasTruncatedEllipsoid;
 };
 
 struct DecodeClusterData
@@ -81,6 +82,16 @@ struct BLASVoxelInfo
     uint64_t address;
     uint clusterID;
     uint instanceIndex;
+};
+
+struct GPUTruncatedEllipsoid
+{
+#ifdef __cplusplus
+    float transform[3][4];
+#else
+    row_major float3x4 transform;
+#endif
+    float4 sphere;
 };
 
 struct AccelerationStructureInstance
@@ -262,6 +273,9 @@ struct PackedHierarchyNode
     uint leafInfo[CHILDREN_PER_HIERARCHY_NODE];
 };
 
+#define GPU_INSTANCE_FLAG_CULL (1u << 0u)
+#define GPU_INSTANCE_FLAG_MERGED (1u << 1u)
+
 struct GPUInstance
 {
 #ifdef __cplusplus
@@ -275,7 +289,7 @@ struct GPUInstance
     uint voxelAddressOffset;
     uint clusterLookupTableOffset;
     uint groupIndex;
-    bool cull;
+    uint flags;
 };
 
 // struct InstanceRef

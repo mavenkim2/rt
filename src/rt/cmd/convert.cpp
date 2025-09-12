@@ -1094,8 +1094,7 @@ static string WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState 
                           string directory, string currentFilename)
 {
 
-// #ifdef USE_GPU
-#if 1
+#ifdef USE_GPU
     if (state->shapes.Length())
     {
         Print("%S, num: %i\n", currentFilename, state->shapes.Length());
@@ -1327,87 +1326,6 @@ static string WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState 
 
         u32 result = sls->meshMap.FindOrAdd(arena, meshes.data, newNumMeshes, hash,
                                             virtualGeoFilename, currentFilename);
-
-        Mesh &mesh = meshes[0];
-        Vec3f center(0.f);
-        for (u32 i = 0; i < mesh.numVertices; i++)
-        {
-            center += mesh.p[i];
-        }
-        center /= (f32)mesh.numVertices;
-
-        f32 cxx = 0.f;
-        f32 cxy = 0.f;
-        f32 cxz = 0.f;
-        f32 cyy = 0.f;
-        f32 cyz = 0.f;
-        f32 czz = 0.f;
-
-        for (u32 i = 0; i < mesh.numVertices; i++)
-        {
-            Vec3f diff = mesh.p[i] - center;
-            cxx += Sqr(diff.x);
-            cxy += diff.x * diff.y;
-            cxz += diff.x * diff.z;
-            cyy += Sqr(diff.y);
-            cyz += diff.y * diff.z;
-            czz += Sqr(diff.z);
-        }
-        cxx /= mesh.numVertices;
-        cxy /= mesh.numVertices;
-        cxz /= mesh.numVertices;
-        cyy /= mesh.numVertices;
-        cyz /= mesh.numVertices;
-        czz /= mesh.numVertices;
-
-        float m[9] = {
-            cxx, cxy, cxz, cxy, cyy, cyz, cxz, cyz, czz,
-        };
-        float eigenVectors[9] = {};
-        float eigenValues[3]  = {};
-
-        Eigen::jacobiEigenSolver(m, eigenValues, eigenVectors, 1e-8f);
-
-        f32 maxValue        = 0.f;
-        int maxAxis         = 0;
-        float maxEigenValue = 0.f;
-        for (int axis = 0; axis < 3; axis++)
-        {
-            if (Abs(eigenValues[axis]) > maxEigenValue)
-            {
-                maxEigenValue = Abs(eigenValues[axis]);
-                maxAxis       = 2;
-            }
-        }
-
-        u32 next     = (1 << maxAxis) & 3;
-        u32 nextNext = (1 << next) & 3;
-        LinearSpace3f basis(Vec3f(eigenVectors[3 * next], eigenVectors[3 * next + 1],
-                                  eigenVectors[3 * next + 2]),
-                            Vec3f(eigenVectors[3 * nextNext], eigenVectors[3 * nextNext + 1],
-                                  eigenVectors[3 * nextNext + 2]),
-                            Vec3f(eigenVectors[3 * maxAxis], eigenVectors[3 * maxAxis + 1],
-                                  eigenVectors[3 * maxAxis + 2]));
-
-        Vec3f test0 = Cross(basis.x, basis.y);
-
-        Bounds bounds;
-        for (u32 i = 0; i < mesh.numVertices; i++)
-        {
-            mesh.p[i] = basis.ToLocal(mesh.p[i] - center);
-            // mesh.p[i] -= center;
-            bounds.Extend(Lane4F32(mesh.p[i]));
-        }
-        Vec3f extents = ToVec3f(bounds.maxP - bounds.minP);
-        for (u32 i = 0; i < mesh.numVertices; i++)
-        {
-            mesh.p[i] = mesh.p[i] / extents;
-        }
-        Vec4f sphere = ConstructSphereFromPoints(mesh.p, mesh.numVertices);
-
-        ScratchArena scratch;
-        WriteTriOBJ(mesh, PushStr8F(scratch.temp.arena, "%S_ellipsoid.obj",
-                                    RemoveFileExtension(virtualGeoFilename)));
 
         if (!result)
         {

@@ -218,4 +218,16 @@ void Translate(inout float3x4 transform, float3 p)
     transform[2].w += p.z;
 }
 
+float3x4 Inverse(float3x4 transform)
+{
+    float3 c0 = float3(transform[0].x, transform[1].x, transform[2].x);
+    float3 c1 = float3(transform[0].y, transform[1].y, transform[2].y);
+    float3 c2 = float3(transform[0].z, transform[1].z, transform[2].z);
+    float3x3 inv = transpose(float3x3(cross(c1, c2), cross(c2, c0), cross(c0, c1)));
+    float3 translate = float3(transform[0].w, transform[1].w, transform[2].w);
+    float det  = determinant(float3x3(c0, c1, c2));
+    translate = float3(dot(translate, inv[0].xyz), dot(translate, inv[1].xyz), dot(translate, inv[2].xyz));
+    return 1.f / det * float3x4(float4(inv[0].xyz, -translate.x), float4(inv[1].xyz, -translate.y), float4(inv[2].xyz, -translate.z));
+}
+
 #endif
