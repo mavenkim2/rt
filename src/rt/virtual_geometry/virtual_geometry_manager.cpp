@@ -2566,6 +2566,69 @@ void VirtualGeometryManager::BuildHierarchy(PrimRef *refs, RecordAOSSplits &reco
     }
 }
 
+inline AffineSpace QuatToMatrix(Vec4f a)
+{
+    Vec4f normalized = Normalize(a);
+    f32 xx           = normalized.x * normalized.x;
+    f32 yy           = normalized.y * normalized.y;
+    f32 zz           = normalized.z * normalized.z;
+    f32 xy           = normalized.x * normalized.y;
+    f32 xz           = normalized.x * normalized.z;
+    f32 yz           = normalized.y * normalized.z;
+    f32 wx           = normalized.w * normalized.x;
+    f32 wy           = normalized.w * normalized.y;
+    f32 wz           = normalized.w * normalized.z;
+
+    AffineSpace result(Vec3f(1 - 2 * (yy + zz), 2 * (xy + wz), 2 * (xz - wy)),
+                       Vec3f(2 * (xy - wz), 1 - 2 * (xx + zz), 2 * (yz + wx)),
+                       Vec3f(2 * (xz + wy), 2 * (yz - wx), 1 - 2 * (xx + yy)));
+    return result;
+}
+
+static Vec4f MatrixToQuat(AffineSpace &m)
+{
+    Vec4f result;
+    if (m[0][0] + m[1][1] + m[2][2] > 0.f)
+    {
+        f64 t    = m[0][0] + m[1][1] + m[2][2] + 1.;
+        f64 s    = Sqrt(t) * .5;
+        result.w = (f32)(s * t);
+        result.z = (f32)((m[0][1] - m[1][0]) * s);
+        result.y = (f32)((m[2][0] - m[0][2]) * s);
+        result.x = (f32)((m[1][2] - m[2][1]) * s);
+    }
+    else if (m[0][0] > m[1][1] && m[0][0] > m[2][2])
+    {
+        f64 t    = m[0][0] - m[1][1] - m[2][2] + 1.;
+        f64 s    = Sqrt(t) * 0.5;
+        result.x = (f32)(s * t);
+        result.y = (f32)((m[0][1] + m[1][0]) * s);
+        result.z = (f32)((m[2][0] + m[0][2]) * s);
+        result.w = (f32)((m[1][2] - m[2][1]) * s);
+    }
+    else if (m[1][1] > m[2][2])
+    {
+        f64 t    = -m[0][0] + m[1][1] - m[2][2] + 1.;
+        f64 s    = Sqrt(t) * 0.5;
+        result.y = (f32)(s * t);
+        result.x = (f32)((m[0][1] + m[1][0]) * s);
+        result.w = (f32)((m[2][0] - m[0][2]) * s);
+        result.z = (f32)((m[1][2] + m[2][1]) * s);
+    }
+    else
+    {
+        f64 t    = -m[0][0] - m[1][1] + m[2][2] + 1.;
+        f64 s    = Sqrt(t) * .5;
+        result.z = (f32)(s * t);
+        result.w = (f32)((m[0][1] - m[1][0]) * s);
+        result.x = (f32)((m[2][0] + m[0][2]) * s);
+        result.y = (f32)((m[1][2] + m[2][1]) * s);
+    }
+
+    result = Normalize(result);
+    return result;
+}
+
 void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
                                   StaticArray<GPUInstance> &inputInstances)
 {
@@ -2664,9 +2727,16 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
 
     StaticArray<AccelBuildInfo> accelBuildInfos(scratch.temp.arena, finalNumPartitions);
 
-    StaticArray<float> instanceTransforms(scratch.temp.arena, 12 * inputInstances.Length());
-    u32 numTransforms = 0;
-    u32 numAABBs      = 0;
+    StaticArray<GPUTransform> instanceTransforms(scratch.temp.arena,
+                                                 12 * inputInstances.Length());
+    StaticArray<PartitionInfo> partitionInfos(scratch.temp.arena, finalNumPartitions);
+    u32 numAABBs = 0;
+
+    union Float
+    {
+        u32 u;
+        f32 f;
+    };
     // Store the calculating bounding proxies
     for (u32 partitionIndex = 0; partitionIndex < finalNumPartitions; partitionIndex++)
     {
@@ -2704,15 +2774,93 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
         gpuInstance.groupIndex     = partitionIndex;
         proxyInstances.Push(gpuInstance);
 
+        f32 minTranslate[3];
+        f32 maxTranslate[3];
+
+        for (u32 i = 0; i < 3; i++)
+        {
+            minTranslate[i] = pos_inf;
+            maxTranslate[i] = neg_inf;
+        }
         for (u32 transformIndex = partitionInstanceGraph.offsets[partitionIndex];
              transformIndex < partitionInstanceGraph.offsets[partitionIndex + 1];
              transformIndex++)
         {
-            MemoryCopy(instanceTransforms.data + 12 * numTransforms,
-                       partitionInstanceGraph.data[transformIndex].worldFromObject,
-                       sizeof(f32) * 12);
-            numTransforms++;
+            // MemoryCopy(instanceTransforms.data + 12 * numTransforms,
+            //            partitionInstanceGraph.data[transformIndex].worldFromObject,
+            //            sizeof(f32) * 12);
+
+            auto &transform = partitionInstanceGraph.data[transformIndex].worldFromObject;
+            for (u32 i = 0; i < 3; i++)
+            {
+                minTranslate[i] = Min(minTranslate[i], transform[i][3]);
+                maxTranslate[i] = Max(maxTranslate[i], transform[i][3]);
+            }
         }
+
+        PartitionInfo info;
+        info.base            = Vec3f(minTranslate[0], minTranslate[1], minTranslate[2]);
+        info.scale           = Vec3f((maxTranslate[0] - minTranslate[0]) / 65535.f,
+                                     (maxTranslate[1] - minTranslate[1]) / 65535.f,
+                                     (maxTranslate[2] - minTranslate[2]) / 65535.f);
+        info.transformOffset = partitionInstanceGraph.offsets[partitionIndex];
+        info.transformCount =
+            partitionInstanceGraph.offsets[partitionIndex + 1] - info.transformOffset;
+
+        for (u32 transformIndex = partitionInstanceGraph.offsets[partitionIndex];
+             transformIndex < partitionInstanceGraph.offsets[partitionIndex + 1];
+             transformIndex++)
+        {
+            auto &transform = partitionInstanceGraph.data[transformIndex].worldFromObject;
+            f32 scaleX      = Length(Vec3f(transform[0][0], transform[1][0], transform[2][0]));
+            f32 scaleY      = Length(Vec3f(transform[0][1], transform[1][1], transform[2][1]));
+            f32 scaleZ      = Length(Vec3f(transform[0][2], transform[1][2], transform[2][2]));
+            f32 scales[3]   = {scaleX, scaleY, scaleZ};
+
+            AffineSpace rotation(transform[0][0], transform[0][1], transform[0][2],
+                                 transform[0][3], transform[1][0], transform[1][1],
+                                 transform[1][2], transform[1][3], transform[2][0],
+                                 transform[2][1], transform[2][2], transform[2][3]);
+
+            u16 translate16[3];
+            for (u32 c = 0; c < 3; c++)
+            {
+                rotation[c] /= scales[c];
+
+                translate16[c] = u16((transform[c][3] - minTranslate[c]) /
+                                         (maxTranslate[c] - minTranslate[c]) * 65535.f +
+                                     0.5f);
+            }
+            Vec4f quat = MatrixToQuat(rotation);
+
+            __m128i i = _mm_cvtps_ph(_mm_setr_ps(scales[0], scales[1], scales[2], 0.f), 0);
+            alignas(16) u16 scale16[8];
+            _mm_store_si128((__m128i *)scale16, i);
+
+            i = _mm_cvtps_ph(_mm_setr_ps(quat[0], quat[1], quat[2], quat[3]), 0);
+            alignas(16) u16 rot16[8];
+            _mm_store_si128((__m128i *)rot16, i);
+
+            // Test
+#if 1
+            Lane4F32 f =
+                _mm_cvtph_ps(Lane4U32(scale16[0] | (scale16[1] << 16), scale16[2], 0, 0));
+            Lane4F32 rot = _mm_cvtph_ps(
+                Lane4U32(rot16[0] | (rot16[1] << 16), rot16[2] | (rot16[3] << 16), 0, 0));
+
+            AffineSpace r = QuatToMatrix(Vec4f(rot[0], rot[1], rot[2], rot[3]));
+
+            AffineSpace test =
+                AffineSpace::Translate(transform[0][3], transform[1][3], transform[2][3]) * r *
+                AffineSpace::Scale(f[0], f[1], f[2]);
+#endif
+
+            GPUTransform gpuTransform(scale16[0], scale16[1], scale16[2], rot16[0], rot16[1],
+                                      rot16[2], rot16[3], translate16[0], translate16[1],
+                                      translate16[2]);
+            instanceTransforms.Push(gpuTransform);
+        }
+        partitionInfos.Push(info);
 
         u32 count = 0;
         for (u32 instanceIndex = partitionInstanceGraph.offsets[partitionIndex];
@@ -2805,9 +2953,9 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
                                                               VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                                           sizeof(u64) * finalNumPartitions);
 
-    instanceGroupTransformOffsets = device->CreateBuffer(
+    partitionInfosBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        sizeof(u32) * (finalNumPartitions + 1u));
+        sizeof(PartitionInfo) * (partitionInfos.Length()));
 
     u32 tlasScratchSize, tlasAccelSize;
     device->GetPTLASBuildSizes(maxInstances, 1024, maxPartitions, 0, tlasScratchSize,
@@ -2836,11 +2984,11 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
     partitionReadbackBuffer =
         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                              sizeof(u32) * finalNumPartitions, MemoryUsage::GPU_TO_CPU);
-    instanceTransformsBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                                    sizeof(f32) * 12 * numTransforms);
-    cmd->SubmitBuffer(&instanceTransformsBuffer, instanceTransforms.data,
-                      sizeof(f32) * 12 * numTransforms);
+
+    u32 transformSize        = sizeof(instanceTransforms[0]) * instanceTransforms.Length();
+    instanceTransformsBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, transformSize);
+    cmd->SubmitBuffer(&instanceTransformsBuffer, instanceTransforms.data, transformSize);
 
     cmd->SubmitBuffer(&instancesBuffer, proxyInstances.data,
                       sizeof(GPUInstance) * proxyInstances.Length());
@@ -2849,8 +2997,8 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
     // cmd->SubmitBuffer(&instancesBuffer, inputInstances.data,
     //                   sizeof(GPUInstance) * inputInstances.Length());
     // numInstances = inputInstances.Length();
-    cmd->SubmitBuffer(&instanceGroupTransformOffsets, partitionInstanceGraph.offsets,
-                      sizeof(u32) * (finalNumPartitions + 1));
+    cmd->SubmitBuffer(&partitionInfosBuffer, partitionInfos.data,
+                      sizeof(PartitionInfo) * (finalNumPartitions));
     cmd->SubmitBuffer(&mergedPartitionDeviceAddresses, accelDeviceAddresses.data,
                       sizeof(u64) * finalNumPartitions);
 
@@ -2863,7 +3011,7 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
         .Bind(&resourceAABBBuffer)
         .Bind(&mergedInstancesAABBBuffer)
         .Bind(&partitionErrorThresholdsBuffer)
-        .Bind(&instanceGroupTransformOffsets)
+        .Bind(&partitionInfosBuffer)
         .Bind(&resourceTruncatedEllipsoidsBuffer)
         .End();
 
@@ -2874,6 +3022,41 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
                  VK_ACCESS_2_SHADER_WRITE_BIT,
                  VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
     cmd->FlushBarriers();
+
+    // if (device->frameCount > 0)
+    // {
+    //     GPUBuffer readback0 =
+    //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+    //                              mergedInstancesAABBBuffer.size, MemoryUsage::GPU_TO_CPU);
+    //
+    //     // GPUBuffer readback2 =
+    //     //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+    //     //     thisFrameBitVector->size,
+    //     //                          MemoryUsage::GPU_TO_CPU);
+    //     cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+    //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+    //                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+    //                  VK_ACCESS_2_TRANSFER_READ_BIT);
+    //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+    //     VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+    //                  VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+    //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+    //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+    //     // VK_ACCESS_2_SHADER_WRITE_BIT,
+    //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
+    //     cmd->FlushBarriers();
+    //     cmd->CopyBuffer(&readback0, &mergedInstancesAABBBuffer);
+    //     // cmd->CopyBuffer(&readback, &blasDataBuffer);
+    //     // cmd->CopyBuffer(&readback2, thisFrameBitVector);
+    //     Semaphore testSemaphore   = device->CreateSemaphore();
+    //     testSemaphore.signalValue = 1;
+    //     cmd->SignalOutsideFrame(testSemaphore);
+    //     device->SubmitCommandBuffer(cmd);
+    //     device->Wait(testSemaphore);
+    //
+    //     AABB *data = (AABB *)readback0.mappedPtr;
+    //     int stop   = 5;
+    // }
 
     cmd->BuildCustomBLAS(accelBuildInfos);
 }

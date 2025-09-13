@@ -275,8 +275,65 @@ struct PackedHierarchyNode
     uint leafInfo[CHILDREN_PER_HIERARCHY_NODE];
 };
 
-#define GPU_INSTANCE_FLAG_CULL (1u << 0u)
+#define GPU_INSTANCE_FLAG_CULL   (1u << 0u)
 #define GPU_INSTANCE_FLAG_MERGED (1u << 1u)
+
+struct GPUTransform
+{
+    uint32_t scaleX_scaleY;
+    uint32_t scaleZ_rotX;
+    uint32_t rotY_rotZ;
+    uint32_t rotW_translateX;
+    uint32_t translateY_translateZ;
+
+#ifdef __cplusplus
+    GPUTransform(uint16_t scaleX, uint16_t scaleY, uint16_t scaleZ, uint16_t rotX,
+                 uint16_t rotY, uint16_t rotZ, uint16_t rotW, uint16_t translateX,
+                 uint16_t translateY, uint16_t translateZ)
+    {
+        scaleX_scaleY         = scaleX | ((u32)scaleY << 16u);
+        scaleZ_rotX           = scaleZ | ((u32)rotX << 16u);
+        rotY_rotZ             = rotY | ((u32)rotZ << 16u);
+        rotW_translateX       = rotW | ((u32)translateX << 16u);
+        translateY_translateZ = translateY | ((u32)translateZ << 16u);
+    }
+#endif
+};
+
+#ifndef __cplusplus
+float3x4 ConvertGPUMatrix(GPUTransform transform, float3 anchor, float3 scale)
+{
+    float scaleX = f16tof32(transform.scaleX_scaleY);
+    float scaleY = f16tof32(transform.scaleX_scaleY >> 16u);
+    float scaleZ = f16tof32(transform.scaleZ_rotX);
+
+    float4 q =
+        float4(f16tof32(transform.scaleZ_rotX >> 16u), f16tof32(transform.rotY_rotZ),
+               f16tof32(transform.rotY_rotZ >> 16u), f16tof32(transform.rotW_translateX));
+
+    float translateX = (transform.rotW_translateX >> 16u) * scale[0] + anchor[0];
+    float translateY = (transform.translateY_translateZ & 0xffff) * scale[1] + anchor[1];
+    float translateZ = (transform.translateY_translateZ >> 16u) * scale[2] + anchor[2];
+
+    float4 quat = normalize(q);
+    float xx    = quat.x * quat.x;
+    float yy    = quat.y * quat.y;
+    float zz    = quat.z * quat.z;
+    float xy    = quat.x * quat.y;
+    float xz    = quat.x * quat.z;
+    float yz    = quat.y * quat.z;
+    float wx    = quat.w * quat.x;
+    float wy    = quat.w * quat.y;
+    float wz    = quat.w * quat.z;
+
+    float3x4 result =
+        float3x4(scaleX * (1 - 2 * (yy + zz)), scaleY * 2 * (xy - wz), scaleZ * 2 * (xz + wy),
+                 translateX, scaleX * 2 * (xy + wz), scaleY * (1 - 2 * (xx + zz)),
+                 scaleZ * 2 * (yz - wx), translateY, scaleX * 2 * (xz - wy),
+                 scaleY * 2 * (yz + wx), scaleZ * (1 - 2 * (xx + yy)), translateZ);
+    return result;
+}
+#endif
 
 struct GPUInstance
 {
@@ -292,6 +349,14 @@ struct GPUInstance
     uint clusterLookupTableOffset;
     uint groupIndex;
     uint flags;
+};
+
+struct PartitionInfo
+{
+    float3 base;
+    float3 scale;
+    uint32_t transformOffset;
+    uint32_t transformCount;
 };
 
 // struct InstanceRef

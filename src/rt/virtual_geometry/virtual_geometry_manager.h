@@ -378,7 +378,7 @@ struct VirtualGeometryManager
 
     GPUBuffer resourceAABBBuffer;
     GPUBuffer resourceTruncatedEllipsoidsBuffer;
-    GPUBuffer instanceGroupTransformOffsets;
+    GPUBuffer partitionInfosBuffer;
     GPUBuffer partitionReadbackBuffer;
     GPUBuffer instanceTransformsBuffer;
     GPUBuffer partitionCountsBuffer;

@@ -907,7 +907,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         // Input
         {
-            f32 speed = 10.f;
+            f32 speed = 2000.f;
 
             f32 rotationSpeed = 0.001f * PI;
             camera.RotateCamera(dMouseP, rotationSpeed);
@@ -1002,41 +1002,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
             envMapBindlessIndex = device->BindlessIndex(&gpuEnvMap);
         }
-
-        // if (device->frameCount > 0)
-        // {
-        //     GPUBuffer readback0 = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        //                                                virtualGeometryManager.debugBuffer.size,
-        //                                                MemoryUsage::GPU_TO_CPU);
-        //
-        //     // GPUBuffer readback2 =
-        //     //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        //     //     thisFrameBitVector->size,
-        //     //                          MemoryUsage::GPU_TO_CPU);
-        //     cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-        //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-        //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-        //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-        //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //     // VK_ACCESS_2_SHADER_WRITE_BIT,
-        //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     cmd->FlushBarriers();
-        //     cmd->CopyBuffer(&readback0, &virtualGeometryManager.debugBuffer);
-        //     // cmd->CopyBuffer(&readback, &blasDataBuffer);
-        //     // cmd->CopyBuffer(&readback2, thisFrameBitVector);
-        //     Semaphore testSemaphore   = device->CreateSemaphore();
-        //     testSemaphore.signalValue = 1;
-        //     cmd->SignalOutsideFrame(testSemaphore);
-        //     device->SubmitCommandBuffer(cmd);
-        //     device->Wait(testSemaphore);
-        //
-        //     Vec2f *data = (Vec2f *)readback0.mappedPtr;
-        //     int stop    = 5;
-        // }
 
         u32 currentBuffer = device->GetCurrentBuffer();
 
@@ -1351,7 +1316,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             .Bind(&virtualGeometryManager.partitionCountsBuffer)
             .Bind(&virtualGeometryManager.resourceTruncatedEllipsoidsBuffer)
             .Bind(&virtualGeometryManager.instanceTransformsBuffer)
-            .Bind(&virtualGeometryManager.instanceGroupTransformOffsets)
+            .Bind(&virtualGeometryManager.partitionInfosBuffer)
             .Bind(&virtualGeometryManager.debugBuffer)
             .Bind(&virtualGeometryManager.clasGlobalsBuffer);
         // .Bind(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer);

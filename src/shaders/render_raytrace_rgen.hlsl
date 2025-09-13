@@ -38,8 +38,8 @@ StructuredBuffer<uint> clusterLookupTable : register(t13);
 StructuredBuffer<GPUInstance> gpuInstances : register(t14);
 RWStructuredBuffer<uint> proxyCounts : register(u15);
 StructuredBuffer<GPUTruncatedEllipsoid> truncatedEllipsoids : register(t16);
-StructuredBuffer<row_major float3x4> instanceTransforms : register(t17);
-StructuredBuffer<uint> instanceGroupTransformOffsets : register(t18);
+StructuredBuffer<GPUTransform> instanceTransforms : register(t17);
+StructuredBuffer<PartitionInfo> partitionInfos : register(t18);
 
 RWStructuredBuffer<float2> debugBuffer : register(u19);
 RWStructuredBuffer<uint> globals : register(u20);
@@ -133,7 +133,8 @@ void main()
                 {
                     GPUTruncatedEllipsoid ellipsoid = truncatedEllipsoids[resourceID];
                     uint primIndex = query.CandidatePrimitiveIndex();
-                    float3x4 worldFromObject = instanceTransforms[instanceGroupTransformOffsets[instance.groupIndex] + primIndex];
+                    PartitionInfo info = partitionInfos[instance.groupIndex];
+                    float3x4 worldFromObject = ConvertGPUMatrix(instanceTransforms[info.transformOffset + primIndex], info.base, info.scale);
                     float3x4 objectFromWorld = Inverse(worldFromObject);
                     float3 rayPos = mul(ellipsoid.transform, float4(mul(objectFromWorld, float4(query.WorldRayOrigin(), 1.f)), 1.f));
                     float3 rayDir = mul(ellipsoid.transform, float4(mul(objectFromWorld, float4(query.WorldRayDirection(), 0.f)), 0.f));
@@ -543,8 +544,8 @@ void main()
                 // TODO
                 uint resourceID = 0u;//instance.resourceID;
                 GPUTruncatedEllipsoid ellipsoid = truncatedEllipsoids[resourceID];
-
-                float3x4 worldFromObject = instanceTransforms[instanceGroupTransformOffsets[instance.groupIndex] + primIndex];
+                PartitionInfo info = partitionInfos[instance.groupIndex];
+                float3x4 worldFromObject = ConvertGPUMatrix(instanceTransforms[info.transformOffset + primIndex], info.base, info.scale);
                 float3x4 objectFromWorld_ = Inverse(worldFromObject);
                 float4x4 objectFromWorld = float4x4(
                     objectFromWorld_[0][0], objectFromWorld_[0][1], objectFromWorld_[0][2], objectFromWorld_[0][3], 
