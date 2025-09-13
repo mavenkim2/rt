@@ -907,7 +907,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         // Input
         {
-            f32 speed = 5000.f;
+            f32 speed = 10.f;
 
             f32 rotationSpeed = 0.001f * PI;
             camera.RotateCamera(dMouseP, rotationSpeed);

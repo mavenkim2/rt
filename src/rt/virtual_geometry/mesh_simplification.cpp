@@ -2904,6 +2904,8 @@ struct TruncatedEllipsoid
 {
     AffineSpace transform;
     Vec4f sphere;
+    Vec3f boundsMin;
+    Vec3f boundsMax;
 };
 
 struct ClusterizationOutput
@@ -5236,9 +5238,12 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
             bounds.Extend(Lane4F32(mesh.p[i]));
         }
         Vec3f extents = ToVec3f(bounds.maxP - bounds.minP);
+
+        bounds = {};
         for (u32 i = 0; i < mesh.numVertices; i++)
         {
             mesh.p[i] = mesh.p[i] / extents;
+            bounds.Extend(Lane4F32(mesh.p[i]));
         }
         Vec4f sphere = ConstructSphereFromPoints(mesh.p, mesh.numVertices);
 
@@ -5249,6 +5254,8 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
 
         output.ellipsoid.transform = transform;
         output.ellipsoid.sphere    = sphere;
+        output.ellipsoid.boundsMin = ToVec3f(bounds.minP);
+        output.ellipsoid.boundsMax = ToVec3f(bounds.maxP);
         output.hasEllpsoid         = true;
 
         // ScratchArena scratch;

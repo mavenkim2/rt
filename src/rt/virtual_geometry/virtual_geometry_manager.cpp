@@ -359,7 +359,7 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
         device->CreateComputePipeline(&instanceStreamingShader, &instanceStreamingLayout,
                                       &instanceStreamingPush, "instance streaming pipeline");
 
-    for (int i = 0; i <= 4; i++)
+    for (int i = 0; i <= 5; i++)
     {
         decodeMergedInstancesLayout.AddBinding(i, DescriptorType::StorageBuffer,
                                                VK_SHADER_STAGE_COMPUTE_BIT);
@@ -970,7 +970,9 @@ void VirtualGeometryManager::FinalizeResources(CommandBuffer *cmd)
                 ellipsoid.transform[r][c] = meshInfo.ellipsoid.transform[c][r];
             }
         }
-        ellipsoid.sphere = meshInfo.ellipsoid.sphere;
+        ellipsoid.sphere    = meshInfo.ellipsoid.sphere;
+        ellipsoid.boundsMin = meshInfo.ellipsoid.boundsMin;
+        ellipsoid.boundsMax = meshInfo.ellipsoid.boundsMax;
         truncatedEllipsoids.Push(ellipsoid);
     }
     cmd->SubmitBuffer(&resourceBuffer, resources.data, sizeof(Resource) * meshInfos.Length());
@@ -2862,6 +2864,7 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
         .Bind(&mergedInstancesAABBBuffer)
         .Bind(&partitionErrorThresholdsBuffer)
         .Bind(&instanceGroupTransformOffsets)
+        .Bind(&resourceTruncatedEllipsoidsBuffer)
         .End();
 
     cmd->Dispatch(finalNumPartitions, 1, 1);

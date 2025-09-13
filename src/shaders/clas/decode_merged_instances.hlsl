@@ -7,6 +7,7 @@ StructuredBuffer<AABB> resourceAABBs : register(t1);
 RWStructuredBuffer<AABB> aabbs : register(u2);
 RWStructuredBuffer<uint> partitionErrorThresholds: register(u3);
 StructuredBuffer<uint> instanceGroupTransformOffsets: register(t4);
+StructuredBuffer<GPUTruncatedEllipsoid> truncatedEllipsoids : register(t5);
 
 [numthreads(32, 1, 1)]
 void main(uint3 groupID : SV_GroupID, uint3 dtID : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex)
@@ -17,11 +18,22 @@ void main(uint3 groupID : SV_GroupID, uint3 dtID : SV_DispatchThreadID, uint gro
 
     for (uint transformIndex = offset + groupIndex; transformIndex < end; transformIndex += 32)
     {
-        float3x4 worldFromObject = instanceTransforms[transformIndex];
         //GPUInstance instance = gpuInstances[instanceIndex];
 
         // TODO: 
-        AABB aabb = resourceAABBs[0];
+        //AABB aabb = resourceAABBs[0];
+        GPUTruncatedEllipsoid ellipsoid = truncatedEllipsoids[0];
+        float3 aabbMin = ellipsoid.sphere.xyz - ellipsoid.sphere.w;
+        float3 aabbMax = ellipsoid.sphere.xyz + ellipsoid.sphere.w;
+
+        float3x4 ellipsoidFromObject = ellipsoid.transform;
+        float3x4 objectFromEllipsoid_ = Inverse(ellipsoidFromObject);
+        float4x4 objectFromEllipsoid = float4x4(
+                        objectFromEllipsoid_[0][0], objectFromEllipsoid_[0][1], objectFromEllipsoid_[0][2], objectFromEllipsoid_[0][3], 
+                        objectFromEllipsoid_[1][0], objectFromEllipsoid_[1][1], objectFromEllipsoid_[1][2], objectFromEllipsoid_[1][3], 
+                        objectFromEllipsoid_[2][0], objectFromEllipsoid_[2][1], objectFromEllipsoid_[2][2], objectFromEllipsoid_[2][3], 
+                        0, 0, 0, 1.f);
+        float3x4 worldFromObject = mul(instanceTransforms[transformIndex], objectFromEllipsoid);
 
         float3 minP = float3(FLT_MAX, FLT_MAX, FLT_MAX);
         float3 maxP = float3(-FLT_MAX, -FLT_MAX, -FLT_MAX);
@@ -31,7 +43,7 @@ void main(uint3 groupID : SV_GroupID, uint3 dtID : SV_DispatchThreadID, uint gro
             {
                 for (int x = 0; x < 2; x++)
                 {
-                    float3 p = float3(x ? aabb.maxX : aabb.minX, y ? aabb.maxY : aabb.minY, z ? aabb.maxZ : aabb.minZ);
+                    float3 p = float3(x ? aabbMax.x : aabbMin.x, y ? aabbMax.y : aabbMin.y, z ? aabbMax.z : aabbMin.z);
                     float3 pos = mul(worldFromObject, float4(p, 1.f));
                     minP = min(minP, pos);
                     maxP = max(maxP, pos);
@@ -49,12 +61,12 @@ void main(uint3 groupID : SV_GroupID, uint3 dtID : SV_DispatchThreadID, uint gro
 #endif
 
         AABB transformedAABB;
-        transformedAABB.minX = minP.x;//- 100.f;
-        transformedAABB.minY = minP.y;//- 100.f;
-        transformedAABB.minZ = minP.z;//- 100.f;
-        transformedAABB.maxX = maxP.x;//+ 100.f;
-        transformedAABB.maxY = maxP.y;//+ 100.f;
-        transformedAABB.maxZ = maxP.z;//+ 100.f;
+        transformedAABB.minX = minP.x;
+        transformedAABB.minY = minP.y;
+        transformedAABB.minZ = minP.z;
+        transformedAABB.maxX = maxP.x;
+        transformedAABB.maxY = maxP.y;
+        transformedAABB.maxZ = maxP.z;
         aabbs[transformIndex] = transformedAABB;
     }
 }

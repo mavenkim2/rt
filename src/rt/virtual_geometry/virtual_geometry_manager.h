@@ -61,6 +61,8 @@ struct TruncatedEllipsoid
 {
     AffineSpace transform;
     Vec4f sphere;
+    Vec3f boundsMin;
+    Vec3f boundsMax;
 };
 
 struct VoxelClusterGroupFixup

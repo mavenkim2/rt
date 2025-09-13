@@ -92,6 +92,8 @@ struct GPUTruncatedEllipsoid
     row_major float3x4 transform;
 #endif
     float4 sphere;
+    float3 boundsMin;
+    float3 boundsMax;
 };
 
 struct AccelerationStructureInstance

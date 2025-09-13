@@ -46,12 +46,12 @@ RWStructuredBuffer<uint> globals : register(u20);
 
 [[vk::push_constant]] RayPushConstant push;
 
-void IntersectAABB(float3 boundsMin, float3 boundsMax, float3 o, float3 invDir, out float tEntry, out float tLeave, out float3 tMin)
+void IntersectAABB(float3 boundsMin, float3 boundsMax, float3 o, float3 invDir, out float tEntry, out float tLeave)
 {
     float3 tIntersectMin = (boundsMin - o) * invDir;
     float3 tIntersectMax = (boundsMax - o) * invDir;
 
-    tMin = min(tIntersectMin, tIntersectMax);
+    float3 tMin = min(tIntersectMin, tIntersectMax);
     float3 tMax = max(tIntersectMin, tIntersectMax);
 
     tEntry = max(tMin.x, max(tMin.y, tMin.z));
@@ -134,40 +134,50 @@ void main()
                     GPUTruncatedEllipsoid ellipsoid = truncatedEllipsoids[resourceID];
                     uint primIndex = query.CandidatePrimitiveIndex();
                     float3x4 worldFromObject = instanceTransforms[instanceGroupTransformOffsets[instance.groupIndex] + primIndex];
-                    float3x4 objectFromWorld_ = Inverse(worldFromObject);
-                    float4x4 objectFromWorld = float4x4(
-                        objectFromWorld_[0][0], objectFromWorld_[0][1], objectFromWorld_[0][2], objectFromWorld_[0][3], 
-                        objectFromWorld_[1][0], objectFromWorld_[1][1], objectFromWorld_[1][2], objectFromWorld_[1][3], 
-                        objectFromWorld_[2][0], objectFromWorld_[2][1], objectFromWorld_[2][2], objectFromWorld_[2][3], 
-                        0, 0, 0, 1.f);
-                    float3x4 ellipsoidFromWorld = mul(ellipsoid.transform, objectFromWorld);
-
-                    
-                    // TODO: clip against bounding box?
-                    float3 rayPos = mul(ellipsoidFromWorld, float4(query.WorldRayOrigin(), 1.f));
-                    float3 rayDir = mul(ellipsoidFromWorld, float4(query.WorldRayDirection(), 0.f));
+                    float3x4 objectFromWorld = Inverse(worldFromObject);
+                    float3 rayPos = mul(ellipsoid.transform, float4(mul(objectFromWorld, float4(query.WorldRayOrigin(), 1.f)), 1.f));
+                    float3 rayDir = mul(ellipsoid.transform, float4(mul(objectFromWorld, float4(query.WorldRayDirection(), 0.f)), 0.f));
                     rayPos -= ellipsoid.sphere.xyz;
 
                     // Ray sphere test
                     float a = dot(rayDir, rayDir);
                     float b = 2.f * dot(rayDir, rayPos);
-                    float c = dot(rayPos, rayPos) - ellipsoid.sphere.w;
-                    float l = length(rayPos - b / (2 * a) * rayDir);
+                    float c = dot(rayPos, rayPos) - ellipsoid.sphere.w * ellipsoid.sphere.w;
+                    float l = length(rayPos - b / (2.f * a) * rayDir);
                     float discrim = 4 * a * (ellipsoid.sphere.w + l) * (ellipsoid.sphere.w - l);
 
+#if 0
+                    if (depth == 0)
+                    {
+                        uint debugIndex;
+                        InterlockedAdd(globals[GLOBALS_DEBUG], 1, debugIndex);
+                        if (debugIndex < 1u << 21u)
+                        {
+                            debugBuffer[debugIndex] = float2(objectFromWorld[0][3], objectFromWorld[1][3]);
+                        }
+                    }
+#endif
 
-                    if (discrim < 0.f) continue;
+                    if (discrim < 0.f)
+                    {
+                        continue;
+                    }
                     discrim = sqrt(discrim);
                     float q = -.5f * (b < 0.f ? b - discrim : b + discrim);
                     float t0 = q / a;
                     float t1 = c / q;
+
                     if (t0 > t1)
                     {
                         float temp = t0;
                         t0 = t1;
                         t1 = temp;
                     }
-                    if (t0 > hitT || t1 <= 0.f) continue;
+                    if (t0 > hitT || t1 <= 0.f)
+                    {
+                        continue;
+                    }
+
                     float tHit = t0;
                     if (tHit <= 0.f)
                     {
@@ -177,12 +187,18 @@ void main()
                     hitT = tHit;
                     query.CommitProceduralPrimitiveHit(tHit);
 
-                    uint debugIndex;
-                    InterlockedAdd(globals[GLOBALS_DEBUG], 1, debugIndex);
-                    if (debugIndex < 1u << 21u)
+                    // TODO: clip against bounding box?
+#if 0
+                    float tEntry, tLeave;
+                    IntersectAABB(ellipsoid.boundsMin - ellipsoid.sphere.xyz, ellipsoid.boundsMax - ellipsoid.sphere.xyz, rayPos, rcp(rayDir), tEntry, tLeave);
+                    tHit = max(tHit, tEntry);
+                    tLeave = min(t1, tLeave);
+                    if (tHit <= tLeave)
                     {
-                        debugBuffer[debugIndex] = float2(t0, t1);
+                        hitT = tHit;
+                        query.CommitProceduralPrimitiveHit(tHit);
                     }
+#endif
                     continue;
                 }
 #ifndef TRACE_BRICKS
@@ -292,16 +308,13 @@ void main()
                            abs(objectRayDir.z) < 1e-8f ? 0.f : 1.f / objectRayDir.z);
 
                 float tEntry, tLeave;
-                float3 tMin;
-                IntersectAABB(float3(0, 0, 0), float3(voxelMax), objectRayOrigin, invDir, tEntry, tLeave, tMin);
+                IntersectAABB(float3(0, 0, 0), float3(voxelMax), objectRayOrigin, invDir, tEntry, tLeave);
 
                 tLeave = min(tLeave, hitT);
                 tEntry = max(tEntry, 0);
 
                 if (tEntry <= tLeave)
                 {
-                    uint axis = tEntry == tMin.x ? 0 : (tEntry == tMin.y ? 1 : 2);
-
                     float tHit = tEntry;
                     float maxT = tLeave;
 
@@ -351,7 +364,7 @@ void main()
                         }
 
                         float nextT = min(nextTime.x, min(nextTime.y, nextTime.z));
-                        axis = nextT == nextTime.x ? 0 : (nextT == nextTime.y ? 1 : 2);
+                        uint axis = nextT == nextTime.x ? 0 : (nextT == nextTime.y ? 1 : 2);
 
                         voxel[axis] += step[axis];
                         nextTime[axis] += stepT[axis];
@@ -527,7 +540,8 @@ void main()
             {
                 uint primIndex = query.CommittedPrimitiveIndex();
                 GPUInstance instance = gpuInstances[instanceID];
-                uint resourceID = instance.resourceID;
+                // TODO
+                uint resourceID = 0u;//instance.resourceID;
                 GPUTruncatedEllipsoid ellipsoid = truncatedEllipsoids[resourceID];
 
                 float3x4 worldFromObject = instanceTransforms[instanceGroupTransformOffsets[instance.groupIndex] + primIndex];
@@ -538,7 +552,7 @@ void main()
                     objectFromWorld_[2][0], objectFromWorld_[2][1], objectFromWorld_[2][2], objectFromWorld_[2][3], 
                     0, 0, 0, 1.f);
                 float3x4 inverseTransform = mul(ellipsoid.transform, objectFromWorld);
-                float3 sphereNormal = normalize(mul(inverseTransform, float4(query.WorldRayOrigin(), 1.f)) - ellipsoid.sphere.xyz);
+                float3 sphereNormal = normalize(mul(inverseTransform, float4(hitInfo.hitP, 1.f)) - ellipsoid.sphere.xyz);
                 float3x3 normalTransform = transpose(float3x3(inverseTransform[0].xyz, inverseTransform[1].xyz, inverseTransform[2].xyz));
                 float3 normal = normalize(mul(normalTransform, sphereNormal));
 
