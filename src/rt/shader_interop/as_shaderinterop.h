@@ -275,9 +275,6 @@ struct PackedHierarchyNode
     uint leafInfo[CHILDREN_PER_HIERARCHY_NODE];
 };
 
-#define GPU_INSTANCE_FLAG_CULL   (1u << 0u)
-#define GPU_INSTANCE_FLAG_MERGED (1u << 1u)
-
 struct GPUTransform
 {
     uint32_t scaleX_scaleY;
@@ -335,37 +332,35 @@ float3x4 ConvertGPUMatrix(GPUTransform transform, float3 anchor, float3 scale)
 }
 #endif
 
+#define GPU_INSTANCE_FLAG_CULL         (1u << 0u)
+#define GPU_INSTANCE_FLAG_MERGED       (1u << 1u)
+#define GPU_INSTANCE_FLAG_WAS_RENDERED (1u << 2u)
+
 struct GPUInstance
 {
-#ifdef __cplusplus
-    float worldFromObject[3][4];
-#else
-    row_major float3x4 worldFromObject;
-#endif
+    uint transformIndex;
     uint globalRootNodeOffset;
     uint resourceID;
     uint partitionIndex;
     uint voxelAddressOffset;
     uint clusterLookupTableOffset;
-    uint groupIndex;
     uint flags;
 };
 
+#define PARTITION_FLAG_INSTANCES_RENDERED (1u << 0)
+#define PARTITION_FLAG_PROXY_RENDERED     (1u << 1)
+
 struct PartitionInfo
 {
+    float4 lodBounds;
+    uint lodError;
     float3 base;
     float3 scale;
     uint32_t transformOffset;
     uint32_t transformCount;
+    uint32_t flags;
+    uint32_t proxyInstanceIndex;
 };
-
-// struct InstanceRef
-// {
-//     float bounds[6];
-//     uint instanceID;
-//     uint nodeOffset;
-//     uint partitionIndex;
-// };
 
 struct GPUClusterFixup
 {
@@ -383,6 +378,7 @@ struct Resource
     uint maxClusters;
     uint finestAddressIndex;
     uint clusterLookupTableOffset;
+    uint voxelAddressOffset;
 };
 
 struct VoxelAddressTableEntry
@@ -427,9 +423,11 @@ struct VoxelAddressTableEntry
 #define GLOBALS_PTLAS_UPDATE_COUNT_INDEX 22
 #define GLOBALS_PTLAS_WRITE_COUNT_INDEX  23
 
-#define GLOBALS_NEW_INSTANCE_COUNT 24
+#define GLOBALS_NEW_INSTANCE_COUNT      24
+#define GLOBALS_VISIBLE_PARTITION_COUNT 25
+#define GLOBALS_FREED_PARTITION_COUNT   26
 
-#define GLOBALS_SIZE 26
+#define GLOBALS_SIZE 27
 
 #ifdef __cplusplus
 }

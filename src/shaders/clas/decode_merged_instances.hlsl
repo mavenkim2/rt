@@ -5,9 +5,8 @@
 StructuredBuffer<GPUTransform> instanceTransforms : register(t0);
 StructuredBuffer<AABB> resourceAABBs : register(t1);
 RWStructuredBuffer<AABB> aabbs : register(u2);
-RWStructuredBuffer<uint> partitionErrorThresholds: register(u3);
-StructuredBuffer<PartitionInfo> partitionInfos: register(t4);
-StructuredBuffer<GPUTruncatedEllipsoid> truncatedEllipsoids : register(t5);
+RWStructuredBuffer<PartitionInfo> partitionInfos: register(u3);
+StructuredBuffer<GPUTruncatedEllipsoid> truncatedEllipsoids : register(t4);
 
 [numthreads(32, 1, 1)]
 void main(uint3 groupID : SV_GroupID, uint3 dtID : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex)
@@ -54,14 +53,20 @@ void main(uint3 groupID : SV_GroupID, uint3 dtID : SV_DispatchThreadID, uint gro
             }
         }
 
-#if 0
-        float error = 0.f;
-        float maxScale = 0.f;
+        float3 extent = aabbMax - aabbMin;
+        float scaleX = length2(float3(worldFromEllipsoid[0].x, worldFromEllipsoid[1].x, worldFromEllipsoid[2].x));
+        float scaleY = length2(float3(worldFromEllipsoid[0].y, worldFromEllipsoid[1].y, worldFromEllipsoid[2].y));
+        float scaleZ = length2(float3(worldFromEllipsoid[0].z, worldFromEllipsoid[1].z, worldFromEllipsoid[2].z));
+
+        float3 scale = float3(scaleX, scaleY, scaleZ);
+        scale = sqrt(scale);
+        float maxScale = max(scale.x, max(scale.y, scale.z));
+
+        float error = max(extent.x, max(extent.y, extent.z));
         float instanceError = error * maxScale;
 
         uint uintInstanceError = asuint(instanceError);
-        InterlockedMax(partitionErrorThresholds[instance.groupIndex], uintInstanceError);
-#endif
+        InterlockedMax(partitionInfos[instanceGroupIndex].lodError, uintInstanceError);
 
         AABB transformedAABB;
         transformedAABB.minX = minP.x;

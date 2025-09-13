@@ -1,14 +1,14 @@
 #ifndef PTLAS_WRITE_INSTANCES_HLSLI_
 #define PTLAS_WRITE_INSTANCES_HLSLI_
 
-void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint instanceIndex, uint instanceID, AABB aabb, bool update, uint flags)
+void WritePTLASDescriptors(float3x4 worldFromObject, uint64_t address, uint instanceIndex, uint instanceID, AABB aabb, bool update, uint flags)
 {
-    uint partition = instance.partitionIndex;
     uint2 offsets = uint2(instanceIndex >> 5u, instanceIndex & 31u);
 
-    bool wasRendered = renderedBitVector[offsets.x] & (1u << offsets.y);
+    uint partition = gpuInstances[instanceIndex].partitionIndex;
+    uint wasRendered = gpuInstances[instanceIndex].flags & GPU_INSTANCE_FLAG_WAS_RENDERED;
 
-    if (1)//!wasRendered)
+    if (!wasRendered)
     {
         uint descriptorIndex;
         InterlockedAdd(globals[GLOBALS_PTLAS_WRITE_COUNT_INDEX], 1, descriptorIndex);
@@ -25,7 +25,7 @@ void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint instance
                     for (int x = 0; x < 2; x++)
                     {
                         float3 p = float3(x ? aabb.maxX : aabb.minX, y ? aabb.maxY : aabb.minY, z ? aabb.maxZ : aabb.minZ);
-                        float3 pos = mul(instance.worldFromObject, float4(p, 1.f));
+                        float3 pos = mul(worldFromObject, float4(p, 1.f));
                         minP = min(minP, pos);
                         maxP = max(maxP, pos);
                     }
@@ -39,7 +39,7 @@ void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint instance
         }
         instanceInfo.instanceFlags |= flags;
 
-        instanceInfo.transform = instance.worldFromObject;
+        instanceInfo.transform = worldFromObject;
         instanceInfo.instanceID = instanceID;
         instanceInfo.instanceMask = 0xff;
         instanceInfo.instanceContributionToHitGroupIndex = 0;
@@ -48,7 +48,8 @@ void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint instance
         instanceInfo.accelerationStructure = address;
 
         ptlasInstanceWriteInfos[descriptorIndex] = instanceInfo;
-        InterlockedOr(renderedBitVector[offsets.x], (1u << offsets.y));
+
+        gpuInstances[instanceIndex].flags |= GPU_INSTANCE_FLAG_WAS_RENDERED;
     }
     else if (update)
     {
@@ -62,8 +63,6 @@ void WritePTLASDescriptors(GPUInstance instance, uint64_t address, uint instance
 
         ptlasInstanceUpdateInfos[descriptorIndex] = instanceInfo;
     }
-
-    InterlockedOr(thisFrameBitVector[offsets.x], 1u << offsets.y);
 }
 
 #endif

@@ -4,65 +4,7 @@
 #include "../../rt/shader_interop/as_shaderinterop.h"
 #include "../../rt/shader_interop/gpu_scene_shaderinterop.h"
 #include "../../rt/shader_interop/hierarchy_traversal_shaderinterop.h"
-
-// TODO: don't hardcode this 
-static const float zNear = 1e-2f;
-static const float zFar = 1000.f;
-
-// See if child should be visited
-float2 TestNode(float3x4 renderFromObject, float3x4 cameraFromRender, float4 lodBounds, float maxScale, out float test, bool culled)
-{
-    // Find length to cluster center
-    float3 center = mul(renderFromObject, float4(lodBounds.xyz, 1.f));
-
-    float radius = lodBounds.w * maxScale;
-    float distSqr = length2(center);
-
-    // Find angle between vector to cluster center and view vector
-    float3 cameraForward = -cameraFromRender[2].xyz;
-
-    float z = dot(cameraForward, center);
-    if (culled)
-    {
-        float zf = abs(dot(cameraForward, center));
-        float zr = abs(dot(cameraFromRender[0].xyz, center));
-        float zu = abs(dot(cameraFromRender[1].xyz, center));
-        z = max(zf, max(zr, zu));
-    }
-
-    float x = distSqr - z * z;
-    x = sqrt(max(0.f, x));
-
-    // Find angle between vector to cluster center and vector to tangent point on sphere
-    float distTangentSqr = distSqr - radius * radius;
-
-    float distTangent = sqrt(max(0.f, distTangentSqr));
-
-    // Find cosine of the above angles subtracted/added
-    float invDistSqr = rcp(distSqr);
-    float cosSub = (z * distTangent + x * radius) * invDistSqr;
-    float cosAdd = (z * distTangent - x * radius) * invDistSqr;
-
-    test = cosAdd;
-
-    // Clipping
-    float depth = z - zNear;
-    if (distTangentSqr < 0.f || cosSub * distTangent < zNear)
-    {
-        float cosSubX = max(0.f, x - sqrt(radius * radius - depth * depth));
-        cosSub = zNear * rsqrt(cosSubX * cosSubX + zNear * zNear);
-    }
-    if (distTangentSqr < 0.f || cosAdd * distTangent < zNear)
-    {
-        float cosAddX = x + sqrt(radius * radius - depth * depth);
-        cosAdd = zNear * rsqrt(cosAddX * cosAddX + zNear * zNear);
-    }
-
-    float minZ = max(z - radius, zNear);
-    float maxZ = max(z + radius, zNear);
-
-    return z + radius > zNear ? float2(minZ * cosAdd, maxZ * cosSub) : float2(0, 0);
-}
+#include "lod_error_test.hlsli"
 
 #define MAX_NODES_PER_BATCH 16
 #define PACKED_NODE_SIZE 12
@@ -110,6 +52,8 @@ RWStructuredBuffer<BLASData> blasDatas : register(u9);
 
 RWStructuredBuffer<StreamingRequest> requests : register(u10);
 RWStructuredBuffer<uint> instanceBitmasks : register(u11);
+StructuredBuffer<GPUTransform> instanceTransforms : register(t12);
+StructuredBuffer<PartitionInfo> partitionInfos : register(t13);
 
 struct ClusterCull 
 {
@@ -137,8 +81,10 @@ struct ClusterCull
         {
             float4 lodBounds = node.lodBounds[childIndex];
             float maxParentError = node.maxParentError[childIndex];
+            
+            PartitionInfo info = partitionInfos[instance.partitionIndex];
 
-            float3x4 renderFromObject = instance.worldFromObject;
+            float3x4 renderFromObject = ConvertGPUMatrix(instanceTransforms[instance.transformIndex], info.base, info.scale);
             Translate(renderFromObject, -gpuScene.cameraP);
 
             float scaleX = length2(float3(renderFromObject[0].x, renderFromObject[1].x, renderFromObject[2].x));
@@ -267,7 +213,9 @@ struct ClusterCull
         float4 lodBounds = header.lodBounds;
         float lodError = header.lodError;
 
-        float3x4 renderFromObject = instance.worldFromObject;
+        PartitionInfo info = partitionInfos[instance.partitionIndex];
+        float3x4 renderFromObject = ConvertGPUMatrix(instanceTransforms[instance.transformIndex], info.base, info.scale);
+
         Translate(renderFromObject, -gpuScene.cameraP);
         float scaleX = length2(float3(renderFromObject[0].x, renderFromObject[1].x, renderFromObject[2].x));
         float scaleY = length2(float3(renderFromObject[0].y, renderFromObject[1].y, renderFromObject[2].y));

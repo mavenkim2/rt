@@ -4,17 +4,17 @@
 #include "../../rt/shader_interop/hierarchy_traversal_shaderinterop.h"
 #include "../bit_twiddling.hlsli"
 
-RWStructuredBuffer<uint> renderedBitVector : register(u0);
-RWStructuredBuffer<uint> thisFrameBitVector : register(u1);
-RWStructuredBuffer<uint> globals : register(u2);
-RWStructuredBuffer<PTLAS_WRITE_INSTANCE_INFO> ptlasInstanceWriteInfos : register(u3);
-RWStructuredBuffer<PTLAS_UPDATE_INSTANCE_INFO> ptlasInstanceUpdateInfos : register(u4);
-StructuredBuffer<uint64_t> blasAddresses : register(t5);
-StructuredBuffer<BLASData> blasDatas : register(t6);
-RWStructuredBuffer<GPUInstance> gpuInstances : register(u7);
-StructuredBuffer<AABB> aabbs : register(t8);
-StructuredBuffer<VoxelAddressTableEntry> voxelAddressTable : register(t9);
-StructuredBuffer<uint> instanceBitmasks : register(t10);
+RWStructuredBuffer<uint> globals : register(u0);
+RWStructuredBuffer<PTLAS_WRITE_INSTANCE_INFO> ptlasInstanceWriteInfos : register(u1);
+RWStructuredBuffer<PTLAS_UPDATE_INSTANCE_INFO> ptlasInstanceUpdateInfos : register(u2);
+StructuredBuffer<uint64_t> blasAddresses : register(t3);
+StructuredBuffer<BLASData> blasDatas : register(t4);
+RWStructuredBuffer<GPUInstance> gpuInstances : register(u5);
+StructuredBuffer<AABB> aabbs : register(t6);
+StructuredBuffer<VoxelAddressTableEntry> voxelAddressTable : register(t7);
+StructuredBuffer<uint> instanceBitmasks : register(t8);
+StructuredBuffer<GPUTransform> instanceTransforms : register(t9);
+StructuredBuffer<PartitionInfo> partitionInfos : register(t10);
 
 #include "ptlas_write_instances.hlsli"
 
@@ -57,5 +57,8 @@ void main(uint3 dtID : SV_DispatchThreadID)
     if (address == 0) return;
 
     AABB aabb = aabbs[instance.resourceID];
-    WritePTLASDescriptors(instance, address, blasData.instanceID, blasData.instanceID, aabb, true, 0x10u);
+
+    PartitionInfo info = partitionInfos[instance.partitionIndex];
+    float3x4 worldFromObject = ConvertGPUMatrix(instanceTransforms[instance.transformIndex], info.base, info.scale);
+    WritePTLASDescriptors(worldFromObject, address, blasData.instanceID, blasData.instanceID, aabb, true, 0x10u);
 }

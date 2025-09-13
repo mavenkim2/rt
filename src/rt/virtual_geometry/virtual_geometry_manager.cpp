@@ -33,8 +33,7 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
     {
         virtualTable.Push(VirtualPage{0, PageFlag::NonResident, -1});
     }
-
-    u64 totalNumBytes = 0;
+    totalNumBytes = 0;
 
     instanceIDFreeRanges = StaticArray<Range>(arena, 32);
     instanceIDFreeRanges.Push(Range{0, maxInstances});
@@ -2451,23 +2450,23 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstan
     // }
 
     // Update unused instances
-    {
-        device->BeginEvent(cmd, "PTLAS Update Unused Instances");
-        cmd->StartBindingCompute(ptlasUpdateUnusedInstancesPipeline,
-                                 &ptlasUpdateUnusedInstancesLayout)
-            .Bind(lastFrameBitVector)
-            .Bind(thisFrameBitVector)
-            .Bind(&clasGlobalsBuffer)
-            .Bind(&ptlasUpdateInfosBuffer)
-            .Bind(&ptlasWriteInfosBuffer)
-            .End();
-        cmd->Dispatch(1440, 1, 1);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_SHADER_READ_BIT);
-        cmd->FlushBarriers();
-        device->EndEvent(cmd);
-    }
+    // {
+    //     device->BeginEvent(cmd, "PTLAS Update Unused Instances");
+    //     cmd->StartBindingCompute(ptlasUpdateUnusedInstancesPipeline,
+    //                              &ptlasUpdateUnusedInstancesLayout)
+    //         .Bind(lastFrameBitVector)
+    //         .Bind(thisFrameBitVector)
+    //         .Bind(&clasGlobalsBuffer)
+    //         .Bind(&ptlasUpdateInfosBuffer)
+    //         .Bind(&ptlasWriteInfosBuffer)
+    //         .End();
+    //     cmd->Dispatch(1440, 1, 1);
+    //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+    //                  VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+    //                  VK_ACCESS_2_SHADER_READ_BIT);
+    //     cmd->FlushBarriers();
+    //     device->EndEvent(cmd);
+    // }
 
     // Update command infos
     {
@@ -2915,6 +2914,8 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
         device->CreateBuffer(VK_BUFFER_USAGE_2_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
                                  VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT,
                              totalAccel);
+    totalNumBytes += scratchBuffer.size;
+    totalNumBytes += accelBuffer.size;
 
     mergedInstancesAABBBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
@@ -2930,7 +2931,6 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
     {
         create.buffer = &accelBuffer;
     }
-    totalAccel = 0;
     device->CreateAccelerationStructures(creates);
 
     StaticArray<u64> accelDeviceAddresses(scratch.temp.arena, finalNumPartitions);
@@ -2952,10 +2952,12 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
     mergedPartitionDeviceAddresses = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                                               VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                                           sizeof(u64) * finalNumPartitions);
+    totalNumBytes += mergedPartitionDeviceAddresses.size;
 
     partitionInfosBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         sizeof(PartitionInfo) * (partitionInfos.Length()));
+    totalNumBytes += partitionInfosBuffer.size;
 
     u32 tlasScratchSize, tlasAccelSize;
     device->GetPTLASBuildSizes(maxInstances, 1024, maxPartitions, 0, tlasScratchSize,
@@ -2965,29 +2967,37 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
         tlasScratchSize);
+    totalNumBytes += tlasScratchSize;
     tlasAccelBuffer =
         device->CreateBuffer(VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
                                  VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                              tlasAccelSize);
+    totalNumBytes += tlasAccelSize;
     // totalNumBytes += tlasAccelBuffer.size;
     // totalNumBytes += tlasScratchBuffer.size;
 
-    instancesBuffer                = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                              VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                                          sizeof(GPUInstance) * maxInstances);
-    partitionCountsBuffer          = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                              VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                                          sizeof(u32) * finalNumPartitions);
+    // TODO: get rid of this
+    instancesBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                               VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                           sizeof(GPUInstance) * maxInstances);
+    totalNumBytes += instancesBuffer.size;
+    partitionCountsBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                     VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                                 sizeof(u32) * finalNumPartitions);
+    totalNumBytes += partitionCountsBuffer.size;
     partitionErrorThresholdsBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                                               VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                                           sizeof(f32) * finalNumPartitions);
+    totalNumBytes += partitionErrorThresholdsBuffer.size;
     partitionReadbackBuffer =
         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                              sizeof(u32) * finalNumPartitions, MemoryUsage::GPU_TO_CPU);
+    totalNumBytes += partitionReadbackBuffer.size;
 
     u32 transformSize        = sizeof(instanceTransforms[0]) * instanceTransforms.Length();
     instanceTransformsBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, transformSize);
+    totalNumBytes += transformSize;
     cmd->SubmitBuffer(&instanceTransformsBuffer, instanceTransforms.data, transformSize);
 
     cmd->SubmitBuffer(&instancesBuffer, proxyInstances.data,
@@ -3059,6 +3069,8 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
     // }
 
     cmd->BuildCustomBLAS(accelBuildInfos);
+
+    Print("%llu total num bytes\n", totalNumBytes);
 }
 
 } // namespace rt

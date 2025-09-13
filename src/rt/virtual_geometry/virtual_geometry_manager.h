@@ -362,9 +362,9 @@ struct VirtualGeometryManager
     GPUBuffer resourceBuffer;
     GPUBuffer resourceBitVector;
 
-    GPUBuffer ptlasInstanceBitVectorBuffer;
-    GPUBuffer ptlasInstanceFrameBitVectorBuffer0;
-    GPUBuffer ptlasInstanceFrameBitVectorBuffer1;
+    // GPUBuffer ptlasInstanceBitVectorBuffer;
+    // GPUBuffer ptlasInstanceFrameBitVectorBuffer0;
+    // GPUBuffer ptlasInstanceFrameBitVectorBuffer1;
     GPUBuffer instanceBitmasksBuffer;
 
     GPUBuffer voxelAABBBuffer;
@@ -421,6 +421,8 @@ struct VirtualGeometryManager
     u32 maxPartitions;
     u32 numAllocatedPartitions;
     u32 numInstances;
+
+    u64 totalNumBytes;
 
     VirtualGeometryManager(CommandBuffer *cmd, Arena *arena);
     void EditRegistration(u32 instanceID, u32 pageIndex, bool add);
