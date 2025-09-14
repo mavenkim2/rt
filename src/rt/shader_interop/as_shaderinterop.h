@@ -353,7 +353,7 @@ struct GPUInstance
 struct PartitionInfo
 {
     float4 lodBounds;
-    uint lodError;
+    float lodError;
     float3 base;
     float3 scale;
     uint32_t transformOffset;
@@ -423,11 +423,14 @@ struct VoxelAddressTableEntry
 #define GLOBALS_PTLAS_UPDATE_COUNT_INDEX 22
 #define GLOBALS_PTLAS_WRITE_COUNT_INDEX  23
 
-#define GLOBALS_NEW_INSTANCE_COUNT      24
-#define GLOBALS_VISIBLE_PARTITION_COUNT 25
-#define GLOBALS_FREED_PARTITION_COUNT   26
+#define GLOBALS_NEW_INSTANCE_COUNT           24
+#define GLOBALS_FREED_PARTITION_COUNT        25
+#define GLOBALS_VISIBLE_PARTITION_COUNT      26
+#define GLOBALS_VISIBLE_PARTITION_INDIRECT_X 27
+#define GLOBALS_VISIBLE_PARTITION_INDIRECT_Y 28
+#define GLOBALS_VISIBLE_PARTITION_INDIRECT_Z 29
 
-#define GLOBALS_SIZE 27
+#define GLOBALS_SIZE 30
 
 #ifdef __cplusplus
 }

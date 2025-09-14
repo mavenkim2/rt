@@ -314,6 +314,7 @@ void TraverseHierarchy(uint dtID)
             {
                 traversal.ProcessNode(workItem, childIndex);
                 processed = true;
+                nodeQueue[nodeReadOffset] = ~0u;
             }
 
             int numNodesCompleted = (int)(WaveActiveCountBits(isValid) >> CHILDREN_PER_HIERARCHY_NODE_BITS);

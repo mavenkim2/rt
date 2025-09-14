@@ -53,21 +53,6 @@ void main(uint3 groupID : SV_GroupID, uint3 dtID : SV_DispatchThreadID, uint gro
             }
         }
 
-        float3 extent = aabbMax - aabbMin;
-        float scaleX = length2(float3(worldFromEllipsoid[0].x, worldFromEllipsoid[1].x, worldFromEllipsoid[2].x));
-        float scaleY = length2(float3(worldFromEllipsoid[0].y, worldFromEllipsoid[1].y, worldFromEllipsoid[2].y));
-        float scaleZ = length2(float3(worldFromEllipsoid[0].z, worldFromEllipsoid[1].z, worldFromEllipsoid[2].z));
-
-        float3 scale = float3(scaleX, scaleY, scaleZ);
-        scale = sqrt(scale);
-        float maxScale = max(scale.x, max(scale.y, scale.z));
-
-        float error = max(extent.x, max(extent.y, extent.z));
-        float instanceError = error * maxScale;
-
-        uint uintInstanceError = asuint(instanceError);
-        InterlockedMax(partitionInfos[instanceGroupIndex].lodError, uintInstanceError);
-
         AABB transformedAABB;
         transformedAABB.minX = minP.x;
         transformedAABB.minY = minP.y;

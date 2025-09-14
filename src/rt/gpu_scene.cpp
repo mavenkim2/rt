@@ -92,39 +92,29 @@ void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, Geo
 }
 
 static void FlattenInstances(ScenePrimitives *currentScene, const AffineSpace &transform,
-                             Array<GPUInstance> &gpuInstances,
-                             VirtualGeometryManager &virtualGeometryManager)
+                             Array<Instance> &instances, Array<AffineSpace> &transforms)
 {
-    Instance *instances = (Instance *)currentScene->primitives;
+    Instance *sceneInstances = (Instance *)currentScene->primitives;
     for (u32 i = 0; i < currentScene->numPrimitives; i++)
     {
-        Instance &instance = instances[i];
+        Instance &instance = sceneInstances[i];
         AffineSpace newTransform =
             transform * currentScene->affineTransforms[instance.transformIndex];
         ScenePrimitives *nextScene = currentScene->childScenes[instance.id];
 
         if (nextScene->geometryType == GeometryType::Instance)
         {
-            FlattenInstances(nextScene, newTransform, gpuInstances, virtualGeometryManager);
+            FlattenInstances(nextScene, newTransform, instances, transforms);
         }
         else
         {
-            GPUInstance gpuInstance = {};
             u32 resourceID          = nextScene->sceneIndex;
-            gpuInstance.resourceID  = resourceID;
+            Instance instance       = {};
+            instance.transformIndex = transforms.Length();
+            instance.id             = resourceID;
 
-            for (int r = 0; r < 3; r++)
-            {
-                for (int c = 0; c < 4; c++)
-                {
-                    gpuInstance.worldFromObject[r][c] = newTransform[c][r];
-                }
-            }
-            VirtualGeometryManager::MeshInfo &meshInfo =
-                virtualGeometryManager.meshInfos[resourceID];
-            gpuInstance.voxelAddressOffset   = meshInfo.voxelAddressOffset;
-            gpuInstance.globalRootNodeOffset = meshInfo.hierarchyNodeOffset;
-            gpuInstances.Push(gpuInstance);
+            transforms.Push(newTransform);
+            instances.Push(instance);
         }
     }
 }
@@ -137,7 +127,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     Assert(status == NVAPI_OK);
     // Compile shaders
     Shader fillInstanceShader;
-    Shader instanceCullingShader;
     Shader prepareIndirectShader;
 
     Shader testShader;
@@ -175,11 +164,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         fillInstanceShader = device->CreateShader(ShaderStage::Compute, "fill instance descs",
                                                   fillInstanceShaderData);
 
-        string instanceCullingShaderName = "../src/shaders/instance_culling.spv";
-        string instanceCullingShaderData = OS_ReadFile(arena, instanceCullingShaderName);
-        instanceCullingShader = device->CreateShader(ShaderStage::Compute, "instance culling",
-                                                     instanceCullingShaderData);
-
         string prepareIndirectName = "../src/shaders/prepare_indirect.spv";
         string prepareIndirectData = OS_ReadFile(arena, prepareIndirectName);
         prepareIndirectShader = device->CreateShader(ShaderStage::Compute, "prepare indirect",
@@ -210,30 +194,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                      VK_SHADER_STAGE_COMPUTE_BIT);
     VkPipeline prepareIndirectPipeline = device->CreateComputePipeline(
         &prepareIndirectShader, &prepareIndirectLayout, 0, "prepare indirect");
-
-    // instance culling
-    PushConstant instanceCullingPush = {};
-    instanceCullingPush.stage        = ShaderStage::Compute;
-    instanceCullingPush.size         = sizeof(InstanceCullingPushConstant);
-    instanceCullingPush.offset       = 0;
-
-    DescriptorSetLayout instanceCullingLayout = {};
-    for (int i = 0; i <= 5; i++)
-    {
-        instanceCullingLayout.AddBinding(i, DescriptorType::StorageBuffer,
-                                         VK_SHADER_STAGE_COMPUTE_BIT);
-    }
-    instanceCullingLayout.AddBinding(6, DescriptorType::UniformBuffer,
-                                     VK_SHADER_STAGE_COMPUTE_BIT);
-    for (int i = 7; i <= 11; i++)
-    {
-        instanceCullingLayout.AddBinding(i, DescriptorType::StorageBuffer,
-                                         VK_SHADER_STAGE_COMPUTE_BIT);
-    }
-
-    VkPipeline instanceCullingPipeline =
-        device->CreateComputePipeline(&instanceCullingShader, &instanceCullingLayout,
-                                      &instanceCullingPush, "instance culling");
 
     DescriptorSetLayout testLayout = {};
     testLayout.AddBinding(0, DescriptorType::StorageBuffer, VK_SHADER_STAGE_COMPUTE_BIT);
@@ -682,17 +642,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     }
     virtualGeometryManager.FinalizeResources(dgfTransferCmd);
 
-    GPUBuffer visibleClustersBuffer = device->CreateBuffer(
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        MAX_VISIBLE_CLUSTERS * sizeof(VisibleCluster));
-
-    GPUBuffer queueBuffer = device->CreateBuffer(
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, sizeof(Queue));
-
-    GPUBuffer workItemQueueBuffer = device->CreateBuffer(
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        sizeof(Vec4u) * (MAX_CANDIDATE_NODES + MAX_CANDIDATE_CLUSTERS));
-
     Semaphore sem   = device->CreateSemaphore();
     sem.signalValue = 1;
     dgfTransferCmd->SignalOutsideFrame(sem);
@@ -711,7 +660,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     GPUAccelerationStructure tlas = {};
 
     // Build the TLAS over BLAS
-    StaticArray<GPUInstance> gpuInstances;
+    StaticArray<Instance> instances;
+    StaticArray<AffineSpace> instanceTransforms;
 
 #if 0
     GPUBuffer tlasBuffer = device->CreateBuffer(
@@ -739,36 +689,37 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     {
         ScratchArena scratch(&sceneScratch.temp.arena, 1);
         ScenePrimitives *scene = tlasScenes[0];
-        Array<GPUInstance> flattenedInstances(scratch.temp.arena,
-                                              scene->numPrimitives * tlasScenes.Length());
+        Array<Instance> flattenedInstances(scratch.temp.arena,
+                                           scene->numPrimitives * tlasScenes.Length());
+        Array<AffineSpace> flattenedTransforms(scratch.temp.arena,
+                                               scene->numPrimitives * tlasScenes.Length());
         AffineSpace transform = AffineSpace::Identity();
 
-        FlattenInstances(scene, transform, flattenedInstances, virtualGeometryManager);
-        gpuInstances = StaticArray<GPUInstance>(
-            sceneScratch.temp.arena, flattenedInstances.Length(), flattenedInstances.Length());
-        MemoryCopy(gpuInstances.data, flattenedInstances.data,
-                   sizeof(GPUInstance) * gpuInstances.Length());
+        FlattenInstances(scene, transform, flattenedInstances, flattenedTransforms);
+        instances = StaticArray<Instance>(sceneScratch.temp.arena, flattenedInstances.Length(),
+                                          flattenedInstances.Length());
+        instanceTransforms =
+            StaticArray<AffineSpace>(sceneScratch.temp.arena, flattenedTransforms.Length(),
+                                     flattenedTransforms.Length());
+        MemoryCopy(instances.data, flattenedInstances.data,
+                   sizeof(Instance) * instances.Length());
+        MemoryCopy(instanceTransforms.data, flattenedTransforms.data,
+                   sizeof(AffineSpace) * flattenedTransforms.Length());
     }
     else
     {
-        gpuInstances            = StaticArray<GPUInstance>(sceneScratch.temp.arena, 1);
-        GPUInstance gpuInstance = {};
-        AffineSpace identity    = AffineSpace::Identity();
-        for (int r = 0; r < 3; r++)
-        {
-            for (int c = 0; c < 4; c++)
-            {
-                gpuInstance.worldFromObject[r][c] = identity[c][r];
-            }
-        }
-        gpuInstance.globalRootNodeOffset = 0;
-        gpuInstances.Push(gpuInstance);
-
+        instances            = StaticArray<Instance>(sceneScratch.temp.arena, 1);
+        instanceTransforms   = StaticArray<AffineSpace>(sceneScratch.temp.arena, 1);
+        Instance instance    = {};
+        AffineSpace identity = AffineSpace::Identity();
+        instances.Push(instance);
+        instanceTransforms.Push(identity);
         Assert(numInstances == 1);
         Assert(numScenes == 1);
     }
 
-    virtualGeometryManager.Test(sceneScratch.temp.arena, allCommandBuffer, gpuInstances);
+    virtualGeometryManager.Test(sceneScratch.temp.arena, allCommandBuffer, instances,
+                                instanceTransforms);
     // virtualGeometryManager.AllocateInstances(gpuInstances);
 
     // TransferBuffer gpuInstancesBuffer =
@@ -838,18 +789,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     };
     int dir[4] = {};
 
-    GPUBuffer counterBuffer =
-        device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(u32));
-    GPUBuffer nvapiBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 256);
-
     Semaphore frameSemaphore = device->CreateSemaphore();
 
     GPUBuffer readback = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                               virtualGeometryManager.clasGlobalsBuffer.size,
                                               MemoryUsage::GPU_TO_CPU);
-    // GPUBuffer readback2 = device->CreateBuffer(
-    //     VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-    //     virtualGeometryManager.instanceIDFreeListBuffer.size, MemoryUsage::GPU_TO_CPU);
 
     Semaphore transferSem   = device->CreateSemaphore();
     transferSem.signalValue = 1;
@@ -1017,20 +961,13 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                        sizeof(ShaderDebugInfo));
             computeCmd->SubmitTransfer(&shaderDebugBuffers[currentBuffer]);
 
-            computeCmd->ClearBuffer(&visibleClustersBuffer, ~0u);
-            computeCmd->ClearBuffer(&workItemQueueBuffer, ~0u);
-            computeCmd->ClearBuffer(&queueBuffer);
+            computeCmd->ClearBuffer(&virtualGeometryManager.visibleClustersBuffer, ~0u);
+            computeCmd->ClearBuffer(&virtualGeometryManager.instancesBuffer, ~0u);
+            computeCmd->ClearBuffer(&virtualGeometryManager.workItemQueueBuffer, ~0u);
+            computeCmd->ClearBuffer(&virtualGeometryManager.queueBuffer);
             computeCmd->ClearBuffer(&virtualGeometryManager.clasGlobalsBuffer);
             computeCmd->ClearBuffer(&virtualGeometryManager.streamingRequestsBuffer);
             computeCmd->ClearBuffer(&virtualGeometryManager.blasDataBuffer);
-            computeCmd->ClearBuffer(&virtualGeometryManager.streamingRequestsBuffer);
-            // computeCmd->ClearBuffer(&virtualGeometryManager.virtualInstanceTableBuffer,
-            // ~0u);
-            computeCmd->ClearBuffer(&virtualGeometryManager.ptlasInstanceBitVectorBuffer);
-            computeCmd->ClearBuffer(
-                &virtualGeometryManager.ptlasInstanceFrameBitVectorBuffer0);
-            computeCmd->ClearBuffer(
-                &virtualGeometryManager.ptlasInstanceFrameBitVectorBuffer1);
 
             computeCmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -1038,47 +975,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                 VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
             computeCmd->FlushBarriers();
 
-            {
-                // TODO
-                InstanceCullingPushConstant instanceCullingPushConstant;
-                instanceCullingPushConstant.num = virtualGeometryManager.numInstances;
-                instanceCullingPushConstant.oneBlasAddress = 0;
-                device->BeginEvent(computeCmd, "Instance Culling");
-
-                computeCmd
-                    ->StartBindingCompute(instanceCullingPipeline, &instanceCullingLayout)
-                    .Bind(&virtualGeometryManager.instancesBuffer)
-                    .Bind(&virtualGeometryManager.clasGlobalsBuffer)
-                    .Bind(&workItemQueueBuffer, 0, sizeof(Vec4u) * MAX_CANDIDATE_NODES)
-                    .Bind(&queueBuffer)
-                    .Bind(&virtualGeometryManager.blasDataBuffer)
-                    .Bind(&virtualGeometryManager.resourceAABBBuffer)
-                    .Bind(&sceneTransferBuffers[currentBuffer].buffer)
-                    .Bind(&virtualGeometryManager.ptlasInstanceBitVectorBuffer)
-                    .Bind(&virtualGeometryManager.ptlasInstanceFrameBitVectorBuffer0)
-                    .Bind(&virtualGeometryManager.ptlasWriteInfosBuffer)
-                    .Bind(&virtualGeometryManager.ptlasUpdateInfosBuffer)
-                    .Bind(&virtualGeometryManager.mergedPartitionDeviceAddresses)
-                    .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
-                    .End();
-
-                computeCmd->Dispatch((instanceCullingPushConstant.num + 63) / 64, 1, 1);
-                computeCmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                    VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-                computeCmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                    VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
-                                        VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
-                                    VK_ACCESS_2_SHADER_WRITE_BIT,
-                                    VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
-                computeCmd->FlushBarriers();
-                device->EndEvent(computeCmd);
-            }
+            virtualGeometryManager.PrepareInstances(
+                computeCmd, &sceneTransferBuffers[currentBuffer].buffer);
 
             virtualGeometryManager.HierarchyTraversal(
-                computeCmd, &queueBuffer, &sceneTransferBuffers[currentBuffer].buffer,
-                &workItemQueueBuffer, &virtualGeometryManager.instancesBuffer,
-                &visibleClustersBuffer);
+                computeCmd, &sceneTransferBuffers[currentBuffer].buffer);
 
             computeCmd->CopyBuffer(&virtualGeometryManager.readbackBuffer,
                                    &virtualGeometryManager.streamingRequestsBuffer);
@@ -1121,16 +1022,14 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         // cmd->ClearBuffer(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
 
         // Virtual geometry pass
-        cmd->ClearBuffer(&visibleClustersBuffer, ~0u);
-        cmd->ClearBuffer(&workItemQueueBuffer, ~0u);
-        cmd->ClearBuffer(&queueBuffer);
+
+        // TODO: prevent this from happening?
+        // cmd->ClearBuffer(&virtualGeometryManager.workItemQueueBuffer, ~0u);
+        cmd->ClearBuffer(&virtualGeometryManager.queueBuffer);
         cmd->ClearBuffer(&virtualGeometryManager.clasGlobalsBuffer);
-        // cmd->ClearBuffer(&virtualGeometryManager.streamingRequestsBuffer);
-        cmd->ClearBuffer(&virtualGeometryManager.blasDataBuffer);
         cmd->ClearBuffer(&virtualGeometryManager.resourceBitVector);
         cmd->ClearBuffer(&virtualGeometryManager.instanceBitmasksBuffer);
         cmd->ClearBuffer(&virtualGeometryManager.partitionCountsBuffer);
-        // cmd->ClearBuffer(&tlasBuffer);
         cmd->ClearBuffer(&virtualGeometryManager.ptlasIndirectCommandBuffer);
 
         cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -1147,61 +1046,19 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         // Instance culling
         {
-            uint buffer = device->frameCount & 1;
-
-            GPUBuffer *lastFrameBitVector =
-                buffer ? &virtualGeometryManager.ptlasInstanceFrameBitVectorBuffer0
-                       : &virtualGeometryManager.ptlasInstanceFrameBitVectorBuffer1;
-            GPUBuffer *thisFrameBitVector =
-                buffer ? &virtualGeometryManager.ptlasInstanceFrameBitVectorBuffer1
-                       : &virtualGeometryManager.ptlasInstanceFrameBitVectorBuffer0;
-
-            cmd->ClearBuffer(thisFrameBitVector);
             cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                          VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
             cmd->FlushBarriers();
 
-            InstanceCullingPushConstant instanceCullingPushConstant;
-            instanceCullingPushConstant.num = virtualGeometryManager.numInstances;
-            instanceCullingPushConstant.oneBlasAddress =
-                virtualGeometryManager.oneBlasBuildAddress;
-            device->BeginEvent(cmd, "Instance Culling");
-
-            cmd->StartBindingCompute(instanceCullingPipeline, &instanceCullingLayout)
-                .Bind(&virtualGeometryManager.instancesBuffer)
-                .Bind(&virtualGeometryManager.clasGlobalsBuffer)
-                .Bind(&workItemQueueBuffer, 0, sizeof(Vec4u) * MAX_CANDIDATE_NODES)
-                .Bind(&queueBuffer)
-                .Bind(&virtualGeometryManager.blasDataBuffer)
-                .Bind(&virtualGeometryManager.resourceAABBBuffer)
-                .Bind(&sceneTransferBuffers[currentBuffer].buffer)
-                .Bind(&virtualGeometryManager.ptlasInstanceBitVectorBuffer)
-                .Bind(thisFrameBitVector)
-                .Bind(&virtualGeometryManager.ptlasWriteInfosBuffer)
-                .Bind(&virtualGeometryManager.ptlasUpdateInfosBuffer)
-                .Bind(&virtualGeometryManager.mergedPartitionDeviceAddresses)
-                .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
-                .End();
-
-            cmd->Dispatch((instanceCullingPushConstant.num + 63) / 64, 1, 1);
-            cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                         VK_ACCESS_2_SHADER_READ_BIT);
-            cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                         VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
-                             VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
-                         VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
-            cmd->FlushBarriers();
-            device->EndEvent(cmd);
+            virtualGeometryManager.PrepareInstances(
+                cmd, &sceneTransferBuffers[currentBuffer].buffer);
         }
 
         // Hierarchy traversal
         {
             virtualGeometryManager.HierarchyTraversal(
-                cmd, &queueBuffer, &sceneTransferBuffers[currentBuffer].buffer,
-                &workItemQueueBuffer, &virtualGeometryManager.instancesBuffer,
-                &visibleClustersBuffer);
+                cmd, &sceneTransferBuffers[currentBuffer].buffer);
         }
 
         {
@@ -1224,8 +1081,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             device->EndEvent(cmd);
         }
 
-        virtualGeometryManager.BuildClusterBLAS(cmd, &visibleClustersBuffer,
-                                                &virtualGeometryManager.instancesBuffer);
+        virtualGeometryManager.BuildClusterBLAS(cmd);
 
         virtualGeometryManager.BuildPTLAS(cmd, &virtualGeometryManager.instancesBuffer,
                                           &readback);
@@ -1325,7 +1181,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         cmd->PushConstants(&pushConstant, &pc, rts.layout);
 
         int beginIndex = TIMED_GPU_RANGE_BEGIN(cmd, "ray trace");
-        cmd->Dispatch(dispatchDimX, dispatchDimY, 1);
+        // cmd->Dispatch(dispatchDimX, dispatchDimY, 1);
         cmd->TraceRays(&rts, params->width, params->height, 1);
         TIMED_RANGE_END(beginIndex);
 

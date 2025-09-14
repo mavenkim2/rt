@@ -20,18 +20,25 @@ RWStructuredBuffer<PTLAS_UPDATE_INSTANCE_INFO> ptlasInstanceUpdateInfos : regist
 StructuredBuffer<uint64_t> mergedPartitionDeviceAddresses : register(t9);
 StructuredBuffer<GPUTransform> instanceTransforms : register(t10);
 StructuredBuffer<PartitionInfo> partitionInfos : register(t11);
+RWStructuredBuffer<StreamingRequest> requests : register(u12);
 
 #include "ptlas_write_instances.hlsli"
 
 [[vk::push_constant]] InstanceCullingPushConstant pc;
 
-[numthreads(64, 1, 1)]
+[numthreads(32, 1, 1)]
 void main(uint3 dtID : SV_DispatchThreadID)
 {
     uint instanceIndex = dtID.x;
-    if (instanceIndex >= pc.num) return;
+    if (dtID.x == 0)
+    {
+        requests[0] = (StreamingRequest)0;
+    }
+    if (instanceIndex >= 1u << 21u) return;
 
     GPUInstance instance = gpuInstances[instanceIndex];
+
+    if (instance.partitionIndex == ~0u) return;
     
     // Proxy
     if (instance.flags & GPU_INSTANCE_FLAG_MERGED)
@@ -82,7 +89,9 @@ void main(uint3 dtID : SV_DispatchThreadID)
 
     nodeQueue[blasIndex] = candidateNode;
 
-    blasDatas[blasIndex].instanceID = instanceIndex;
+    BLASData blasData = (BLASData)0;
+    blasData.instanceID = instanceIndex;
+    blasDatas[blasIndex] = blasData;
 
     InterlockedAdd(queue[0].nodeWriteOffset, 1);
     InterlockedAdd(queue[0].numNodes, 1);

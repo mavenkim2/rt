@@ -306,6 +306,20 @@ struct VirtualGeometryManager
     DescriptorSetLayout decodeMergedInstancesLayout = {};
     VkPipeline decodeMergedInstancesPipeline;
 
+    PushConstant mergedInstancesTestPush;
+    DescriptorSetLayout mergedInstancesTestLayout = {};
+    VkPipeline mergedInstancesTestPipeline;
+
+    DescriptorSetLayout freeInstancesLayout = {};
+    VkPipeline freeInstancesPipeline;
+
+    DescriptorSetLayout allocateInstancesLayout = {};
+    VkPipeline allocateInstancesPipeline;
+
+    PushConstant instanceCullingPush;
+    DescriptorSetLayout instanceCullingLayout = {};
+    VkPipeline instanceCullingPipeline;
+
     GPUBuffer evictedPagesBuffer;
     GPUBuffer hierarchyNodeBuffer;
     GPUBuffer clusterPageDataBuffer;
@@ -321,6 +335,10 @@ struct VirtualGeometryManager
     GPUBuffer streamingRequestsBuffer;
     GPUBuffer readbackBuffer;
 
+    GPUBuffer visibleClustersBuffer;
+    GPUBuffer queueBuffer;
+    GPUBuffer workItemQueueBuffer;
+
     GPUBuffer clusterAccelAddresses;
     GPUBuffer clusterAccelSizes;
 
@@ -333,15 +351,10 @@ struct VirtualGeometryManager
     GPUBuffer clasPageInfoBuffer;
 
     GPUBuffer clasImplicitData;
-    GPUBuffer clasScratchBuffer;
-
-    GPUBuffer moveScratchBuffer;
 
     GPUBuffer moveDescriptors;
     GPUBuffer moveDstAddresses;
     GPUBuffer moveDstSizes;
-
-    GPUBuffer clasBlasScratchBuffer;
 
     GPUBuffer clasBlasImplicitBuffer;
 
@@ -374,7 +387,9 @@ struct VirtualGeometryManager
     GPUBuffer clusterLookupTableBuffer;
 
     GPUBuffer tlasAccelBuffer;
-    GPUBuffer tlasScratchBuffer;
+
+    GPUBuffer accelScratchBuffer;
+    u32 accelScratchBufferSize;
 
     GPUBuffer resourceAABBBuffer;
     GPUBuffer resourceTruncatedEllipsoidsBuffer;
@@ -382,13 +397,10 @@ struct VirtualGeometryManager
     GPUBuffer partitionReadbackBuffer;
     GPUBuffer instanceTransformsBuffer;
     GPUBuffer partitionCountsBuffer;
-    GPUBuffer partitionErrorThresholdsBuffer;
     GPUBuffer mergedPartitionDeviceAddresses;
     GPUBuffer instancesBuffer;
     BitVector partitionStreamedIn;
-    Graph<GPUInstance> partitionInstanceGraph;
-    // StaticArray<GPUInstance> gpuInstances;
-    StaticArray<GPUInstance> proxyInstances;
+    Graph<Instance> partitionInstanceGraph;
     StaticArray<u32> allocatedPartitionIndices;
 
     GPUBuffer mergedInstancesAABBBuffer;
@@ -396,8 +408,11 @@ struct VirtualGeometryManager
     u32 numStreamedInstances;
     GPUBuffer instanceUploadBuffer;
     GPUBuffer tempInstanceBuffer;
-    GPUBuffer evictedPartitionsBuffer;
     u64 oneBlasBuildAddress;
+
+    GPUBuffer instanceFreeListBuffer;
+    GPUBuffer visiblePartitionsBuffer;
+    GPUBuffer evictedPartitionsBuffer;
 
     // u32 requestBatchWriteIndex;
     // RingBuffer<StreamingRequestBatch> streamingRequestBatches;
@@ -434,18 +449,16 @@ struct VirtualGeometryManager
     void ProcessRequests(CommandBuffer *cmd, bool test);
     u32 AddNewMesh(Arena *arena, CommandBuffer *cmd, string filename);
     void FinalizeResources(CommandBuffer *cmd);
-    void HierarchyTraversal(CommandBuffer *cmd, GPUBuffer *queueBuffer,
-                            GPUBuffer *gpuSceneBuffer, GPUBuffer *workItemQueueBuffer,
-                            GPUBuffer *gpuInstancesBuffer, GPUBuffer *visibleClustersBuffer);
-    void BuildClusterBLAS(CommandBuffer *cmd, GPUBuffer *visibleClustersBuffer,
-                          GPUBuffer *gpuInstancesBuffer);
+    void PrepareInstances(CommandBuffer *cmd, GPUBuffer *sceneBuffer);
+    void HierarchyTraversal(CommandBuffer *cmd, GPUBuffer *gpuSceneBuffer);
+    void BuildClusterBLAS(CommandBuffer *cmd);
     void AllocateInstances(StaticArray<GPUInstance> &gpuInstances);
-    void BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstances,
-                    GPUBuffer *debugReadback); //, GPUBuffer *debugRdbck2);
+    void BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstances, GPUBuffer *debugReadback);
     void UnlinkLRU(int pageIndex);
     void LinkLRU(int index);
 
-    void Test(Arena *arena, CommandBuffer *cmd, StaticArray<GPUInstance> &inputInstances);
+    void Test(Arena *arena, CommandBuffer *cmd, StaticArray<Instance> &inputInstances,
+              StaticArray<AffineSpace> &transforms);
     void BuildHierarchy(PrimRef *refs, RecordAOSSplits &record,
                         std::atomic<u32> &numPartitions, StaticArray<u32> &partitionIndices,
                         StaticArray<RecordAOSSplits> &records, bool parallel);
