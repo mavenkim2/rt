@@ -2216,6 +2216,27 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, GPUBuffer *sce
     }
 
     {
+        device->BeginEvent(cmd, "Free instances");
+        cmd->StartBindingCompute(freeInstancesPipeline, &freeInstancesLayout)
+            .Bind(&instancesBuffer)
+            .Bind(&evictedPartitionsBuffer)
+            .Bind(&clasGlobalsBuffer)
+            .Bind(&instanceFreeListBuffer)
+            .End();
+        cmd->Dispatch(maxInstances / 64, 1, 1);
+        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                     VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
+                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                     VK_ACCESS_2_SHADER_WRITE_BIT,
+                     VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                     VK_ACCESS_2_SHADER_WRITE_BIT);
+        cmd->FlushBarriers();
+        device->EndEvent(cmd);
+    }
+
+    {
         device->BeginEvent(cmd, "Allocate instances");
         cmd->StartBindingCompute(allocateInstancesPipeline, &allocateInstancesLayout)
             .Bind(&visiblePartitionsBuffer)
@@ -2231,27 +2252,6 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, GPUBuffer *sce
         cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
                      VK_ACCESS_2_SHADER_READ_BIT);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_SHADER_WRITE_BIT);
-        cmd->FlushBarriers();
-        device->EndEvent(cmd);
-    }
-
-    {
-        device->BeginEvent(cmd, "Free instances");
-        cmd->StartBindingCompute(freeInstancesPipeline, &freeInstancesLayout)
-            .Bind(&instancesBuffer)
-            .Bind(&evictedPartitionsBuffer)
-            .Bind(&clasGlobalsBuffer)
-            .Bind(&instanceFreeListBuffer)
-            .End();
-        cmd->Dispatch(maxInstances / 64, 1, 1);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
-                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
         cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
                      VK_ACCESS_2_SHADER_WRITE_BIT);
@@ -2567,7 +2567,6 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *debugRead
     //              VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
     // cmd->FlushBarriers();
 
-#if 1
     // Update/write PTLAS instances
     {
         device->BeginEvent(cmd, "Update PTLAS Instances");
@@ -2600,7 +2599,6 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *debugRead
         cmd->FlushBarriers();
         device->EndEvent(cmd);
     }
-#endif
 
     {
         cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
@@ -2667,50 +2665,6 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *debugRead
                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
                  VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
     cmd->FlushBarriers();
-
-    // if (device->frameCount > 0)
-    {
-        //     GPUBuffer readback0 = device->CreateBuffer(
-        //         VK_BUFFER_USAGE_TRANSFER_DST_BIT, clasGlobalsBuffer.size,
-        //         MemoryUsage::GPU_TO_CPU);
-        //
-        //     // GPUBuffer readback2 =
-        //     //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        //     //     thisFrameBitVector->size,
-        //     //                          MemoryUsage::GPU_TO_CPU);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                     VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                     VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                     VK_ACCESS_2_TRANSFER_READ_BIT);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                     VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-        //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //     // VK_ACCESS_2_SHADER_WRITE_BIT,
-        //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-        cmd->FlushBarriers();
-        //     cmd->CopyBuffer(&readback0, &clasGlobalsBuffer);
-        //     // cmd->CopyBuffer(&readback, &blasDataBuffer);
-        //     // cmd->CopyBuffer(&readback2, thisFrameBitVector);
-        //     Semaphore testSemaphore   = device->CreateSemaphore();
-        //     testSemaphore.signalValue = 1;
-        //     cmd->SignalOutsideFrame(testSemaphore);
-        //     device->SubmitCommandBuffer(cmd);
-        //     device->Wait(testSemaphore);
-        //
-        //     u32 *data = (u32 *)readback0.mappedPtr;
-        //
-        BufferToBufferCopy copy;
-        copy.srcOffset = 0;
-        copy.dstOffset = 0;
-        copy.size      = sizeof(PTLAS_WRITE_INSTANCE_INFO) * 1024;
-        cmd->CopyBuffer(debugReadback2, &ptlasWriteInfosBuffer, &copy, 1);
-
-        // cmd->CopyBuffer(debugReadback3, &instancesBuffer);
-
-        cmd->CopyBuffer(debugReadback4, &blasDataBuffer);
-        int stop = 5;
-    }
 
     cmd->BuildPTLAS(&tlasAccelBuffer, &accelScratchBuffer, &ptlasIndirectCommandBuffer,
                     &clasGlobalsBuffer, sizeof(u32) * GLOBALS_PTLAS_OP_TYPE_COUNT_INDEX,
@@ -2926,7 +2880,7 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
             return 1;
         });
 
-    u32 finalNumPartitions = numPartitions.load();
+    u32 finalNumPartitions = numPartitions.load(); // / 4;
     maxPartitions          = finalNumPartitions;
 
     allocatedPartitionIndices =
@@ -3208,6 +3162,8 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
     totalNumBytes += partitionInfosBuffer.size;
 
     u32 tlasScratchSize, tlasAccelSize;
+    // device->GetPTLASBuildSizes(maxInstances, maxInstances / maxPartitions, maxPartitions, 0,
+    //                            tlasScratchSize, tlasAccelSize);
     device->GetPTLASBuildSizes(maxInstances, 1024, maxPartitions, 0, tlasScratchSize,
                                tlasAccelSize);
     accelScratchBufferSize = Max(accelScratchBufferSize, tlasScratchSize);

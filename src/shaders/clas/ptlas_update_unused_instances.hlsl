@@ -14,30 +14,14 @@ void main(uint dtID : SV_DispatchThreadID)
     GPUInstance instance = gpuInstances[instanceIndex];
     if ((instance.flags & GPU_INSTANCE_FLAG_FREED) && (instance.flags & GPU_INSTANCE_FLAG_WAS_RENDERED))
     {
-        if ((instance.flags & GPU_INSTANCE_FLAG_MERGED) == 0)
-        {
-            uint descriptorIndex;
+        uint descriptorIndex;
 
-            InterlockedAdd(globals[GLOBALS_PTLAS_UPDATE_COUNT_INDEX], 1, descriptorIndex);
+        InterlockedAdd(globals[GLOBALS_PTLAS_WRITE_COUNT_INDEX], 1, descriptorIndex);
 
-            gpuInstances[instanceIndex].flags &= ~GPU_INSTANCE_FLAG_WAS_RENDERED;
-            PTLAS_UPDATE_INSTANCE_INFO instanceInfo;
-            instanceInfo.instanceIndex = instanceIndex;
-            instanceInfo.instanceContributionToHitGroupIndex = 0;
-            instanceInfo.accelerationStructure = 0;
-            ptlasInstanceUpdateInfos[descriptorIndex] = instanceInfo;
-        }
-        else 
-        {
-            uint descriptorIndex;
-
-            InterlockedAdd(globals[GLOBALS_PTLAS_WRITE_COUNT_INDEX], 1, descriptorIndex);
-
-            gpuInstances[instanceIndex].flags &= ~GPU_INSTANCE_FLAG_WAS_RENDERED;
-            PTLAS_WRITE_INSTANCE_INFO instanceInfo = (PTLAS_WRITE_INSTANCE_INFO)0;
-            instanceInfo.instanceIndex = instanceIndex;
-            instanceInfo.partitionIndex = instance.partitionIndex;
-            ptlasWriteInstanceInfos[descriptorIndex] = instanceInfo;
-        }
+        gpuInstances[instanceIndex].flags &= ~GPU_INSTANCE_FLAG_WAS_RENDERED;
+        PTLAS_WRITE_INSTANCE_INFO instanceInfo = (PTLAS_WRITE_INSTANCE_INFO)0;
+        instanceInfo.instanceIndex = instanceIndex;
+        instanceInfo.partitionIndex = instance.partitionIndex;
+        ptlasWriteInstanceInfos[descriptorIndex] = instanceInfo;
     }
 }

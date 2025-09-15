@@ -30,6 +30,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
     GPUInstance instance = gpuInstances[blasData.instanceID];
     if (blasData.clusterCount == 0)
     {
+#if 0
     if ((instance.flags & GPU_INSTANCE_FLAG_FREED) && (instance.flags & GPU_INSTANCE_FLAG_WAS_RENDERED))
     {
         if ((instance.flags & GPU_INSTANCE_FLAG_MERGED) == 0)
@@ -58,6 +59,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
             ptlasInstanceWriteInfos[descriptorIndex] = instanceInfo;
         }
     }
+#endif
         return;
     }
 

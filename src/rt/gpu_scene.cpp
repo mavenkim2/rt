@@ -794,15 +794,15 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     GPUBuffer readback  = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                                virtualGeometryManager.clasGlobalsBuffer.size,
                                                MemoryUsage::GPU_TO_CPU);
-    GPUBuffer readback2 = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                               sizeof(PTLAS_WRITE_INSTANCE_INFO) * 1024,
-                                               MemoryUsage::GPU_TO_CPU);
+    GPUBuffer readback2 = device->CreateBuffer(
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT, virtualGeometryManager.ptlasWriteInfosBuffer.size,
+        MemoryUsage::GPU_TO_CPU);
     GPUBuffer readback3 = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                                virtualGeometryManager.instancesBuffer.size,
                                                MemoryUsage::GPU_TO_CPU);
-    GPUBuffer readback4 = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                               virtualGeometryManager.blasDataBuffer.size,
-                                               MemoryUsage::GPU_TO_CPU);
+    GPUBuffer readback4 = device->CreateBuffer(
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT, virtualGeometryManager.ptlasUpdateInfosBuffer.size,
+        MemoryUsage::GPU_TO_CPU);
 
     Semaphore transferSem   = device->CreateSemaphore();
     transferSem.signalValue = 1;
@@ -924,18 +924,29 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         gpuScene.dispatchDimX = dispatchDimX;
         gpuScene.dispatchDimY = dispatchDimY;
 
-        u32 *data                        = (u32 *)readback.mappedPtr;
-        PTLAS_WRITE_INSTANCE_INFO *data2 = (PTLAS_WRITE_INSTANCE_INFO *)readback2.mappedPtr;
-        GPUInstance *data3               = (GPUInstance *)readback3.mappedPtr;
-        BLASData *data4                  = (BLASData *)readback4.mappedPtr;
+        u32 *data                         = (u32 *)readback.mappedPtr;
+        PTLAS_WRITE_INSTANCE_INFO *data2  = (PTLAS_WRITE_INSTANCE_INFO *)readback2.mappedPtr;
+        GPUInstance *data3                = (GPUInstance *)readback3.mappedPtr;
+        PTLAS_UPDATE_INSTANCE_INFO *data4 = (PTLAS_UPDATE_INSTANCE_INFO *)readback4.mappedPtr;
         if (!device->BeginFrame(false))
         {
-            for (u32 i = 0; i < data[GLOBALS_BLAS_COUNT_INDEX]; i++)
+            ScratchArena scratch;
+            BitVector bits(scratch.temp.arena, 1024 * 10);
+            for (u32 i = 0; i < data[GLOBALS_PTLAS_WRITE_COUNT_INDEX]; i++)
             {
-                if (data4[i].clusterCount > 1)
+                if (bits.GetBit(data2[i].instanceIndex))
                 {
                     int stop = 5;
                 }
+                bits.SetBit(data2[i].instanceIndex);
+            }
+            for (u32 i = 0; i < data[GLOBALS_PTLAS_UPDATE_COUNT_INDEX]; i++)
+            {
+                if (bits.GetBit(data4[i].instanceIndex))
+                {
+                    int stop = 5;
+                }
+                bits.SetBit(data4[i].instanceIndex);
             }
 
             // ScratchArena scratch;
