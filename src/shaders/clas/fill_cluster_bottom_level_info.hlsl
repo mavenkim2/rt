@@ -16,10 +16,10 @@ void main(uint3 DTid : SV_DispatchThreadID)
     if (blasIndex >= globals[GLOBALS_BLAS_COUNT_INDEX]) return;
 
     BLASData blas = blasDatas[blasIndex];
-
-    if (blas.clusterCount == 0) return;
-
     uint bitMask = instanceBitmasks[blas.instanceID];
+
+    if (blas.clusterCount == 0 && bitMask == 0) return;
+
     uint resourceID = gpuInstances[blas.instanceID].resourceID;
 
     if (bitMask == 1)

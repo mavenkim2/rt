@@ -374,12 +374,13 @@ struct Brick
     uint vertexOffset;
 };
 
+#define RESOURCE_FLAG_ONE_CLUSTER (1u << 0u)
 struct Resource
 {
-    uint maxClusters;
     uint finestAddressIndex;
     uint clusterLookupTableOffset;
     uint voxelAddressOffset;
+    uint flags;
 };
 
 struct VoxelAddressTableEntry

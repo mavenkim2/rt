@@ -432,7 +432,7 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
     }
     instanceCullingLayout.AddBinding(6, DescriptorType::UniformBuffer,
                                      VK_SHADER_STAGE_COMPUTE_BIT);
-    for (int i = 7; i <= 12; i++)
+    for (int i = 7; i <= 15; i++)
     {
         instanceCullingLayout.AddBinding(i, DescriptorType::StorageBuffer,
                                          VK_SHADER_STAGE_COMPUTE_BIT);
@@ -982,6 +982,9 @@ void VirtualGeometryManager::FinalizeResources(CommandBuffer *cmd)
     for (MeshInfo &meshInfo : meshInfos)
     {
         Resource resource = {};
+        resource.flags    = meshInfo.numNodes == 1 && (*(u32 *)meshInfo.pageData == 1)
+                                ? RESOURCE_FLAG_ONE_CLUSTER
+                                : 0;
         // resource.maxClusters = meshInfo.numFinestClusters;
         resources.Push(resource);
 
@@ -2191,7 +2194,7 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd, bool test)
 }
 
 void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, GPUBuffer *sceneBuffer,
-                                              bool ptlas, GPUBuffer *debugReadback)
+                                              bool ptlas)
 {
     {
         device->BeginEvent(cmd, "Merged Instances Test");
@@ -2314,6 +2317,9 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, GPUBuffer *sce
             .Bind(&instanceTransformsBuffer)
             .Bind(&partitionInfosBuffer)
             .Bind(&streamingRequestsBuffer)
+            .Bind(&instanceBitmasksBuffer)
+            .Bind(&resourceBuffer)
+            .Bind(&resourceBitVector)
             .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
             .End();
 
@@ -2328,11 +2334,6 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, GPUBuffer *sce
         cmd->FlushBarriers();
         device->EndEvent(cmd);
     }
-
-    // cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-    //              VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-    // cmd->FlushBarriers();
-    // cmd->CopyBuffer(debugReadback, &instancesBuffer);
 }
 
 void VirtualGeometryManager::HierarchyTraversal(CommandBuffer *cmd, GPUBuffer *gpuSceneBuffer)
@@ -2556,9 +2557,7 @@ void VirtualGeometryManager::AllocateInstances(StaticArray<GPUInstance> &inInsta
 #endif
 }
 
-void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *debugReadback,
-                                        GPUBuffer *debugReadback2, GPUBuffer *debugReadback3,
-                                        GPUBuffer *debugReadback4)
+void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd)
 {
     // cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
     //              VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
@@ -2598,13 +2597,6 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *debugRead
                      VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
         cmd->FlushBarriers();
         device->EndEvent(cmd);
-    }
-
-    {
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                     VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-        cmd->FlushBarriers();
-        cmd->CopyBuffer(debugReadback, &clasGlobalsBuffer);
     }
 
     // Reset free list counts to 0 if they're negative

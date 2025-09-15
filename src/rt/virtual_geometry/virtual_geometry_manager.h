@@ -450,13 +450,11 @@ struct VirtualGeometryManager
     void ProcessRequests(CommandBuffer *cmd, bool test);
     u32 AddNewMesh(Arena *arena, CommandBuffer *cmd, string filename);
     void FinalizeResources(CommandBuffer *cmd);
-    void PrepareInstances(CommandBuffer *cmd, GPUBuffer *sceneBuffer, bool ptlas,
-                          GPUBuffer *debugReadback);
+    void PrepareInstances(CommandBuffer *cmd, GPUBuffer *sceneBuffer, bool ptlas);
     void HierarchyTraversal(CommandBuffer *cmd, GPUBuffer *gpuSceneBuffer);
     void BuildClusterBLAS(CommandBuffer *cmd);
     void AllocateInstances(StaticArray<GPUInstance> &gpuInstances);
-    void BuildPTLAS(CommandBuffer *cmd, GPUBuffer *debugReadback, GPUBuffer *debugReadback2,
-                    GPUBuffer *debugReadback3, GPUBuffer *debugReadback4);
+    void BuildPTLAS(CommandBuffer *cmd);
     void UnlinkLRU(int pageIndex);
     void LinkLRU(int index);
 

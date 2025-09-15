@@ -22,6 +22,10 @@ StructuredBuffer<GPUTransform> instanceTransforms : register(t10);
 StructuredBuffer<PartitionInfo> partitionInfos : register(t11);
 RWStructuredBuffer<StreamingRequest> requests : register(u12);
 
+RWStructuredBuffer<uint> instanceBitmasks : register(u13);
+StructuredBuffer<Resource> resources : register(t14);
+RWStructuredBuffer<uint> resourceBitVector : register(u15);
+
 #include "ptlas_write_instances.hlsli"
 
 [[vk::push_constant]] InstanceCullingPushConstant pc;
@@ -72,6 +76,29 @@ void main(uint3 dtID : SV_DispatchThreadID)
     }
 #endif
 
+    Resource resource = resources[instance.resourceID];
+
+    uint blasIndex;
+    InterlockedAdd(globals[GLOBALS_BLAS_COUNT_INDEX], 1, blasIndex);
+    BLASData blasData = (BLASData)0;
+    blasData.instanceID = instanceIndex;
+
+    if (resource.flags & RESOURCE_FLAG_ONE_CLUSTER)
+    {
+        uint wasSet;
+        uint bit = 1u << (instance.resourceID & 31u);
+        InterlockedOr(resourceBitVector[instance.resourceID >> 5u], bit, wasSet);
+
+        if (wasSet & bit)
+        {
+            instanceBitmasks[instanceIndex] = 1;
+            blasDatas[blasIndex] = blasData;
+            return;
+        }
+    }
+
+    blasDatas[blasIndex] = blasData;
+
     PartitionInfo info = partitionInfos[instance.partitionIndex];
     float3x4 worldFromObject = ConvertGPUMatrix(instanceTransforms[instance.transformIndex], info.base, info.scale); 
     AABB aabb = aabbs[instance.resourceID];
@@ -88,21 +115,16 @@ void main(uint3 dtID : SV_DispatchThreadID)
         gpuInstances[instanceIndex].flags &= ~GPU_INSTANCE_FLAG_CULL;
     }
 
-    uint blasIndex;
-    InterlockedAdd(globals[GLOBALS_BLAS_COUNT_INDEX], 1, blasIndex);
-    
     CandidateNode candidateNode;
     candidateNode.instanceID = instanceIndex;
     candidateNode.nodeOffset = 0;
     candidateNode.blasIndex = blasIndex;
     candidateNode.pad = 0;
 
-    nodeQueue[blasIndex] = candidateNode;
 
-    BLASData blasData = (BLASData)0;
-    blasData.instanceID = instanceIndex;
-    blasDatas[blasIndex] = blasData;
-
-    InterlockedAdd(queue[0].nodeWriteOffset, 1);
+    uint nodeIndex;
+    InterlockedAdd(queue[0].nodeWriteOffset, 1, nodeIndex);
     InterlockedAdd(queue[0].numNodes, 1);
+
+    nodeQueue[nodeIndex] = candidateNode;
 }

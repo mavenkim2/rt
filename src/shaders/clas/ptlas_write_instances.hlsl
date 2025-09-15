@@ -28,38 +28,8 @@ void main(uint3 dtID : SV_DispatchThreadID)
     uint instanceIndex = blasData.instanceID;
     uint bitMask = instanceBitmasks[blasData.instanceID];
     GPUInstance instance = gpuInstances[blasData.instanceID];
-    if (blasData.clusterCount == 0)
+    if (blasData.clusterCount == 0 && bitMask == 0)
     {
-#if 0
-    if ((instance.flags & GPU_INSTANCE_FLAG_FREED) && (instance.flags & GPU_INSTANCE_FLAG_WAS_RENDERED))
-    {
-        if ((instance.flags & GPU_INSTANCE_FLAG_MERGED) == 0)
-        {
-            uint descriptorIndex;
-
-            InterlockedAdd(globals[GLOBALS_PTLAS_UPDATE_COUNT_INDEX], 1, descriptorIndex);
-
-            gpuInstances[instanceIndex].flags &= ~GPU_INSTANCE_FLAG_WAS_RENDERED;
-            PTLAS_UPDATE_INSTANCE_INFO instanceInfo;
-            instanceInfo.instanceIndex = instanceIndex;
-            instanceInfo.instanceContributionToHitGroupIndex = 0;
-            instanceInfo.accelerationStructure = 0;
-            ptlasInstanceUpdateInfos[descriptorIndex] = instanceInfo;
-        }
-        else 
-        {
-            uint descriptorIndex;
-
-            InterlockedAdd(globals[GLOBALS_PTLAS_WRITE_COUNT_INDEX], 1, descriptorIndex);
-
-            gpuInstances[instanceIndex].flags &= ~GPU_INSTANCE_FLAG_WAS_RENDERED;
-            PTLAS_WRITE_INSTANCE_INFO instanceInfo = (PTLAS_WRITE_INSTANCE_INFO)0;
-            instanceInfo.instanceIndex = instanceIndex;
-            instanceInfo.partitionIndex = instance.partitionIndex;
-            ptlasInstanceWriteInfos[descriptorIndex] = instanceInfo;
-        }
-    }
-#endif
         return;
     }
 

@@ -793,18 +793,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     Semaphore frameSemaphore = device->CreateSemaphore();
 
-    GPUBuffer readback  = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                               virtualGeometryManager.clasGlobalsBuffer.size,
-                                               MemoryUsage::GPU_TO_CPU);
-    GPUBuffer readback2 = device->CreateBuffer(
-        VK_BUFFER_USAGE_TRANSFER_DST_BIT, virtualGeometryManager.ptlasWriteInfosBuffer.size,
-        MemoryUsage::GPU_TO_CPU);
-    GPUBuffer readback3 = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                               virtualGeometryManager.instancesBuffer.size,
-                                               MemoryUsage::GPU_TO_CPU);
-    GPUBuffer readback4 = device->CreateBuffer(
-        VK_BUFFER_USAGE_TRANSFER_DST_BIT, virtualGeometryManager.ptlasUpdateInfosBuffer.size,
-        MemoryUsage::GPU_TO_CPU);
+    GPUBuffer readback = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                              virtualGeometryManager.clasGlobalsBuffer.size,
+                                              MemoryUsage::GPU_TO_CPU);
 
     Semaphore transferSem   = device->CreateSemaphore();
     transferSem.signalValue = 1;
@@ -926,43 +917,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         gpuScene.dispatchDimX = dispatchDimX;
         gpuScene.dispatchDimY = dispatchDimY;
 
-        u32 *data                         = (u32 *)readback.mappedPtr;
-        PTLAS_WRITE_INSTANCE_INFO *data2  = (PTLAS_WRITE_INSTANCE_INFO *)readback2.mappedPtr;
-        GPUInstance *data3                = (GPUInstance *)readback3.mappedPtr;
-        PTLAS_UPDATE_INSTANCE_INFO *data4 = (PTLAS_UPDATE_INSTANCE_INFO *)readback4.mappedPtr;
+        u32 *data = (u32 *)readback.mappedPtr;
         if (!device->BeginFrame(false))
         {
-            ScratchArena scratch;
-            BitVector bits(scratch.temp.arena, 1024 * 10);
-            for (u32 i = 0; i < data[GLOBALS_PTLAS_WRITE_COUNT_INDEX]; i++)
-            {
-                if (bits.GetBit(data2[i].instanceIndex))
-                {
-                    int stop = 5;
-                }
-                bits.SetBit(data2[i].instanceIndex);
-            }
-            for (u32 i = 0; i < data[GLOBALS_PTLAS_UPDATE_COUNT_INDEX]; i++)
-            {
-                if (bits.GetBit(data4[i].instanceIndex))
-                {
-                    int stop = 5;
-                }
-                bits.SetBit(data4[i].instanceIndex);
-            }
-
-            // ScratchArena scratch;
-            // BitVector testVector(scratch.temp.arena, 1u << 21u);
-            // StaticArray<u32> repeat(scratch.temp.arena, 1u << 21u, 1u << 21u);
-            // for (u32 i = 0; i < (1u << 21u); i++)
-            // {
-            //     u32 instanceIndex = data2[i].instanceIndex;
-            //     if (data2[i].partitionIndex >= virtualGeometryManager.maxPartitions ||
-            //         data2[i].instanceIndex >= (1u << 21u))
-            //     {
-            //         int stop = 5;
-            //     }
-            // }
             Assert(0);
         }
 
@@ -1031,7 +988,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             computeCmd->FlushBarriers();
 
             virtualGeometryManager.PrepareInstances(
-                computeCmd, &sceneTransferBuffers[currentBuffer].buffer, false, &readback4);
+                computeCmd, &sceneTransferBuffers[currentBuffer].buffer, false);
 
             virtualGeometryManager.HierarchyTraversal(
                 computeCmd, &sceneTransferBuffers[currentBuffer].buffer);
@@ -1110,51 +1067,19 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             cmd->FlushBarriers();
 
             virtualGeometryManager.PrepareInstances(
-                cmd, &sceneTransferBuffers[currentBuffer].buffer, true, &readback4);
+                cmd, &sceneTransferBuffers[currentBuffer].buffer, true);
         }
+
+        cmd->ClearBuffer(&virtualGeometryManager.resourceBitVector);
+        cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                     VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                     VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
+        cmd->FlushBarriers();
 
         // Hierarchy traversal
         {
             virtualGeometryManager.HierarchyTraversal(
                 cmd, &sceneTransferBuffers[currentBuffer].buffer);
-        }
-
-        // if (device->frameCount > 0)
-        {
-            //     GPUBuffer readback0 = device->CreateBuffer(
-            //         VK_BUFFER_USAGE_TRANSFER_DST_BIT, clasGlobalsBuffer.size,
-            //         MemoryUsage::GPU_TO_CPU);
-            //
-            //     // GPUBuffer readback2 =
-            //     //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            //     //     thisFrameBitVector->size,
-            //     //                          MemoryUsage::GPU_TO_CPU);
-            cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                         VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                         VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                         VK_ACCESS_2_TRANSFER_READ_BIT);
-            cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                         VK_ACCESS_2_TRANSFER_READ_BIT);
-            //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-            //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-            //     // VK_ACCESS_2_SHADER_WRITE_BIT,
-            //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-            cmd->FlushBarriers();
-            //     cmd->CopyBuffer(&readback0, &clasGlobalsBuffer);
-            //     // cmd->CopyBuffer(&readback, &blasDataBuffer);
-            //     // cmd->CopyBuffer(&readback2, thisFrameBitVector);
-            //     Semaphore testSemaphore   = device->CreateSemaphore();
-            //     testSemaphore.signalValue = 1;
-            //     cmd->SignalOutsideFrame(testSemaphore);
-            //     device->SubmitCommandBuffer(cmd);
-            //     device->Wait(testSemaphore);
-            //
-            //     u32 *data = (u32 *)readback0.mappedPtr;
-            //
-
-            cmd->CopyBuffer(&readback4, &virtualGeometryManager.blasDataBuffer);
-            int stop = 5;
         }
 
         {
@@ -1179,7 +1104,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         virtualGeometryManager.BuildClusterBLAS(cmd);
 
-        virtualGeometryManager.BuildPTLAS(cmd, &readback, &readback2, &readback3, &readback4);
+        virtualGeometryManager.BuildPTLAS(cmd);
 
         cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                      VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
