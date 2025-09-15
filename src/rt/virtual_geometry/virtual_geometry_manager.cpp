@@ -3102,7 +3102,7 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
         totalScratch += sizeInfo.scratchSize;
     }
 
-    GPUBuffer scratchBuffer = device->CreateBuffer(
+    blasProxyScratchBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_2_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
             VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT,
         totalScratch);
@@ -3110,7 +3110,7 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
         device->CreateBuffer(VK_BUFFER_USAGE_2_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
                                  VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT,
                              totalAccel);
-    totalNumBytes += scratchBuffer.size;
+    totalNumBytes += blasProxyScratchBuffer.size;
     totalNumBytes += accelBuffer.size;
 
     mergedInstancesAABBBuffer = device->CreateBuffer(
@@ -3119,7 +3119,7 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
         sizeof(AABB) * numAABBs);
 
-    uint64_t scratchDataDeviceAddress = device->GetDeviceAddress(&scratchBuffer);
+    uint64_t scratchDataDeviceAddress = device->GetDeviceAddress(&blasProxyScratchBuffer);
     uint64_t aabbDeviceAddress        = device->GetDeviceAddress(&mergedInstancesAABBBuffer);
     totalScratch                      = 0;
 

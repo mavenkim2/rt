@@ -746,6 +746,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     device->SubmitCommandBuffer(allCommandBuffer);
 
     device->SubmitCommandBuffer(transferCmd);
+    device->Wait(tlasSemaphore);
+    device->DestroyBuffer(&virtualGeometryManager.blasProxyScratchBuffer);
 
     f32 frameDt = 1.f / 60.f;
     int envMapBindlessIndex;

@@ -389,6 +389,7 @@ struct VirtualGeometryManager
     GPUBuffer tlasAccelBuffer;
 
     GPUBuffer accelScratchBuffer;
+    GPUBuffer blasProxyScratchBuffer;
     u32 accelScratchBufferSize;
 
     GPUBuffer resourceAABBBuffer;

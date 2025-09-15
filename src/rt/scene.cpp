@@ -432,7 +432,7 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
     // TODO: I have no idea why this errored out?
     // ChunkedLinkedList<Material *, 1024> materialsList(tempArena);
     std::vector<Material *> materialsList;
-    scene->ptexTextures                = StaticArray<PtexTexture>(arena, 100);
+    scene->ptexTextures                = StaticArray<PtexTexture>(arena, 50000);
     NullMaterial *nullMaterial         = PushStructConstruct(arena, NullMaterial)();
     nullMaterial->ptexReflectanceIndex = -1;
     materialsList.push_back(nullMaterial);
