@@ -901,200 +901,12 @@ string ReplaceColons(Arena *arena, string str)
     return newString;
 }
 
-// static ShapeType *PruneDuplicateMeshesAndVertices(PBRTFileInfo *state, Arena *tempArena,
-//                                                   u32 &numMeshes)
-// {
-//     ScratchArena scratch(&tempArena, 1);
-//
-//     Arena **arenas = GetArenaArray(tempArena);
-//
-//     // Remove duplicate meshes
-//     ShapeType *shapes = PushArrayNoZero(tempArena, ShapeType, state->shapes.Length());
-//     state->shapes.Flatten(shapes);
-//
-//     StaticArray<Mesh> meshes(tempArena, state->shapes.Length(), state->shapes.Length());
-//     StaticArray<u32> materialIndices(tempArena, meshes.Length(), meshes.Length());
-//
-//     StaticArray<int> hashes(tempArena, meshes.Length(), meshes.Length());
-//     BitVector shapeCulled(tempArena, meshes.Length());
-//
-//     u32 hashSize = NextPowerOfTwo(meshes.Length());
-//     HashIndex meshHashMap(tempArena, hashSize, hashSize);
-//
-//     Arena **arenas = GetArenaArray(tempArena);
-//
-//     ParallelFor(0, state->shapes.Length(), 32, 32, [&](int jobID, int start, int count) {
-//         Arena *arena = arenas[GetThreadIndex()];
-//         for (int meshIndex = start; meshIndex < start + count; meshIndex++)
-//         {
-//             ShapeType &shape = shapes[meshIndex];
-//             u32 materialIndex =
-//                 shape.materialName.size ? sls->materialMap.Find(shape.materialName)->index :
-//                 0;
-//
-//             materialIndices[meshIndex] = materialIndex;
-//             int posParameterIndex      = CheckForID(&shape.packet, "P"_sid);
-//             Mesh mesh                  = {};
-//             if (posParameterIndex != -1)
-//             {
-//                 mesh.numVertices = shape.packet.sizes[posParameterIndex] / sizeof(Vec3f);
-//                 mesh.p           = (Vec3f *)shape.packet.bytes[posParameterIndex];
-//
-//                 int indexParameterIndex = CheckForID(&shape.packet, "indices"_sid);
-//                 Assert(indexParameterIndex != -1);
-//                 mesh.numIndices = shape.packet.sizes[indexParameterIndex] / sizeof(u32);
-//                 mesh.indices    = (u32 *)shape.packet.bytes[indexParameterIndex];
-//
-//                 int normParameterIndex = CheckForID(&shape.packet, "N"_sid);
-//                 Assert(normParameterIndex != -1);
-//                 Assert(shape.packet.sizes[normParameterIndex] / sizeof(Vec3f) ==
-//                        mesh.numVertices);
-//                 if (normParameterIndex != -1)
-//                     mesh.n = (Vec3f *)shape.packet.bytes[normParameterIndex];
-//
-//                 int uvParameterIndex = CheckForID(&shape.packet, "uv"_sid);
-//                 Assert(uvParameterIndex != -1);
-//                 Assert(shape.packet.sizes[uvParameterIndex] / sizeof(Vec2f) ==
-//                        mesh.numVertices);
-//                 if (uvParameterIndex != -1)
-//                     mesh.uv = (Vec2f *)shape.packet.bytes[uvParameterIndex];
-//             }
-//             else
-//             {
-//                 int fileParameterIndex = CheckForID(&shape.packet, "filename"_sid);
-//                 Assert(fileParameterIndex != -1);
-//                 string filename   = StrConcat(arena, directory,
-//                                               Str8(shape.packet.bytes[fileParameterIndex],
-//                                                    shape.packet.sizes[fileParameterIndex]));
-//                 GeometryType type = ConvertStringIDToGeometryType(shape.packet.type);
-//                 mesh              = LoadPLY(arena, filename, type);
-//             }
-//             meshes[meshIndex] = mesh;
-//
-//             int hash = MurmurHash32((const char *)mesh.p, sizeof(Vec3f) * mesh.numVertices,
-//             0); meshHashMap.AddConcurrent(hash, meshIndex); hashes[meshIndex] = hash;
-//         }
-//     });
-//
-//     ParallelFor(0, meshes.Length(), 32, 32, [&](int jobID, int start, int count) {
-//         for (int meshIndex = start; meshIndex < start + count; meshIndex++)
-//         {
-//             Mesh &mesh = meshes[meshIndex];
-//             int hash = MurmurHash32((const char *)mesh.p, sizeof(Vec3f) * mesh.numVertices,
-//             0); for (int hashIndex = meshHashMap.FirstInHash(hash); hashIndex != -1;
-//                  hashIndex     = meshHashMap.NextInHash(hashIndex))
-//             {
-//                 if (meshIndex != hashIndex && hash == hashes[hashIndex])
-//                 {
-//                     Mesh &otherMesh = meshes[hashIndex];
-//                     if (mesh.numVertices != otherMesh.numVertices) continue;
-//                     if (memcmp(mesh.p, otherMesh.p, sizeof(Vec3f) * mesh.numVertices) == 0)
-//                     {
-//                         if (materialIndices[meshIndex] != 0 &&
-//                             materialIndices[hashIndex] != 0 && meshIndex > hashIndex)
-//                         {
-//                             shapeCulled.SetBit(meshIndex);
-//                             break;
-//                         }
-//                         else if (materialIndices[meshIndex] == 0 &&
-//                                  materialIndices[hashIndex] == 0 && meshIndex > hashIndex)
-//                         {
-//                             shapeCulled.SetBit(meshIndex);
-//                             break;
-//                         }
-//                         else if (materialIndices[meshIndex] == 0 &&
-//                                  materialIndices[hashIndex] != 0)
-//                         {
-//                             shapeCulled.SetBit(meshIndex);
-//                             break;
-//                         }
-//                     }
-//                 }
-//             }
-//         }
-//     });
-//
-//     int newNumMeshes = 0;
-//     for (int meshIndex = 0; meshIndex < meshes.Length(); meshIndex++)
-//     {
-//         if (!shapeCulled.GetBit(meshIndex))
-//         {
-//             meshes[newNumMeshes++] = meshes[meshIndex];
-//         }
-//     }
-//
-//     ParallelFor(0, newNumMeshes, 32, 32, [&](int jobID, int start, int count) {
-//         for (int meshIndex = start; meshIndex < start + count; meshIndex++)
-//         {
-//             ScratchArena scratch;
-//             Mesh &mesh      = meshes[meshIndex];
-//             u32 numVertices = mesh.numVertices;
-//             u32 hashSize    = NextPowerOfTwo(numVertices);
-//             HashIndex hashMap(scratch.temp.arena, hashSize, hashSize);
-//             StaticArray<u32> remap(scratch.temp.arena, numVertices, numVertices);
-//
-//             Vec3f *vertices = mesh.p;
-//             Vec3f *normals  = mesh.n;
-//             Vec2f *uvs      = mesh.uv;
-//
-//             int newVertexCount = 0;
-//             for (int vertexIndex = 0; vertexIndex < numVertices; vertexIndex++)
-//             {
-//                 const Vec3f &vertex = vertices[vertexIndex];
-//                 int hash            = Hash(vertex);
-//                 int newVertexIndex  = -1;
-//                 for (int hashIndex = hashMap.FirstInHash(hash); hashIndex != -1;
-//                      hashIndex     = hashMap.NextInHash(hashIndex))
-//                 {
-//                     if (vertices[hashIndex] == vertex)
-//                     {
-//                         if (normals && normals[hashIndex] != normals[vertexIndex]) continue;
-//                         if (uvs && uvs[hashIndex] != uvs[vertexIndex]) continue;
-//                         newVertexIndex = hashIndex;
-//                         break;
-//                     }
-//                 }
-//
-//                 if (newVertexIndex == -1)
-//                 {
-//                     newVertexIndex = newVertexCount++;
-//                     hashMap.AddInHash(hash, newVertexIndex);
-//                     vertices[newVertexIndex] = vertex;
-//                     if (normals) normals[newVertexIndex] = normals[vertexIndex];
-//                     if (uvs) uvs[newVertexIndex] = uvs[vertexIndex];
-//                 }
-//                 Assert(newVertexIndex != -1);
-//                 remap[vertexIndex] = (u32)newVertexIndex;
-//             }
-//
-//             u32 numIndices = mesh.numIndices;
-//             u32 *indices   = mesh.indices;
-//
-//             for (u32 indexIndex = 0; indexIndex < numIndices; indexIndex++)
-//             {
-//                 indices[indexIndex] = remap[indices[indexIndex]];
-//             }
-//
-//             Mesh newMesh        = {};
-//             newMesh.numVertices = newVertexCount;
-//             newMesh.numIndices  = numIndices;
-//             newMesh.p           = vertices;
-//             newMesh.indices     = indices;
-//             newMesh.n           = normals;
-//             newMesh.uv          = uvs;
-//
-//             meshes[meshIndex] = newMesh;
-//         }
-//     });
-//
-//     ParallelFor(0, newNumMeshes, 32, 32, [&](int jobID, int start, int count) {});
-// }
-
 static string WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState *sls,
                           string directory, string currentFilename)
 {
 
-#ifdef USE_GPU
+// #ifdef USE_GPU
+#if 1
     if (state->shapes.Length())
     {
         Print("%S, num: %i\n", currentFilename, state->shapes.Length());
@@ -1228,7 +1040,7 @@ static string WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState 
 
                 Vec3f *vertices = mesh.p;
                 Vec3f *normals  = mesh.n;
-                Vec2f *uvs      = mesh.uv;
+                // Vec2f *uvs      = mesh.uv;
 
                 int newVertexCount = 0;
                 for (int vertexIndex = 0; vertexIndex < numVertices; vertexIndex++)
@@ -1243,7 +1055,7 @@ static string WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState 
                         {
                             if (normals && normals[hashIndex] != normals[vertexIndex])
                                 continue;
-                            if (uvs && uvs[hashIndex] != uvs[vertexIndex]) continue;
+                            // if (uvs && uvs[hashIndex] != uvs[vertexIndex]) continue;
                             newVertexIndex = hashIndex;
                             break;
                         }
@@ -1255,7 +1067,7 @@ static string WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState 
                         hashMap.AddInHash(hash, newVertexIndex);
                         vertices[newVertexIndex] = vertex;
                         if (normals) normals[newVertexIndex] = normals[vertexIndex];
-                        if (uvs) uvs[newVertexIndex] = uvs[vertexIndex];
+                        // if (uvs) uvs[newVertexIndex] = uvs[vertexIndex];
                     }
                     Assert(newVertexIndex != -1);
                     remap[vertexIndex] = (u32)newVertexIndex;
@@ -1275,11 +1087,57 @@ static string WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState 
                 newMesh.p           = vertices;
                 newMesh.indices     = indices;
                 newMesh.n           = normals;
-                newMesh.uv          = uvs;
+                // newMesh.uv          = uvs;
 
                 meshes[meshIndex] = newMesh;
             }
         });
+
+        // Remove duplicated triangles
+        ParallelFor(0, newNumMeshes, 32, 32, [&](int jobID, int start, int count) {
+            for (int meshIndex = start; meshIndex < start + count; meshIndex++)
+            {
+                ScratchArena scratch;
+                Mesh &mesh = meshes[meshIndex];
+                HashIndex hashMap(scratch.temp.arena, NextPowerOfTwo(mesh.numIndices / 3),
+                                  NextPowerOfTwo(mesh.numIndices / 3));
+                u32 numTriangles = 0;
+
+                int newVertexCount = 0;
+                for (int tri = 0; tri < mesh.numIndices / 3; tri++)
+                {
+                    u32 index0 = mesh.indices[3 * tri + 0];
+                    u32 index1 = mesh.indices[3 * tri + 1];
+                    u32 index2 = mesh.indices[3 * tri + 2];
+
+                    int hash           = MixBits(index0);
+                    int newVertexIndex = -1;
+                    for (int hashIndex = hashMap.FirstInHash(hash); hashIndex != -1;
+                         hashIndex     = hashMap.NextInHash(hashIndex))
+                    {
+                        if (mesh.indices[3 * hashIndex + 0] == index0 &&
+                            mesh.indices[3 * hashIndex + 1] == index1 &&
+                            mesh.indices[3 * hashIndex + 2] == index2)
+                        {
+                            newVertexIndex = hashIndex;
+                            break;
+                        }
+                    }
+
+                    if (newVertexIndex == -1)
+                    {
+                        u32 newTri = numTriangles++;
+                        hashMap.AddInHash(hash, newTri);
+                        mesh.indices[3 * newTri + 0] = index0;
+                        mesh.indices[3 * newTri + 1] = index1;
+                        mesh.indices[3 * newTri + 2] = index2;
+                    }
+                }
+
+                mesh.numIndices   = 3 * numTriangles;
+            }
+        });
+
         string virtualGeoFilename =
             PushStr8F(tempArena, "%S%S.geo", directory, RemoveFileExtension(currentFilename));
         string geoFilename = virtualGeoFilename;
