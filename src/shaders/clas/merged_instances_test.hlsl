@@ -31,16 +31,17 @@ void main(uint3 dtID : SV_DispatchThreadID)
     float4 lodBounds = info.lodBounds;
 
     float3x4 renderFromObject = float3x4(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0);
-    Translate(renderFromObject, -gpuScene.cameraP);
-
     float3 minP = lodBounds.xyz - lodBounds.w;
     float3 maxP = lodBounds.xyz + lodBounds.w;
     bool cull = FrustumCull(gpuScene.clipFromRender, renderFromObject, 
-                            minP, maxP, gpuScene.p22, gpuScene.p23);
+            minP, maxP, gpuScene.p22, gpuScene.p23);
+
+    Translate(renderFromObject, -gpuScene.cameraP);
+
     float test;
     float2 edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, 1.f, test, cull);
 
-    if (error * gpuScene.lodScale < edgeScales.x)
+    if (cull || error * gpuScene.lodScale < edgeScales.x)
     {
         if (info.flags & PARTITION_FLAG_INSTANCES_RENDERED)
         {

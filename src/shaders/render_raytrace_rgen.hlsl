@@ -187,8 +187,7 @@ void main()
                     hitT = tHit;
                     query.CommitProceduralPrimitiveHit(tHit);
 
-                    // TODO: clip against bounding box?
-#if 0
+#if 1
                     float tEntry, tLeave;
                     IntersectAABB(ellipsoid.boundsMin - ellipsoid.sphere.xyz, ellipsoid.boundsMax - ellipsoid.sphere.xyz, rayPos, rcp(rayDir), tEntry, tLeave);
                     tHit = max(tHit, tEntry);
