@@ -26,7 +26,7 @@ RWStructuredBuffer<StreamingRequest> requests : register(u12);
 
 [[vk::push_constant]] InstanceCullingPushConstant pc;
 
-[numthreads(32, 1, 1)]
+[numthreads(64, 1, 1)]
 void main(uint3 dtID : SV_DispatchThreadID)
 {
     uint instanceIndex = dtID.x;
@@ -38,17 +38,20 @@ void main(uint3 dtID : SV_DispatchThreadID)
 
     GPUInstance instance = gpuInstances[instanceIndex];
 
-    if (instance.partitionIndex == ~0u) return;
+    if (instance.flags & GPU_INSTANCE_FLAG_FREED) return;
     
     // Proxy
     if (instance.flags & GPU_INSTANCE_FLAG_MERGED)
     {
-        AABB aabb;
-        uint64_t address = mergedPartitionDeviceAddresses[instance.partitionIndex];
-        float3x4 worldFromObject = float3x4(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0);
-        WritePTLASDescriptors(worldFromObject, address, instanceIndex, instanceIndex,
-                              aabb, false, 0x0u);
-        return;
+        if (pc.oneBlasAddress != 0)
+        {
+            AABB aabb;
+            uint64_t address = mergedPartitionDeviceAddresses[instance.partitionIndex];
+            float3x4 worldFromObject = float3x4(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0);
+            WritePTLASDescriptors(worldFromObject, address, instanceIndex, instanceIndex,
+                    aabb, false, 0x0u);
+            return;
+        }
     }
 #if 0
     {
@@ -76,7 +79,14 @@ void main(uint3 dtID : SV_DispatchThreadID)
             float3(aabb.minX, aabb.minY, aabb.minZ),
             float3(aabb.maxX, aabb.maxY, aabb.maxZ), gpuScene.p22, gpuScene.p23);
 
-    instance.flags |= (cull << 0u);
+    if (cull)
+    {
+        gpuInstances[instanceIndex].flags |= GPU_INSTANCE_FLAG_CULL;
+    }
+    else 
+    {
+        gpuInstances[instanceIndex].flags &= ~GPU_INSTANCE_FLAG_CULL;
+    }
 
     uint blasIndex;
     InterlockedAdd(globals[GLOBALS_BLAS_COUNT_INDEX], 1, blasIndex);

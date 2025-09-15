@@ -8,7 +8,7 @@ RWStructuredBuffer<uint> globals : register(u1);
 StructuredBuffer<uint64_t> mergedPartitionDeviceAddresses : register(t2);
 
 RWStructuredBuffer<uint> visiblePartitions : register(u3);
-RWStructuredBuffer<uint> freedPartitions : register(u4);
+RWStructuredBuffer<uint2> freedPartitions : register(u4);
 RWStructuredBuffer<uint> instanceFreeList : register(u5);
 ConstantBuffer<GPUScene> gpuScene : register(b6);
 
@@ -30,14 +30,15 @@ void main(uint3 dtID : SV_DispatchThreadID)
     float error = info.lodError;
     float4 lodBounds = info.lodBounds;
 
-    float3x4 worldFromObject = float3x4(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0);
+    float3x4 renderFromObject = float3x4(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0);
+    Translate(renderFromObject, -gpuScene.cameraP);
 
     float3 minP = lodBounds.xyz - lodBounds.w;
     float3 maxP = lodBounds.xyz + lodBounds.w;
-    bool cull = FrustumCull(gpuScene.clipFromRender, worldFromObject, 
+    bool cull = FrustumCull(gpuScene.clipFromRender, renderFromObject, 
                             minP, maxP, gpuScene.p22, gpuScene.p23);
     float test;
-    float2 edgeScales = TestNode(worldFromObject, gpuScene.cameraFromRender, lodBounds, 1.f, test, cull);
+    float2 edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, 1.f, test, cull);
 
     if (error * gpuScene.lodScale < edgeScales.x)
     {
@@ -46,7 +47,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
             partitionInfos[partitionIndex].flags &= ~PARTITION_FLAG_INSTANCES_RENDERED;
             uint descriptorIndex;
             InterlockedAdd(globals[GLOBALS_FREED_PARTITION_COUNT], 1, descriptorIndex);
-            freedPartitions[descriptorIndex] = partitionIndex;
+            freedPartitions[descriptorIndex] = uint2(partitionIndex, GPU_INSTANCE_FLAG_INDIV);
         }
         if ((info.flags & PARTITION_FLAG_PROXY_RENDERED) == 0)
         {
@@ -60,12 +61,10 @@ void main(uint3 dtID : SV_DispatchThreadID)
     {
         if (info.flags & PARTITION_FLAG_PROXY_RENDERED)
         {
-            uint proxyInstanceIndex = info.proxyInstanceIndex;
-            partitionInfos[partitionIndex].flags &= ~PARTITION_FLAG_PROXY_RENDERED;
-            partitionInfos[partitionIndex].proxyInstanceIndex = ~0u;
-            uint instanceFreeListIndex;
-            InterlockedAdd(instanceFreeList[0], 1, instanceFreeListIndex);
-            instanceFreeList[instanceFreeListIndex + 1] = proxyInstanceIndex;
+            partitionInfos[partitionIndex].flags &= ~PARTITION_FLAG_PROXY_RENDERED; 
+            uint descriptorIndex;
+            InterlockedAdd(globals[GLOBALS_FREED_PARTITION_COUNT], 1, descriptorIndex);
+            freedPartitions[descriptorIndex] = uint2(partitionIndex, GPU_INSTANCE_FLAG_MERGED);
         }
         if ((info.flags & PARTITION_FLAG_INSTANCES_RENDERED) == 0)
         {

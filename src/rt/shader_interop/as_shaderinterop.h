@@ -27,7 +27,7 @@ namespace rt
 
 #define NUM_CLUSTER_HEADER_FLOAT4S 6
 
-#define MAX_CANDIDATE_NODES    (1u << 21u)
+#define MAX_CANDIDATE_NODES    (1u << 22u)
 #define MAX_CANDIDATE_CLUSTERS (1u << 24)
 #define MAX_VISIBLE_CLUSTERS   (1u << 22)
 
@@ -335,6 +335,8 @@ float3x4 ConvertGPUMatrix(GPUTransform transform, float3 anchor, float3 scale)
 #define GPU_INSTANCE_FLAG_CULL         (1u << 0u)
 #define GPU_INSTANCE_FLAG_MERGED       (1u << 1u)
 #define GPU_INSTANCE_FLAG_WAS_RENDERED (1u << 2u)
+#define GPU_INSTANCE_FLAG_FREED        (1u << 3u)
+#define GPU_INSTANCE_FLAG_INDIV        (1u << 4u)
 
 struct GPUInstance
 {
@@ -359,7 +361,6 @@ struct PartitionInfo
     uint32_t transformOffset;
     uint32_t transformCount;
     uint32_t flags;
-    uint32_t proxyInstanceIndex;
 };
 
 struct GPUClusterFixup

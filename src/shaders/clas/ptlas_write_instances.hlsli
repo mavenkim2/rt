@@ -3,10 +3,9 @@
 
 void WritePTLASDescriptors(float3x4 worldFromObject, uint64_t address, uint instanceIndex, uint instanceID, AABB aabb, bool update, uint flags)
 {
-    uint2 offsets = uint2(instanceIndex >> 5u, instanceIndex & 31u);
-
     uint partition = gpuInstances[instanceIndex].partitionIndex;
-    uint wasRendered = gpuInstances[instanceIndex].flags & GPU_INSTANCE_FLAG_WAS_RENDERED;
+    uint instanceFlags = gpuInstances[instanceIndex].flags ;
+    uint wasRendered = (instanceFlags & GPU_INSTANCE_FLAG_WAS_RENDERED) != 0;
 
     if (!wasRendered)
     {

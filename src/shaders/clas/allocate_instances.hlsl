@@ -3,7 +3,7 @@
 StructuredBuffer<uint> visiblePartitions : register(t0);
 StructuredBuffer<uint> globals : register(t1);
 StructuredBuffer<GPUTransform> instanceTransforms : register(t2);
-RWStructuredBuffer<PartitionInfo> partitionInfos: register(u3);
+StructuredBuffer<PartitionInfo> partitionInfos: register(t3);
 RWStructuredBuffer<int> instanceFreeList : register(u4);
 RWStructuredBuffer<GPUInstance> gpuInstances : register(u5);
 
@@ -20,37 +20,44 @@ void main(uint3 dtID : SV_DispatchThreadID)
     {
         int instanceFreeListIndex;
         InterlockedAdd(instanceFreeList[0], -1, instanceFreeListIndex);
-        if (instanceFreeListIndex < 1) return;
+        if (instanceFreeListIndex < 1)
+        {
+            instanceFreeList[0] = 0;
+            return;
+        }
         uint instanceIndex = instanceFreeList[instanceFreeListIndex];
 
-        partitionInfos[partition].proxyInstanceIndex = instanceIndex;
         gpuInstances[instanceIndex].transformIndex = ~0u;
         gpuInstances[instanceIndex].globalRootNodeOffset = 0;
         gpuInstances[instanceIndex].resourceID = 0;
         gpuInstances[instanceIndex].partitionIndex = partition;
         gpuInstances[instanceIndex].voxelAddressOffset = 0;
-        gpuInstances[instanceIndex].clusterLookupTableOffset = dtID.x;
+        gpuInstances[instanceIndex].clusterLookupTableOffset = 0;
         gpuInstances[instanceIndex].flags = GPU_INSTANCE_FLAG_MERGED;
         return;
     }
 
     int instanceFreeListOffset;
-    int numTransforms = info.transformCount; 
+    int numTransforms = (int)info.transformCount; 
     InterlockedAdd(instanceFreeList[0], -numTransforms, instanceFreeListOffset);
 
     for (int i = 0; i < numTransforms; i++)
     {
         int instanceFreeListIndex = instanceFreeListOffset - i;
-        if (instanceFreeListIndex < 1) return;
+        if (instanceFreeListIndex < 1)
+        {
+            instanceFreeList[0] = 0;
+            return;
+        }
         uint instanceIndex = instanceFreeList[instanceFreeListIndex];
 
         // TODO: proper resource id
-        gpuInstances[instanceIndex].transformIndex = info.transformOffset + i;
+        gpuInstances[instanceIndex].transformIndex = info.transformOffset + (uint)i;
         gpuInstances[instanceIndex].globalRootNodeOffset = 0;
         gpuInstances[instanceIndex].resourceID = 0;
         gpuInstances[instanceIndex].partitionIndex = partition;
         gpuInstances[instanceIndex].voxelAddressOffset = 0;
-        gpuInstances[instanceIndex].clusterLookupTableOffset = 0;
-        gpuInstances[instanceIndex].flags = 0;
+        gpuInstances[instanceIndex].clusterLookupTableOffset = numTransforms;
+        gpuInstances[instanceIndex].flags = GPU_INSTANCE_FLAG_INDIV;
     }
 }

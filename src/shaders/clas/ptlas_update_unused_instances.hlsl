@@ -1,45 +1,43 @@
 #include "../../rt/shader_interop/as_shaderinterop.h"
 
-StructuredBuffer<uint> lastFrameBitVector : register(t0);
-StructuredBuffer<uint> thisFrameBitVector : register(t1);
-RWStructuredBuffer<uint> globals : register(u2);
-RWStructuredBuffer<PTLAS_UPDATE_INSTANCE_INFO> ptlasInstanceUpdateInfos : register(u3);
-RWStructuredBuffer<PTLAS_WRITE_INSTANCE_INFO> ptlasInstanceWriteInfos : register(u4);
+RWStructuredBuffer<GPUInstance> gpuInstances : register(u0);
+RWStructuredBuffer<uint> globals : register(u1);
+RWStructuredBuffer<PTLAS_UPDATE_INSTANCE_INFO> ptlasInstanceUpdateInfos : register(u2);
+RWStructuredBuffer<PTLAS_WRITE_INSTANCE_INFO> ptlasWriteInstanceInfos : register(u3);
 
-[numthreads(32, 1, 1)]
+[numthreads(64, 1, 1)]
 void main(uint dtID : SV_DispatchThreadID)
 {
-    for (;;)
+    uint instanceIndex = dtID.x;
+    if (instanceIndex >= 1u << 21u) return;
+
+    GPUInstance instance = gpuInstances[instanceIndex];
+    if ((instance.flags & GPU_INSTANCE_FLAG_FREED) && (instance.flags & GPU_INSTANCE_FLAG_WAS_RENDERED))
     {
-        uint index;
-        InterlockedAdd(globals[GLOBALS_UNUSED_CHECK_INDEX], 1, index);
-
-        const int maxInstances = 1u << 21u;
-        const int numPartitions = 16;
-        const int numInstancesPerPartition = maxInstances / numPartitions;
-        const int maxIndex = (1u << 24u) >> 3u;
-
-        if (index >= maxIndex) break;
-
-        uint frameBits = thisFrameBitVector[index];
-        uint lastFrameBits = lastFrameBitVector[index];
-
-        uint unusedMask = lastFrameBits & ~frameBits;
-        while (unusedMask)
+        if ((instance.flags & GPU_INSTANCE_FLAG_MERGED) == 0)
         {
-            uint instanceIndex = 32 * index + firstbitlow(unusedMask);
-
             uint descriptorIndex;
 
             InterlockedAdd(globals[GLOBALS_PTLAS_UPDATE_COUNT_INDEX], 1, descriptorIndex);
 
+            gpuInstances[instanceIndex].flags &= ~GPU_INSTANCE_FLAG_WAS_RENDERED;
             PTLAS_UPDATE_INSTANCE_INFO instanceInfo;
             instanceInfo.instanceIndex = instanceIndex;
             instanceInfo.instanceContributionToHitGroupIndex = 0;
             instanceInfo.accelerationStructure = 0;
             ptlasInstanceUpdateInfos[descriptorIndex] = instanceInfo;
+        }
+        else 
+        {
+            uint descriptorIndex;
 
-            unusedMask &= unusedMask - 1;
+            InterlockedAdd(globals[GLOBALS_PTLAS_WRITE_COUNT_INDEX], 1, descriptorIndex);
+
+            gpuInstances[instanceIndex].flags &= ~GPU_INSTANCE_FLAG_WAS_RENDERED;
+            PTLAS_WRITE_INSTANCE_INFO instanceInfo = (PTLAS_WRITE_INSTANCE_INFO)0;
+            instanceInfo.instanceIndex = instanceIndex;
+            instanceInfo.partitionIndex = instance.partitionIndex;
+            ptlasWriteInstanceInfos[descriptorIndex] = instanceInfo;
         }
     }
 }
