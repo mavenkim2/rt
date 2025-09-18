@@ -128,12 +128,15 @@ __forceinline Vec3f operator*(const Mat3 &m, const Vec3f &v)
 //////////////////////////////
 // Mat4
 //
+
+struct AffineSpace;
 struct Mat4
 {
     union
     {
         f32 elements[4][4];
         Lane4F32 columns[4];
+        Vec4f columns_[4];
         struct
         {
             f32 a1, a2, a3, a4;
@@ -161,6 +164,8 @@ struct Mat4
           c4(0), d1(0), d2(0), d3(0), d4(val)
     {
     }
+
+    explicit Mat4(const AffineSpace &s);
 
     // Copy constructor
     __forceinline Mat4(const Mat4 &other)
@@ -734,6 +739,14 @@ struct AffineSpace
         return AffineSpace(1, 0, 0, a, 0, 1, 0, b, 0, 0, 1, c);
     }
 };
+
+__forceinline Mat4::Mat4(const AffineSpace &s)
+{
+    columns_[0] = Vec4f(s[0], 0.f);
+    columns_[1] = Vec4f(s[1], 0.f);
+    columns_[2] = Vec4f(s[2], 0.f);
+    columns_[3] = Vec4f(s[3], 1.f);
+}
 
 __forceinline Vec3f operator*(const AffineSpace &t, const Vec3f &v)
 {

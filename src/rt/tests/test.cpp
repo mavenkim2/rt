@@ -61,7 +61,7 @@ void WhiteFurnaceTest(Arena *arena, Options *options = 0)
 
     // Camera
     u32 width  = 1920;
-    u32 height = 804;
+    u32 height = 1080;
     Vec3f pCamera(0.f, -10.f, 0.f);
     Vec3f look(0.f, 1.f, 0.f);
     Vec3f up(0.f, 0.f, 1.f);
@@ -185,7 +185,7 @@ void WhiteFurnaceTest(Arena *arena, Options *options = 0)
 }
 #endif
 
-void TestRender(Arena *arena, OS_Handle window, Options *options = 0)
+void TestRender(Arena *arena, Options *options = 0)
 {
     // TODO:
     // - add area lights (making sure they cannot be intersected, but are sampled properly)
@@ -210,8 +210,10 @@ void TestRender(Arena *arena, OS_Handle window, Options *options = 0)
     PerformanceCounter counter = OS_StartCounter();
 
     // Camera
-    u32 width  = 1920;
-    u32 height = 804;
+    u32 width  = 2560;
+    u32 height = 1440;
+
+    OS_Handle window = OS_WindowInit(width, height);
 
     // beach cam
     // Vec3f pCamera(-510.523907, 87.308744, 181.770197);
@@ -221,7 +223,7 @@ void TestRender(Arena *arena, OS_Handle window, Options *options = 0)
     f32 lensRadius = .003125;
     // f32 focalDistance = 712.391212;
     // f32 fov           = 54.43222;
-    f32 aspectRatio = 2.386946;
+    f32 aspectRatio = (f32)width / (f32)height;
 
     // base cam
     Vec3f pCamera(-1139.0159, 23.286734, 1479.7947);
@@ -235,7 +237,8 @@ void TestRender(Arena *arena, OS_Handle window, Options *options = 0)
     Mat4 renderFromCamera = Inverse(cameraFromRender);
     AffineSpace renderFromCameraAffine(renderFromCamera);
     // TODO: going to have to figure out how to handle this automatically
-    Mat4 NDCFromCamera = Mat4::Perspective2(Radians(fov), aspectRatio);
+    Mat4 NDCFromCamera  = Mat4::Perspective2(Radians(fov), aspectRatio);
+    Mat4 cameraFromClip = Inverse(NDCFromCamera);
 
     // maps to raster coordinates
     Mat4 rasterFromNDC = Scale(Vec3f(f32(width), -f32(height), 1.f)) *
@@ -262,6 +265,7 @@ void TestRender(Arena *arena, OS_Handle window, Options *options = 0)
     params.cameraFromRaster = cameraFromRaster;
     params.renderFromCamera = renderFromCameraAffine;
     params.NDCFromCamera    = NDCFromCamera;
+    params.cameraFromClip   = cameraFromClip;
     params.cameraFromRender = cameraFromRender;
     params.renderFromWorld  = renderFromWorld;
     params.arenas           = arenas;

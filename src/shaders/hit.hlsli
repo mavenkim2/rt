@@ -14,7 +14,7 @@ struct HitInfo
 };
 
 HitInfo CalculateTriangleHitInfo(float3 p0, float3 p1, float3 p2, float3 n0, float3 n1, float3 n2, 
-                                 float2 uv0, float2 uv1, float2 uv2, float2 bary) 
+                                 float3 gn, float2 uv0, float2 uv1, float2 uv2, float2 bary) 
 {
 
     float2 duv10 = uv1 - uv0;
@@ -27,7 +27,6 @@ HitInfo CalculateTriangleHitInfo(float3 p0, float3 p1, float3 p2, float3 n0, flo
     float3 dn10 = n1 - n0;
     float3 dn20 = n2 - n0;
 
-    float3 gn = normalize(cross(p0 - p2, p1 - p2));
     float3 origin = p0 + dp10 * bary.x + dp20 * bary.y;
     float2 uv = uv0 + duv10 * bary.x + duv20 * bary.y;
 

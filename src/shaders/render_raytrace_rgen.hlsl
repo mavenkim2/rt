@@ -44,6 +44,12 @@ StructuredBuffer<PartitionInfo> partitionInfos : register(t18);
 RWStructuredBuffer<float2> debugBuffer : register(u19);
 RWStructuredBuffer<uint> globals : register(u20);
 
+RWTexture2D<float> depthBuffer : register(u21);
+RWTexture2D<float4> normalRougnessBuffer : register(u22);
+RWTexture2D<float4> diffuseAlbedo : register(u23);
+RWTexture2D<float4> specularAlbedo : register(u24);
+RWTexture2D<float> specularHitDistance : register(u25);
+
 [[vk::push_constant]] RayPushConstant push;
 
 void IntersectAABB(float3 boundsMin, float3 boundsMax, float3 o, float3 invDir, out float tEntry, out float tLeave)
@@ -429,6 +435,11 @@ void main()
 
             float3 imageLe = bindlessTextures[push.envMap].SampleLevel(samplerLinearClamp, uv, 0).rgb;
             radiance += throughput * imageLe;
+
+            if (depth == 0)
+            {
+                depthBuffer[swizzledThreadID] = depth;
+            }
             break;
         }
 
@@ -492,6 +503,11 @@ void main()
             float3 p2 = dg.DecodePosition(vids[2]);
 
             float3 gn = normalize(cross(p0 - p2, p1 - p2));
+            // TODO
+            if (dot(gn, query.WorldRayDirection()) > 0.f)
+            {
+                gn = -gn;
+            }
 
             float3 n0, n1, n2;
             if (dg.HasNormals())
@@ -514,7 +530,7 @@ void main()
             float2 uv1 = float2(0, 1);//isSecondFace ? float2(1, 1) : float2(1, 0);
             float2 uv2 = float2(1, 1);//isSecondFace ? float2(0, 1) : float2(1, 1);
 
-            hitInfo = CalculateTriangleHitInfo(p0, p1, p2, n0, n1, n2, uv0, uv1, uv2, bary);
+            hitInfo = CalculateTriangleHitInfo(p0, p1, p2, n0, n1, n2, gn, uv0, uv1, uv2, bary);
 
             // Ray cone
 #if 0
@@ -618,6 +634,17 @@ void main()
                 hitInfo.ts = tb[1];
 #endif
             }
+        }
+
+        if (depth == 0)
+        {
+            float4 clipPos = mul(scene.clipFromRender, float4(hitInfo.hitP, 1.f));
+            float depth = clipPos.z / clipPos.w;
+            depthBuffer[swizzledThreadID] = depth;
+            normalRougnessBuffer[swizzledThreadID] = float4(hitInfo.n, 1.f);
+            diffuseAlbedo[swizzledThreadID] = float4(0.f, 1.f, 0.f, 1.f);
+            specularAlbedo[swizzledThreadID] = 0.f;
+            specularHitDistance[swizzledThreadID] = 0.f;
         }
 
         // Get material

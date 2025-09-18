@@ -67,3 +67,6 @@ if (USE_GPU)
     target_include_directories(metis PRIVATE ${METIS_INCLUDE_DIR})
     set (METIS_LIBRARY metis PARENT_SCOPE)
 endif()
+
+# streamline
+#set(STREAMLINE_LIBRARY streamline PARENT_SCOPE)

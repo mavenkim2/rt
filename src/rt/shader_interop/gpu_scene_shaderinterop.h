@@ -32,6 +32,9 @@ struct GPUScene
 
     float p22;
     float p23;
+
+    float jitterX;
+    float jitterY;
 };
 
 #ifdef __cplusplus

@@ -7,8 +7,21 @@
 #include "vulkan.h"
 #include "../nvapi.h"
 #include "../../third_party/nvapi/nvapi.h"
+#include "../camera.h"
 #define VMA_IMPLEMENTATION
 #include "../../third_party/vulkan/vk_mem_alloc.h"
+
+PFun_slGetFeatureFunction *slGetFeatureFunction_p;
+PFun_slSetTagForFrame *slSetTagForFrame_p;
+PFun_slGetNewFrameToken *slGetNewFrameToken_p;
+PFun_slEvaluateFeature *slEvaluateFeature_p;
+PFun_slSetConstants *slSetConstants_p;
+PFun_slAllocateResources *slAllocateResources_p;
+PFun_slFreeResources *slFreeResources_p;
+sl::Result slGetFeatureFunction(sl::Feature feature, const char *functionName, void *&function)
+{
+    return slGetFeatureFunction_p(feature, functionName, function);
+}
 
 namespace rt
 {
@@ -39,6 +52,8 @@ VkBool32 DebugUtilsMessengerCallback(VkDebugUtilsMessageSeverityFlagBitsEXT mess
     return VK_FALSE;
 }
 
+void SLDebugMessengerCallback(sl::LogType logType, const char *msg) { Print(msg); }
+
 Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : frameCount(0)
 {
     arena           = ArenaAlloc();
@@ -46,7 +61,58 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
     const i32 minor = 0;
     const i32 patch = 1;
 
-    VK_CHECK(volkInitialize());
+    sl::Preferences slPreference;
+    slPreference.showConsole        = true;
+    slPreference.logLevel           = sl::LogLevel::eVerbose;
+    slPreference.logMessageCallback = SLDebugMessengerCallback;
+    slPreference.flags              = sl::PreferenceFlags::eUseFrameBasedResourceTagging;
+    slPreference.engine             = sl::EngineType::eCustom;
+
+    sl::Feature slFeatures[]       = {sl::kFeatureDLSS_RR};
+    slPreference.featuresToLoad    = slFeatures;
+    slPreference.numFeaturesToLoad = ArrayLength(slFeatures);
+    slPreference.renderAPI         = sl::RenderAPI::eVulkan;
+
+    // TODO don't hardcode
+    HMODULE module =
+        LoadLibraryA("../../src/third_party/streamline/bin/x64/development/sl.interposer.dll");
+    Assert(module);
+
+    // note: function pointer is cast through void function pointer to silence
+    // cast-function-type warning on gcc8
+
+    PFun_slInit *slInit_p = (PFun_slInit *)GetProcAddress(module, "slInit");
+    sl::Result result     = slInit_p(slPreference, sl::kSDKVersion);
+    PFN_vkGetInstanceProcAddr slvkGetInstanceProcAddr =
+        (PFN_vkGetInstanceProcAddr)(void (*)(void))GetProcAddress(module,
+                                                                  "vkGetInstanceProcAddr");
+    PFN_vkCreateDevice sl_vkCreateDevice =
+        (PFN_vkCreateDevice)GetProcAddress(module, "vkCreateDevice");
+
+    PFun_slIsFeatureSupported *slIsFeatureSupported_p =
+        (PFun_slIsFeatureSupported *)GetProcAddress(module, "slIsFeatureSupported");
+    slGetFeatureFunction_p =
+        (PFun_slGetFeatureFunction *)GetProcAddress(module, "slGetFeatureFunction");
+    slSetTagForFrame_p = (PFun_slSetTagForFrame *)GetProcAddress(module, "slSetTagForFrame");
+    slGetNewFrameToken_p =
+        (PFun_slGetNewFrameToken *)GetProcAddress(module, "slGetNewFrameToken");
+    slSetConstants_p = (PFun_slSetConstants *)GetProcAddress(module, "slSetConstants");
+    slEvaluateFeature_p =
+        (PFun_slEvaluateFeature *)GetProcAddress(module, "slEvaluateFeature");
+    slAllocateResources_p =
+        (PFun_slAllocateResources *)GetProcAddress(module, "slAllocateResources");
+    slFreeResources_p = (PFun_slFreeResources *)GetProcAddress(module, "slFreeResources");
+
+    // SLDLSSSetOptions slDLSSSetOptions_p =
+    //     (SLDLSSSetOptions)GetProcAddress(module, "slDLSSSetOptions");
+    //
+    // SLDLSSOptimalSettings slDLSSGetOptimalSettings_p =
+    //     (SLDLSSOptimalSettings)GetProcAddress(module, "slDLSSGetOptimalSettings");
+
+    // sl::FeatureRequirements requirements;
+    // slGetFeatureRequirements(sl::Feature feature, sl::FeatureRequirements &requirements)
+
+    volkInitializeCustom(slvkGetInstanceProcAddr);
 
     u32 apiVersion = VK_API_VERSION_1_4;
 
@@ -249,6 +315,12 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
 #endif
             if (props.properties.apiVersion < apiVersion) continue;
 
+            sl::AdapterInfo adapterInfo;
+            adapterInfo.vkPhysicalDevice = testDevice;
+            sl::Result res = slIsFeatureSupported_p(sl::kFeatureDLSS_RR, adapterInfo);
+
+            if (res != sl::Result::eOk) continue;
+
             b32 suitable = props.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
             if (preference == GPUDevicePreference::Integrated)
             {
@@ -264,6 +336,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
                 fallback = testDevice;
             }
         }
+
         physicalDevice = preferred ? preferred : fallback;
         if (!physicalDevice)
         {
@@ -515,7 +588,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
         createInfo.enabledExtensionCount   = (u32)deviceExtensions.size();
         createInfo.ppEnabledExtensionNames = deviceExtensions.data();
 
-        VK_CHECK(vkCreateDevice(physicalDevice, &createInfo, 0, &device));
+        VK_CHECK(sl_vkCreateDevice(physicalDevice, &createInfo, 0, &device));
 
         volkLoadDevice(device);
     }
@@ -698,7 +771,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
             bindlessDescriptorSetLayouts.push_back(bindlessDescriptorPool.layout);
 
             // Set debug names
-            TempArena temp = ScratchStart(0, 0);
+            // TempArena temp = ScratchStart(0, 0);
             string typeName;
             switch (types[type])
             {
@@ -711,13 +784,13 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
                 //     break;
                 default: Assert(0);
             }
-            string name =
-                PushStr8F(temp.arena, "Bindless Descriptor Set Layout: %S", typeName);
+            string name = {};
+            // PushStr8F(temp.arena, "Bindless Descriptor Set Layout: %S", typeName);
             SetName(bindlessDescriptorPool.layout, (const char *)name.str);
 
-            name = PushStr8F(temp.arena, "Bindless Descriptor Set: %S", typeName);
+            // name = PushStr8F(temp.arena, "Bindless Descriptor Set: %S", typeName);
             SetName(bindlessDescriptorPool.set, (const char *)name.str);
-            ScratchEnd(temp);
+            // ScratchEnd(temp);
         }
     }
 
@@ -1353,8 +1426,10 @@ Vulkan::ImageMemoryBarrier(VkImage image, VkImageLayout oldLayout, VkImageLayout
     barrier.subresourceRange.levelCount     = VK_REMAINING_MIP_LEVELS;
     barrier.subresourceRange.baseArrayLayer = 0;
     barrier.subresourceRange.layerCount     = VK_REMAINING_ARRAY_LAYERS;
-    barrier.srcQueueFamilyIndex             = GetQueueFamily(fromQueue);
-    barrier.dstQueueFamilyIndex             = GetQueueFamily(toQueue);
+    barrier.srcQueueFamilyIndex =
+        fromQueue == QueueType_Ignored ? VK_QUEUE_FAMILY_IGNORED : GetQueueFamily(fromQueue);
+    barrier.dstQueueFamilyIndex =
+        toQueue == QueueType_Ignored ? VK_QUEUE_FAMILY_IGNORED : GetQueueFamily(toQueue);
     return barrier;
 }
 
@@ -3962,6 +4037,201 @@ void CommandBuffer::ResetQuery(QueryPool *queryPool, u32 index, u32 count)
     vkCmdResetQueryPool(buffer, queryPool->queryPool, index, count);
 }
 
+DLSSTargets Vulkan::InitializeDLSSTargets(GPUImage *inColor, GPUImage *inDiffuseAlbedo,
+                                          GPUImage *inSpecularAlbedo,
+                                          GPUImage *inNormalRoughness, GPUImage *inMvec,
+                                          GPUImage *inDepth, GPUImage *inSpecularHitDistance,
+                                          GPUImage *outColor)
+{
+    DLSSTargets targets;
+    targets.diffuseAlbedo              = {sl::ResourceType::eTex2d, inDiffuseAlbedo->image,
+                                          inDiffuseAlbedo->allocation->GetMemory(),
+                                          inDiffuseAlbedo->imageView, VK_IMAGE_LAYOUT_GENERAL};
+    targets.diffuseAlbedo.width        = inDiffuseAlbedo->desc.width;
+    targets.diffuseAlbedo.height       = inDiffuseAlbedo->desc.height;
+    targets.diffuseAlbedo.nativeFormat = inDiffuseAlbedo->desc.format;
+    targets.diffuseAlbedo.mipLevels    = inDiffuseAlbedo->desc.numMips;
+    targets.diffuseAlbedo.arrayLayers  = inDiffuseAlbedo->desc.numLayers;
+    targets.diffuseAlbedo.usage        = inDiffuseAlbedo->desc.imageUsage;
+    targets.diffuseAlbedo.flags        = 0;
+
+    targets.specularAlbedo              = {sl::ResourceType::eTex2d, inSpecularAlbedo->image,
+                                           inSpecularAlbedo->allocation->GetMemory(),
+                                           inSpecularAlbedo->imageView, VK_IMAGE_LAYOUT_GENERAL};
+    targets.specularAlbedo.width        = inSpecularAlbedo->desc.width;
+    targets.specularAlbedo.height       = inSpecularAlbedo->desc.height;
+    targets.specularAlbedo.nativeFormat = inSpecularAlbedo->desc.format;
+    targets.specularAlbedo.mipLevels    = inSpecularAlbedo->desc.numMips;
+    targets.specularAlbedo.arrayLayers  = inSpecularAlbedo->desc.numLayers;
+    targets.specularAlbedo.usage        = inSpecularAlbedo->desc.imageUsage;
+    targets.specularAlbedo.flags        = 0;
+
+    targets.normalRoughness              = {sl::ResourceType::eTex2d, inNormalRoughness->image,
+                                            inNormalRoughness->allocation->GetMemory(),
+                                            inNormalRoughness->imageView, VK_IMAGE_LAYOUT_GENERAL};
+    targets.normalRoughness.width        = inNormalRoughness->desc.width;
+    targets.normalRoughness.height       = inNormalRoughness->desc.height;
+    targets.normalRoughness.nativeFormat = inNormalRoughness->desc.format;
+    targets.normalRoughness.mipLevels    = inNormalRoughness->desc.numMips;
+    targets.normalRoughness.arrayLayers  = inNormalRoughness->desc.numLayers;
+    targets.normalRoughness.usage        = inNormalRoughness->desc.imageUsage;
+    targets.normalRoughness.flags        = 0;
+
+    targets.colorIn              = {sl::ResourceType::eTex2d, inColor->image,
+                                    inColor->allocation->GetMemory(), inColor->imageView,
+                                    VK_IMAGE_LAYOUT_GENERAL};
+    targets.colorIn.width        = inColor->desc.width;
+    targets.colorIn.height       = inColor->desc.height;
+    targets.colorIn.nativeFormat = inColor->desc.format;
+    targets.colorIn.mipLevels    = inColor->desc.numMips;
+    targets.colorIn.arrayLayers  = inColor->desc.numLayers;
+    targets.colorIn.usage        = inColor->desc.imageUsage;
+    targets.colorIn.flags        = 0;
+    targets.mvec = {sl::ResourceType::eTex2d, inMvec->image, inMvec->allocation->GetMemory(),
+                    inMvec->imageView, VK_IMAGE_LAYOUT_GENERAL};
+    targets.mvec.width        = inMvec->desc.width;
+    targets.mvec.height       = inMvec->desc.height;
+    targets.mvec.nativeFormat = inMvec->desc.format;
+    targets.mvec.mipLevels    = inMvec->desc.numMips;
+    targets.mvec.arrayLayers  = inMvec->desc.numLayers;
+    targets.mvec.usage        = inMvec->desc.imageUsage;
+    targets.mvec.flags        = 0;
+
+    targets.depth              = {sl::ResourceType::eTex2d, inDepth->image,
+                                  inDepth->allocation->GetMemory(), inDepth->imageView,
+                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    targets.depth.width        = inDepth->desc.width;
+    targets.depth.height       = inDepth->desc.height;
+    targets.depth.nativeFormat = inDepth->desc.format;
+    targets.depth.mipLevels    = inDepth->desc.numMips;
+    targets.depth.arrayLayers  = inDepth->desc.numLayers;
+    targets.depth.usage        = inDepth->desc.imageUsage;
+    targets.depth.flags        = 0;
+
+    targets.specularHitDistance = {sl::ResourceType::eTex2d, inSpecularHitDistance->image,
+                                   inSpecularHitDistance->allocation->GetMemory(),
+                                   inSpecularHitDistance->imageView, VK_IMAGE_LAYOUT_GENERAL};
+    targets.specularHitDistance.width        = inSpecularHitDistance->desc.width;
+    targets.specularHitDistance.height       = inSpecularHitDistance->desc.height;
+    targets.specularHitDistance.nativeFormat = inSpecularHitDistance->desc.format;
+    targets.specularHitDistance.mipLevels    = inSpecularHitDistance->desc.numMips;
+    targets.specularHitDistance.arrayLayers  = inSpecularHitDistance->desc.numLayers;
+    targets.specularHitDistance.usage        = inSpecularHitDistance->desc.imageUsage;
+    targets.specularHitDistance.flags        = 0;
+
+    targets.colorOut              = {sl::ResourceType::eTex2d, outColor->image,
+                                     outColor->allocation->GetMemory(), outColor->imageView,
+                                     VK_IMAGE_LAYOUT_GENERAL};
+    targets.colorOut.width        = outColor->desc.width;
+    targets.colorOut.height       = outColor->desc.height;
+    targets.colorOut.nativeFormat = outColor->desc.format;
+    targets.colorOut.mipLevels    = outColor->desc.numMips;
+    targets.colorOut.arrayLayers  = outColor->desc.numLayers;
+    targets.colorOut.usage        = outColor->desc.imageUsage;
+    targets.colorOut.flags        = 0;
+    return targets;
+}
+
+void CommandBuffer::DLSS(DLSSTargets &targets, AffineSpace &worldToCameraView,
+                         AffineSpace &cameraViewToWorld, Mat4 &clipFromCamera,
+                         Mat4 &cameraFromClip, Mat4 &clipToPrevClip, Mat4 &prevClipToClip,
+                         Vec3f &cameraP, Vec3f &cameraUp, Vec3f &cameraFwd, Vec3f &cameraRight,
+                         f32 fov, f32 aspectRatio, const Vec2f &jitter)
+{
+    static sl::ViewportHandle viewportHandle = {};
+
+    sl::Extent inExtent{0, 0, targets.colorIn.width, targets.colorIn.height};
+    sl::Extent outExtent{0, 0, targets.colorOut.width, targets.colorOut.height};
+    sl::ResourceTag diffuseAlbedoTag   = {&targets.diffuseAlbedo, sl::kBufferTypeAlbedo,
+                                          sl::ResourceLifecycle::eValidUntilPresent, &inExtent};
+    sl::ResourceTag specularAlbedoTag  = {&targets.specularAlbedo,
+                                          sl::kBufferTypeSpecularAlbedo,
+                                          sl::ResourceLifecycle::eValidUntilPresent, &inExtent};
+    sl::ResourceTag normalRoughnessTag = {
+        &targets.normalRoughness, sl::kBufferTypeNormalRoughness,
+        sl::ResourceLifecycle::eValidUntilPresent, &inExtent};
+    sl::ResourceTag colorInTag = {&targets.colorIn, sl::kBufferTypeScalingInputColor,
+                                  sl::ResourceLifecycle::eOnlyValidNow, &inExtent};
+    sl::ResourceTag mvecTag    = {&targets.mvec, sl::kBufferTypeMotionVectors,
+                                  sl::ResourceLifecycle::eValidUntilPresent, &inExtent};
+    sl::ResourceTag depthTag   = {&targets.depth, sl::kBufferTypeDepth,
+                                  sl::ResourceLifecycle::eValidUntilPresent, &inExtent};
+    sl::ResourceTag specularHitDistanceTag = {
+        &targets.specularHitDistance, sl::kBufferTypeSpecularHitDistance,
+        sl::ResourceLifecycle::eValidUntilPresent, &inExtent};
+    sl::ResourceTag colorOutTag = {&targets.colorOut, sl::kBufferTypeScalingOutputColor,
+                                   sl::ResourceLifecycle::eOnlyValidNow, &outExtent};
+    sl::ResourceTag tags[]      = {
+        diffuseAlbedoTag, specularAlbedoTag, normalRoughnessTag,     colorInTag,
+        mvecTag,          depthTag,          specularHitDistanceTag, colorOutTag};
+
+    sl::FrameToken *token = 0;
+    u32 frameCount        = device->frameCount;
+    sl::Result res        = slGetNewFrameToken_p(token, &frameCount);
+    Assert(res == sl::Result::eOk);
+
+    sl::DLSSDOptions options    = {};
+    options.mode                = sl::DLSSMode::eMaxQuality;
+    options.outputWidth         = 2560;
+    options.outputHeight        = 1440;
+    options.colorBuffersHDR     = sl::Boolean::eTrue;
+    options.normalRoughnessMode = sl::DLSSDNormalRoughnessMode::ePacked;
+    for (int i = 0; i < 3; i++)
+    {
+        options.worldToCameraView.setRow(
+            i, sl::float4(worldToCameraView[0][i], worldToCameraView[1][i],
+                          worldToCameraView[2][i], worldToCameraView[3][i]));
+        options.cameraViewToWorld.setRow(
+            i, sl::float4(cameraViewToWorld[0][i], cameraViewToWorld[1][i],
+                          cameraViewToWorld[2][i], cameraViewToWorld[3][i]));
+    }
+    options.worldToCameraView.setRow(3, sl::float4(0, 0, 0, 1));
+    options.cameraViewToWorld.setRow(3, sl::float4(0, 0, 0, 1));
+    res = slDLSSDSetOptions(viewportHandle, options);
+    Assert(res == sl::Result::eOk);
+
+    res = slSetTagForFrame_p(*token, viewportHandle, tags, ArrayLength(tags), buffer);
+    Assert(res == sl::Result::eOk);
+
+    auto ConvertToFloat4x4 = [&](Mat4 &transform) {
+        sl::float4x4 result;
+        for (int i = 0; i < 4; i++)
+        {
+            result.setRow(i, sl::float4(transform[0][i], transform[1][i], transform[2][i],
+                                        transform[3][i]));
+        }
+        return result;
+    };
+
+    sl::Constants constants        = {};
+    constants.mvecScale            = {1, 1};
+    constants.cameraViewToClip     = ConvertToFloat4x4(cameraFromClip);
+    constants.clipToCameraView     = ConvertToFloat4x4(clipFromCamera);
+    constants.clipToPrevClip       = ConvertToFloat4x4(clipToPrevClip);
+    constants.prevClipToClip       = ConvertToFloat4x4(prevClipToClip);
+    constants.cameraPos            = sl::float3(cameraP.x, cameraP.y, cameraP.z);
+    constants.cameraUp             = sl::float3(cameraUp.x, cameraUp.y, cameraUp.z);
+    constants.cameraFwd            = sl::float3(cameraFwd.x, cameraFwd.y, cameraFwd.z);
+    constants.cameraRight          = sl::float3(cameraRight.x, cameraRight.y, cameraRight.z);
+    constants.cameraNear           = 1e-2f;
+    constants.cameraFar            = 1000.f;
+    constants.cameraFOV            = fov;
+    constants.cameraAspectRatio    = aspectRatio;
+    constants.cameraMotionIncluded = sl::Boolean::eTrue;
+    constants.depthInverted        = sl::Boolean::eFalse;
+    constants.motionVectors3D      = sl::Boolean::eFalse;
+    constants.reset = device->frameCount == 0 ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+    constants.jitterOffset = sl::float2(jitter.x, jitter.y);
+
+    res = slSetConstants_p(constants, *token, viewportHandle);
+    Assert(res == sl::Result::eOk);
+
+    const sl::BaseStructure *inputs[] = {&viewportHandle};
+    res =
+        slEvaluateFeature_p(sl::kFeatureDLSS_RR, *token, inputs, ArrayLength(inputs), buffer);
+    Assert(res == sl::Result::eOk);
+}
+
 u32 Vulkan::GetQueueFamily(QueueType queueType)
 {
     Assert(families.size() > 0);
@@ -3995,7 +4265,8 @@ bool Vulkan::BeginFrame(bool doubleBuffer)
                 // // waitInfo.pSemaphores         =
                 // &queue.submitSemaphore[GetCurrentBuffer()]; waitInfo.pSemaphores =
                 // &queue.submitSemaphore[GetCurrentBuffer()];
-                // VkResult result = vkWaitSemaphores(device, &waitInfo, 10e9); // UINT64_MAX);
+                // VkResult result = vkWaitSemaphores(device, &waitInfo, 10e9); //
+                // UINT64_MAX);
 
                 if (result != VK_SUCCESS)
                 {
@@ -4029,6 +4300,20 @@ void Vulkan::Wait(Semaphore s)
     waitInfo.semaphoreCount      = 1;
     waitInfo.pSemaphores         = &s.semaphore;
     vkWaitSemaphores(device, &waitInfo, UINT64_MAX);
+}
+
+void Vulkan::GetDLSSTargetDimensions(u32 &width, u32 &height)
+{
+    // DLSS
+    sl::DLSSDOptions dlssOptions = {};
+    dlssOptions.mode             = sl::DLSSMode::eMaxQuality;
+    dlssOptions.outputWidth      = 2560;
+    dlssOptions.outputHeight     = 1440;
+
+    sl::DLSSDOptimalSettings dlssSettings;
+    sl::Result res = slDLSSDGetOptimalSettings(dlssOptions, dlssSettings);
+    width          = dlssSettings.optimalRenderWidth;
+    height         = dlssSettings.optimalRenderHeight;
 }
 
 } // namespace rt

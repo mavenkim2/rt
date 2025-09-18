@@ -1,0 +1,31 @@
+﻿<project toolsVersion="6.21">
+  <dependency name="premake" linkPath="tools/premake5">
+    <package name="premake" version="5.0.0-beta1+nv1-windows-x86_64" platforms="windows-x86_64" />
+    <package name="premake" version="5.0.0#0013-6e380c02-linux-x86_64" platforms="linux-x86_64" />
+    <package name="premake" version="5.0.0.13-53e4f813-linux-aarch64" platforms="linux-aarch64" />  
+  </dependency>
+  <dependency name="nvapi" linkPath="external/nvapi">
+    <package name="nvapi" version="r530-public-windows-x86_64" platforms="windows-x86_64"/>
+  </dependency>  
+  <dependency name="VulkanSDK" linkPath="external/vulkan">
+    <package name="VulkanSDK" version="1.3.231.1-ext-windows-x86_64" platforms="windows-x86_64"/>
+  </dependency>
+  <dependency name="imgui" linkPath="external/imgui">
+    <package name="imgui" version="1.77_WIP-d405d530" platforms="windows-x86_64" />
+  </dependency>
+  <dependency name="slang" linkPath="external/slang">
+    <package name="slang" version="0.27.21-win64" platforms="windows-x86_64" />
+  </dependency>
+  <dependency name="winpixeventruntime" linkPath="external/pix">
+    <package name="winpixeventruntime" version="1.0.190604001-8-1f97383b" platforms="windows-x86_64" />
+  </dependency>
+  <dependency name="implot" linkPath="external/implot">
+    <package name="implot" version="v0.14-d875123-windows-x86_64" platforms="windows-x86_64" />
+  </dependency>
+  <dependency name="gtest-debug" linkPath="external/gtest/debug">
+    <package name="gtest" version="1.12.1-pic-cxx11-abi-433871a7-windows-x86_64-debug" platforms="windows-x86_64" />
+  </dependency>
+  <dependency name="gtest-release" linkPath="external/gtest/release">
+    <package name="gtest" version="1.12.1-pic-cxx11-abi-433871a7-windows-x86_64-release" platforms="windows-x86_64" />
+  </dependency>
+</project>

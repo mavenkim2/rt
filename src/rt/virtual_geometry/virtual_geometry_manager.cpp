@@ -2970,7 +2970,7 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
             float maxScale = Sqrt(Max(scaleX, Max(scaleY, scaleZ)));
 
             float error         = Max(extent.x, Max(extent.y, extent.z));
-            float instanceError = error * minScale;
+            float instanceError = error * maxScale;
 
             maxError = Max(maxError, instanceError);
 

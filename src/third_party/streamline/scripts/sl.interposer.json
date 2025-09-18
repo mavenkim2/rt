@@ -1,0 +1,18 @@
+{
+  "enableInterposer": true,
+  "useDXGIProxy": false,
+  "loadAllFeatures": false,
+  // "loadSpecificFeatures": [0,1],
+  "showConsole": true,
+  // Log levels are off, on, verbose
+  "logLevel": 2,
+  "logMessageDelayMs": 5000,
+  "waitForDebugger" : false,
+  "vkValidation": false,
+  "forceProxies": false,
+  "forceNonNVDA": false,
+  "trackEngineAllocations" : false,
+  // To use, uncomment the following and set the appropriate paths
+  "logPath": "C:/NGXLogs"
+  // "pathToPlugins": "N:/My/Plugin/Path"
+}

@@ -15,6 +15,7 @@
 #include "graphics/ptex.h"
 #include "tests/test.h"
 #include "image.h"
+#include "../../third_party/streamline/include/sl.h"
 
 namespace rt
 {
@@ -980,46 +981,6 @@ int main(int argc, char *argv[])
     Arena *dataArena = ArenaAlloc();
     Arena *arena     = ArenaAlloc();
     InitThreadContext(arena, "[Main Thread]", 1);
-    OS_Init();
-
-    Spectra::Init(arena);
-    RGBToSpectrumTable::Init(arena);
-    RGBColorSpace::Init(arena);
-    InitializePtex();
-
-    u32 numProcessors      = OS_NumProcessors();
-    threadLocalStatistics  = PushArray(arena, ThreadStatistics, numProcessors);
-    threadMemoryStatistics = PushArray(arena, ThreadMemoryStatistics, numProcessors);
-    scheduler.Init(numProcessors);
-
-    OS_Handle handle = OS_WindowInit(1920, 804);
-
-#if 0
-    Ptex::String error;
-    Ptex::PtexTexture *texture =
-        cache->get("../../data/island/textures/isBeach/Color/archiveShell0008_geo.ptx", error);
-    // u8 *data = Convert(arena, texture);
-    Ptex::PtexFilter *filter =
-        Ptex::PtexFilter::getFilter(texture, Ptex::PtexFilter::FilterType::f_bspline);
-    const Vec2f &uv = Vec2f(0.5f, 0.5f);
-    u32 faceIndex   = 0;
-    u32 numFaces    = texture->getInfo().numFaces;
-    Vec4f filterWidths(0.25f);
-    f32 out[3] = {};
-    filter->eval(out, 0, 3, faceIndex, uv[0], uv[1], filterWidths[0], filterWidths[1],
-                 filterWidths[2], filterWidths[3]);
-
-    faceIndex = 118;
-    filter->eval(out, 0, 3, faceIndex, uv[0], uv[1], filterWidths[0], filterWidths[1],
-                 filterWidths[2], filterWidths[3]);
-
-    faceIndex = 2 * 118;
-    filter->eval(out, 0, 3, faceIndex, uv[0], uv[1], filterWidths[0], filterWidths[1],
-                 filterWidths[2], filterWidths[3]);
-    //
-    // Assert(!IsNaN(out[0]) && !IsNaN(out[1]) && !IsNaN(out[2]));
-    // filter->release();
-#endif
 
     const u32 count = 3000000;
 
@@ -1058,6 +1019,7 @@ int main(int argc, char *argv[])
             i++;
         }
     }
+
     if (options.filename.size == 0 || !(GetFileExtension(options.filename) == "rtscene"))
     {
         printf("Must pass in a .rtscene file.\n");
@@ -1074,8 +1036,46 @@ int main(int argc, char *argv[])
     Vulkan *v = PushStructConstruct(arena, Vulkan)(mode);
     device    = v;
 #endif
+    OS_Init();
 
-    TestRender(arena, handle, &options);
+    Spectra::Init(arena);
+    RGBToSpectrumTable::Init(arena);
+    RGBColorSpace::Init(arena);
+    InitializePtex();
+
+    u32 numProcessors      = OS_NumProcessors();
+    threadLocalStatistics  = PushArray(arena, ThreadStatistics, numProcessors);
+    threadMemoryStatistics = PushArray(arena, ThreadMemoryStatistics, numProcessors);
+    scheduler.Init(numProcessors);
+
+#if 0
+    Ptex::String error;
+    Ptex::PtexTexture *texture =
+        cache->get("../../data/island/textures/isBeach/Color/archiveShell0008_geo.ptx", error);
+    // u8 *data = Convert(arena, texture);
+    Ptex::PtexFilter *filter =
+        Ptex::PtexFilter::getFilter(texture, Ptex::PtexFilter::FilterType::f_bspline);
+    const Vec2f &uv = Vec2f(0.5f, 0.5f);
+    u32 faceIndex   = 0;
+    u32 numFaces    = texture->getInfo().numFaces;
+    Vec4f filterWidths(0.25f);
+    f32 out[3] = {};
+    filter->eval(out, 0, 3, faceIndex, uv[0], uv[1], filterWidths[0], filterWidths[1],
+                 filterWidths[2], filterWidths[3]);
+
+    faceIndex = 118;
+    filter->eval(out, 0, 3, faceIndex, uv[0], uv[1], filterWidths[0], filterWidths[1],
+                 filterWidths[2], filterWidths[3]);
+
+    faceIndex = 2 * 118;
+    filter->eval(out, 0, 3, faceIndex, uv[0], uv[1], filterWidths[0], filterWidths[1],
+                 filterWidths[2], filterWidths[3]);
+    //
+    // Assert(!IsNaN(out[0]) && !IsNaN(out[1]) && !IsNaN(out[2]));
+    // filter->release();
+#endif
+
+    TestRender(arena, &options);
     // WhiteFurnaceTest(arena, &options);
 
     // CameraRayTest(arena);

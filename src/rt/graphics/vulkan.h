@@ -16,6 +16,9 @@
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
 #include "../../third_party/vulkan/vk_mem_alloc.h"
 
+#include "../../third_party/streamline/include/sl.h"
+#include "../../third_party/streamline/include/sl_dlss_d.h"
+
 namespace rt
 {
 
@@ -574,6 +577,8 @@ enum QueueType
     QueueType_Copy,
 
     QueueType_Count,
+
+    QueueType_Ignored,
 };
 
 enum QueueFlag
@@ -587,6 +592,18 @@ struct Semaphore
 {
     VkSemaphore semaphore;
     u64 signalValue;
+};
+
+struct DLSSTargets
+{
+    sl::Resource diffuseAlbedo;
+    sl::Resource specularAlbedo;
+    sl::Resource normalRoughness;
+    sl::Resource colorIn;
+    sl::Resource mvec;
+    sl::Resource depth;
+    sl::Resource specularHitDistance;
+    sl::Resource colorOut;
 };
 
 enum class DescriptorType
@@ -757,7 +774,8 @@ struct CommandBuffer
     void Barrier(GPUImage *image, VkImageLayout oldLayout, VkImageLayout newLayout,
                  VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask,
                  VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask,
-                 QueueType fromQueue, QueueType toQueue);
+                 QueueType fromQueue = QueueType_Ignored,
+                 QueueType toQueue   = QueueType_Ignored);
     void Barrier(GPUImage *image, VkImageLayout layout, VkPipelineStageFlags2 stage,
                  VkAccessFlags2 access);
     void Barrier(GPUBuffer *buffer, VkPipelineStageFlags2 stage, VkAccessFlags2 access);
@@ -855,6 +873,11 @@ struct CommandBuffer
     void ResolveQuery(QueryPool *queryPool, GPUBuffer *gpuBuffer, u32 queryIndex, u32 count,
                       u32 destOffset);
     void ResetQuery(QueryPool *queryPool, u32 index, u32 count);
+    void DLSS(DLSSTargets &targets, AffineSpace &worldToCameraView,
+              AffineSpace &cameraViewToWorld, Mat4 &clipFromCamera, Mat4 &cameraFromClip,
+              Mat4 &clipToPrevClip, Mat4 &prevClipToClip, Vec3f &cameraP, Vec3f &cameraUp,
+              Vec3f &cameraFwd, Vec3f &cameraRight, f32 fov, f32 aspectRatio,
+              const Vec2f &jitter);
 };
 
 typedef ChunkedLinkedList<CommandBuffer> CommandBufferList;
@@ -1137,6 +1160,11 @@ struct Vulkan
     void EndFrame(int queueType);
 
     void Wait(Semaphore s);
+    void GetDLSSTargetDimensions(u32 &width, u32 &height);
+    DLSSTargets InitializeDLSSTargets(GPUImage *inColor, GPUImage *inDiffuseAlbedo,
+                                      GPUImage *inSpecularAlbedo, GPUImage *inNormalRoughness,
+                                      GPUImage *inMvec, GPUImage *inDepth,
+                                      GPUImage *inSpecularHitDistance, GPUImage *outColor);
 
     // void CopyBuffer(CommandBuffer cmd, GPUBuffer *dest, GPUBuffer *src, u32 size);
     // void ClearBuffer(CommandBuffer cmd, GPUBuffer *dst);

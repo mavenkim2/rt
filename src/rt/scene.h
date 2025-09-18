@@ -641,6 +641,7 @@ struct RenderParams2
     AffineSpace renderFromCamera;
 
     Mat4 NDCFromCamera;
+    Mat4 cameraFromClip;
     Mat4 cameraFromRender;
 
     AffineSpace renderFromWorld;
