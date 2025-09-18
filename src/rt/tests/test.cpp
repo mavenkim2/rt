@@ -237,7 +237,7 @@ void TestRender(Arena *arena, Options *options = 0)
     Mat4 renderFromCamera = Inverse(cameraFromRender);
     AffineSpace renderFromCameraAffine(renderFromCamera);
     // TODO: going to have to figure out how to handle this automatically
-    Mat4 NDCFromCamera  = Mat4::Perspective2(Radians(fov), aspectRatio);
+    Mat4 NDCFromCamera  = Mat4::Perspective3(Radians(fov), aspectRatio);
     Mat4 cameraFromClip = Inverse(NDCFromCamera);
 
     // maps to raster coordinates

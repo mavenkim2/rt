@@ -1,9 +1,9 @@
 #include "../rt/shader_interop/gpu_scene_shaderinterop.h"
 
 Texture2D<float> depthBuffer : register(t0);
-RWTexture2D<half2> motionVectors : register(u1);
+RWTexture2D<float2> motionVectors : register(u1);
 ConstantBuffer<GPUScene> thisScene : register(b2);
-ConstantBuffer<GPUScene> lastScene : register(b2);
+ConstantBuffer<GPUScene> lastScene : register(b3);
 
 [numthreads(8, 8, 1)]
 void main(uint3 dtID: SV_DispatchThreadID)
@@ -13,18 +13,16 @@ void main(uint3 dtID: SV_DispatchThreadID)
     depthBuffer.GetDimensions(width, height);
     if (any(pixel >= uint2(width, height))) return;
 
-    float depth = depthBuffer[pixel];
+    float depth = depthBuffer[pixel]; 
+    float2 uv = (float2(pixel) + 0.5f) / float2(width, height);
 
-    float4 viewPos = mul(thisScene.cameraFromRaster, float4(pixel, 0.f, 1.f));
-    viewPos /= viewPos.w;
-    float3 worldPos = mul(thisScene.renderFromCamera, viewPos);
+    float4 clipPos = float4(uv.x * 2.f - 1.f, 1.f - uv.y * 2.f, depth, 1.f);
+    float4 prevClipPos = mul(thisScene.prevClipFromClip, clipPos);
+    prevClipPos.xy /= prevClipPos.w;
 
-    float4 lastNdcPos = mul(lastScene.clipFromRender, float4(worldPos, 1.f));
-    lastNdcPos /= lastNdcPos.w;
+    float2 velocity = prevClipPos.xy - clipPos.xy;
+    velocity *= float2(0.5f, -0.5f);
+    velocity = float2(abs(velocity.x) < 1e-7f ? 0.f : velocity.x, abs(velocity.y) < 1e-7f ? 0.f : velocity.y);
 
-    float2 uvPrev = float2((lastNdcPos.x + 1.f) * 0.5f, (1.f - lastNdcPos.y) * 0.5f);
-    float2 uv = pixel / float2(width, height);
-
-    float2 velocity = (uvPrev - float2(lastScene.jitterX, lastScene.jitterY)) - (uv - float2(thisScene.jitterX, thisScene.jitterY));
     motionVectors[pixel] = velocity;
 }

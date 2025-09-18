@@ -193,7 +193,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         testShader = device->CreateShader(ShaderStage::Compute, "test shader", testShaderData);
 
         string mvecShaderName = "../src/shaders/calculate_motion_vectors.spv";
-        string mvecShaderData = OS_ReadFile(arena, testShaderName);
+        string mvecShaderData = OS_ReadFile(arena, mvecShaderName);
         mvecShader = device->CreateShader(ShaderStage::Compute, "mvec shader", mvecShaderData);
     }
 
@@ -240,6 +240,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     u32 targetHeight;
 
     device->GetDLSSTargetDimensions(targetWidth, targetHeight);
+    targetWidth  = 1920;
+    targetHeight = 1080;
 
     Swapchain swapchain = device->CreateSwapchain(params->window, VK_FORMAT_R8G8B8A8_SRGB,
                                                   params->width, params->height);
@@ -250,10 +252,17 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     pushConstant.size   = sizeof(RayPushConstant);
 
     Semaphore submitSemaphore = device->CreateSemaphore();
+
+    Mat4 rasterFromNDC = Scale(Vec3f(f32(targetWidth), -f32(targetHeight), 1.f)) *
+                         Scale(Vec3f(1.f / 2.f, 1.f / 2.f, 1.f)) *
+                         Translate(Vec3f(1.f, -1.f, 0.f));
+    Mat4 rasterFromCamera = rasterFromNDC * params->NDCFromCamera;
+    Mat4 cameraFromRaster = Inverse(rasterFromCamera);
+
     // Transfer data to GPU
     GPUScene gpuScene;
     gpuScene.clipFromRender   = params->NDCFromCamera * params->cameraFromRender;
-    gpuScene.cameraFromRaster = params->cameraFromRaster;
+    gpuScene.cameraFromRaster = cameraFromRaster;
     gpuScene.renderFromCamera = params->renderFromCamera;
     gpuScene.cameraFromRender = params->cameraFromRender;
     gpuScene.lightFromRender  = params->lightFromRender;
@@ -264,8 +273,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     gpuScene.focalLength      = params->focalLength;
     gpuScene.height           = params->height;
     gpuScene.fov              = params->fov;
-    gpuScene.p22              = params->rasterFromCamera[2][2];
-    gpuScene.p23              = params->rasterFromCamera[3][2];
+    gpuScene.p22              = rasterFromCamera[2][2];
+    gpuScene.p23              = rasterFromCamera[3][2];
 
     ShaderDebugInfo shaderDebug;
 
@@ -336,7 +345,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                          VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
     transferCmd->Barrier(&specularHitDistance, VK_IMAGE_LAYOUT_GENERAL,
                          VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-    transferCmd->FlushBarriers();
+    transferCmd->Barrier(&motionVectorBuffer, VK_IMAGE_LAYOUT_GENERAL,
+                         VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
     transferCmd->FlushBarriers();
 
     submitSemaphore.signalValue = 1;
@@ -948,16 +958,17 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         Mat4 clipToPrevClip;
         Mat4 prevClipToClip;
-        u32 numPhases     = 8 * u32(Sqr(params->height / (f32)targetHeight));
+        u32 numPhases     = 8 * u32(Ceil(Sqr(params->height / (f32)targetHeight)));
         f32 haltonSampleX = Halton((device->frameCount + 1) % numPhases, 2);
         f32 haltonSampleY = Halton((device->frameCount + 1) % numPhases, 3);
-        float haltonX     = 2.0f * haltonSampleX - 1.0f;
-        float haltonY     = 2.0f * haltonSampleY - 1.0f;
-        float jitterX     = (haltonX / targetWidth);
-        float jitterY     = (haltonY / targetHeight);
+        float haltonX     = 2.f * haltonSampleX - 1.f;
+        float haltonY     = 2.f * haltonSampleY - 1.f;
+        float jitterX     = (.5f * haltonX / targetWidth);
+        float jitterY     = (.5f * haltonY / targetHeight);
 
-        float outJitterX = haltonSampleX - 0.5f;
-        float outJitterY = haltonSampleY - 0.5f;
+        float outJitterX = .5f * (haltonSampleX - 0.5f);
+        float outJitterY = .5f * (0.5f - haltonSampleY);
+
         // Input
         {
             f32 speed = 100.f;
@@ -1002,28 +1013,23 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
             AffineSpace cameraFromRender =
                 AffineSpace(axis, Vec3f(0)) * Translate(-camera.position);
-            AffineSpace renderFromCamera =
-                AffineSpace(axis, Vec3f(0)) * Translate(-camera.position);
+            AffineSpace renderFromCamera = Inverse(cameraFromRender);
 
-            clipToPrevClip =
-                gpuScene.clipFromRender *
-                Mat4(renderFromCamera[0][0], renderFromCamera[1][0], renderFromCamera[2][0],
-                     renderFromCamera[3][0], renderFromCamera[0][1], renderFromCamera[1][1],
-                     renderFromCamera[2][1], renderFromCamera[3][1], renderFromCamera[0][2],
-                     renderFromCamera[1][2], renderFromCamera[2][2], renderFromCamera[3][2],
-                     0.f, 0.f, 0.f, 1.f) *
-                params->cameraFromClip;
+            Mat4 clipFromCamera = params->NDCFromCamera;
+            clipFromCamera[2][0] -= jitterX;
+            clipFromCamera[2][1] -= jitterY;
+
+            clipToPrevClip = params->NDCFromCamera * Mat4(gpuScene.cameraFromRender) *
+                             Mat4(renderFromCamera) * params->cameraFromClip;
             prevClipToClip = Inverse(clipToPrevClip);
 
             gpuScene.cameraP          = camera.position;
-            gpuScene.renderFromCamera = Inverse(cameraFromRender);
+            gpuScene.renderFromCamera = renderFromCamera;
             gpuScene.cameraFromRender = cameraFromRender;
-            Mat4 clipFromCamera       = params->NDCFromCamera;
-            clipFromCamera[2][0] += jitterX;
-            clipFromCamera[2][1] += jitterY;
-            gpuScene.clipFromRender = clipFromCamera * Mat4(gpuScene.cameraFromRender);
-            gpuScene.jitterX        = jitterX;
-            gpuScene.jitterY        = jitterY;
+            gpuScene.prevClipFromClip = clipToPrevClip;
+            gpuScene.clipFromRender   = clipFromCamera * Mat4(cameraFromRender);
+            gpuScene.jitterX          = jitterX;
+            gpuScene.jitterY          = jitterY;
             OS_GetMousePos(params->window, shaderDebug.mousePos.x, shaderDebug.mousePos.y);
         }
         u32 dispatchDimX =
@@ -1340,6 +1346,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
                      VK_ACCESS_2_SHADER_READ_BIT);
         cmd->FlushBarriers();
+
         cmd->StartBindingCompute(mvecPipeline, &mvecLayout)
             .Bind(&depthBuffer)
             .Bind(&motionVectorBuffer)
@@ -1347,6 +1354,50 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             .Bind(&sceneTransferBuffers[lastFrameBuffer].buffer)
             .End();
         cmd->Dispatch((targetWidth + 7) / 8, (targetHeight + 7) / 8, 1);
+
+        // if (device->frameCount > 200)
+        // {
+        //     GPUBuffer readback0 =
+        //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        //                              depthBuffer.desc.width * depthBuffer.desc.height * 16,
+        //                              MemoryUsage::GPU_TO_CPU);
+        //     //
+        //     //     // GPUBuffer readback2 =
+        //     //     //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        //     //     //     thisFrameBitVector->size,
+        //     //     //                          MemoryUsage::GPU_TO_CPU);
+        //     cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        //                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+        //                  VK_ACCESS_2_TRANSFER_READ_BIT);
+        //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+        //                  VK_ACCESS_2_TRANSFER_READ_BIT);
+        //     cmd->Barrier(&normalRoughness, VK_IMAGE_LAYOUT_GENERAL,
+        //                  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        //                  VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+        //                  VK_ACCESS_2_TRANSFER_READ_BIT);
+        //     //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+        //     //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        //     //     // VK_ACCESS_2_SHADER_WRITE_BIT,
+        //     //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
+        //     cmd->FlushBarriers();
+        //     // cmd->CopyBuffer(&readback0, &instancesBuffer);
+        //     BufferImageCopy copy = {};
+        //     copy.extent =
+        //         Vec3u(motionVectorBuffer.desc.width, motionVectorBuffer.desc.height, 1);
+        //     cmd->CopyImageToBuffer(&readback0, &normalRoughness, &copy, 1);
+        //     Semaphore testSemaphore   = device->CreateSemaphore();
+        //     testSemaphore.signalValue = 1;
+        //     cmd->SignalOutsideFrame(testSemaphore);
+        //     device->SubmitCommandBuffer(cmd);
+        //     device->Wait(testSemaphore);
+        //
+        //     Vec4f *data = (Vec4f *)readback0.mappedPtr;
+        //
+        //     int stop = 5;
+        // }
 
         cmd->DLSS(targets, gpuScene.cameraFromRender, gpuScene.renderFromCamera,
                   params->NDCFromCamera, params->cameraFromClip, clipToPrevClip,

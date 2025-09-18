@@ -2262,40 +2262,6 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, GPUBuffer *sce
         device->EndEvent(cmd);
     }
 
-    // if (ptlas)
-    // {
-    //     GPUBuffer readback0 = device->CreateBuffer(
-    //         VK_BUFFER_USAGE_TRANSFER_DST_BIT, instancesBuffer.size,
-    //         MemoryUsage::GPU_TO_CPU);
-    //     //
-    //     //     // GPUBuffer readback2 =
-    //     //     //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-    //     //     //     thisFrameBitVector->size,
-    //     //     //                          MemoryUsage::GPU_TO_CPU);
-    //     cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-    //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-    //                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-    //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-    //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-    //     VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-    //                  VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-    //     //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-    //     //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-    //     //     // VK_ACCESS_2_SHADER_WRITE_BIT,
-    //     //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-    //     cmd->FlushBarriers();
-    //     cmd->CopyBuffer(&readback0, &instancesBuffer);
-    //     Semaphore testSemaphore   = device->CreateSemaphore();
-    //     testSemaphore.signalValue = 1;
-    //     cmd->SignalOutsideFrame(testSemaphore);
-    //     device->SubmitCommandBuffer(cmd);
-    //     device->Wait(testSemaphore);
-    //
-    //     GPUInstance *data = (GPUInstance *)readback0.mappedPtr;
-    //
-    //     int stop = 5;
-    // }
-
     {
 
         InstanceCullingPushConstant instanceCullingPushConstant;
@@ -2872,7 +2838,7 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
             return 1;
         });
 
-    u32 finalNumPartitions = numPartitions.load(); // / 4;
+    u32 finalNumPartitions = numPartitions.load() / 4;
     maxPartitions          = finalNumPartitions;
 
     allocatedPartitionIndices =

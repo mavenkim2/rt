@@ -265,6 +265,17 @@ struct Mat4
                     0.f, f / (n - f), n * f / (n - f), 0.f, 0.f, -1.f, 0.f);
         return result;
     }
+
+    // NOTE: horizontal fov w/ infinite far plane
+    __forceinline static Mat4 Perspective3(f32 fov, f32 aspectRatio, f32 n = 1e-2f)
+    {
+        f32 divTanHalf = 1.f / Tan(fov / 2.f);
+        Mat4 result(divTanHalf, 0.f, 0.f, 0.f, 
+                0.f, divTanHalf * aspectRatio, 0.f, 0.f, 
+                0.f, 0.f, 0.f, n, 
+                0.f, 0.f, -1.f, 0.f);
+        return result;
+    }
 };
 
 inline Mat4 Scale(const Vec3f &value)

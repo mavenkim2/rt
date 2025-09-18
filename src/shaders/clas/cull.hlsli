@@ -59,6 +59,7 @@ bool FrustumCull(float4x4 clipFromRender, float3x4 renderFromObject, float3 minP
     PROCESS(p4, p5);
     PROCESS(p6, p7);
 
+#if 0
     // NOTE: w = -z in view space. Min(z) = -(Max(-z)) and Max(z) = -(Min(-z))
     float maxZ = -maxW * p22 + p23;
     float minZ = -minW * p22 + p23;
@@ -71,6 +72,7 @@ bool FrustumCull(float4x4 clipFromRender, float3x4 renderFromObject, float3 minP
     //bool isPartiallyOutsideFarPlane = maxZ >= minW;
 
     visible = visible && isPartiallyInsideFarPlane && isPartiallyInsideNearPlane;
+#endif
     
 #if 0
     results.aabb = aabb;

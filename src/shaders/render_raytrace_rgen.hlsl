@@ -77,10 +77,10 @@ void main()
     RNG rng = RNG::Init(RNG::PCG3d(swizzledThreadID.xyx).zy, push.frameNum);
 
     // Generate Ray
-    float2 sample = rng.Uniform2D();
+    //float2 sample = rng.Uniform2D();
     const float2 filterRadius = float2(0.5, 0.5);
-    float2 filterSample = float2(lerp(-filterRadius.x, filterRadius.x, sample[0]), 
-                                 lerp(-filterRadius.y, filterRadius.y, sample[1]));
+    float2 filterSample = float2(0, 0);
+    //float2(lerp(-filterRadius.x, filterRadius.x, sample[0]), lerp(-filterRadius.y, filterRadius.y, sample[1]));
     filterSample += float2(0.5, 0.5) + float2(swizzledThreadID);
     float2 pLens = rng.Uniform2D();
 
@@ -153,7 +153,7 @@ void main()
                     float discrim = 4 * a * (ellipsoid.sphere.w + l) * (ellipsoid.sphere.w - l);
 
 #if 0
-                    if (depth == 0)
+                    if (depth == 1)
                     {
                         uint debugIndex;
                         InterlockedAdd(globals[GLOBALS_DEBUG], 1, debugIndex);
@@ -438,7 +438,11 @@ void main()
 
             if (depth == 0)
             {
-                depthBuffer[swizzledThreadID] = depth;
+                depthBuffer[swizzledThreadID] = 0.f;
+                specularAlbedo[swizzledThreadID] = float4(0.5, 0.5, 0.5, 1.f);
+                normalRougnessBuffer[swizzledThreadID] = 0.f;
+                diffuseAlbedo[swizzledThreadID] = 0.f;
+                specularHitDistance[swizzledThreadID] = 0.f;
             }
             break;
         }
@@ -464,19 +468,6 @@ void main()
 
             uint triangleIndex = query.CommittedPrimitiveIndex();
             float2 bary = query.CommittedTriangleBarycentrics();
-#if 0
-        if (IsHitNV(hitObject))
-        {
-            InvokeHitObjectNV(hitObject, payload);
-
-            uint primitiveIndex = GetPrimitiveIndexNV(hitObject);
-            uint instanceID = GetInstanceIDNV(hitObject);
-            float3x4 objectToWorld = transpose(GetObjectToWorldNV(hitObject));
-            float3 objectRayDir = GetObjectRayDirectionNV(hitObject);
-            float2 bary = payload.bary;
-            float rayT = payload.rayT;
-            uint hitKind = 0;//GetHitKindNV(hitObject);
-#endif
             uint basePageAddress = GetClusterPageBaseAddress(pageIndex);
             uint numClusters = GetNumClustersInPage(basePageAddress);
             DenseGeometry dg = GetDenseGeometryHeader(basePageAddress, numClusters, clusterIndex);
@@ -504,10 +495,10 @@ void main()
 
             float3 gn = normalize(cross(p0 - p2, p1 - p2));
             // TODO
-            if (dot(gn, query.WorldRayDirection()) > 0.f)
-            {
-                gn = -gn;
-            }
+            //if (dot(gn, query.WorldRayDirection()) > 0.f)
+            //{
+                //gn = -gn;
+            //}
 
             float3 n0, n1, n2;
             if (dg.HasNormals())
@@ -636,17 +627,6 @@ void main()
             }
         }
 
-        if (depth == 0)
-        {
-            float4 clipPos = mul(scene.clipFromRender, float4(hitInfo.hitP, 1.f));
-            float depth = clipPos.z / clipPos.w;
-            depthBuffer[swizzledThreadID] = depth;
-            normalRougnessBuffer[swizzledThreadID] = float4(hitInfo.n, 1.f);
-            diffuseAlbedo[swizzledThreadID] = float4(0.f, 1.f, 0.f, 1.f);
-            specularAlbedo[swizzledThreadID] = 0.f;
-            specularHitDistance[swizzledThreadID] = 0.f;
-        }
-
         // Get material
         GPUMaterial material = materials[NonUniformResourceIndex(materialID)];
 
@@ -702,6 +682,22 @@ void main()
         }
 
         float3 origin = TransformP(objectToWorld, hitInfo.hitP);
+
+        if (depth == 1)
+        {
+            float3 r0 = float3(objectToWorld[0].xyz);
+            float3 r1 = float3(objectToWorld[1].xyz);
+            float3 r2 = float3(objectToWorld[2].xyz);
+            float3x3 adjugate = float3x3(cross(r1, r2), cross(r2, r0), cross(r0, r1));
+
+            float4 clipPos = mul(scene.clipFromRender, float4(origin, 1.f));
+            float viewDepth = clipPos.z / clipPos.w;
+            depthBuffer[swizzledThreadID] = viewDepth;
+            normalRougnessBuffer[swizzledThreadID] = float4(normalize(mul(adjugate, hitInfo.n)), 1.f);
+            diffuseAlbedo[swizzledThreadID] = float4(0.f, 1.f, 0.f, 1.f);
+            specularAlbedo[swizzledThreadID] = 0.f;
+            specularHitDistance[swizzledThreadID] = 0.f;
+        }
 
         dir = hitInfo.ss * dir.x + hitInfo.ts * dir.y + hitInfo.n * dir.z;
         dir = normalize(TransformV(objectToWorld, dir));

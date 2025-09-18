@@ -4,7 +4,7 @@
 void GenerateRay(GPUScene scene, float2 pFilm, float2 pLens, out float3 origin, out float3 dir, 
                  out float3 dpdx, out float3 dpdy, out float3 dddx, out float3 dddy)
 {
-    float4 homogeneousPCamera = mul(scene.cameraFromRaster, float4(pFilm, 0.f, 1.f));
+    float4 homogeneousPCamera = mul(scene.cameraFromRaster, float4(pFilm, 1.f, 1.f));
     float3 pCamera            = homogeneousPCamera.xyz / homogeneousPCamera.w;
     origin = float3(0.f, 0.f, 0.f);
     dir = normalize(pCamera);

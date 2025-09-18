@@ -13,6 +13,7 @@ struct GPUScene
 {
     float4x4 cameraFromRaster;
     float4x4 clipFromRender;
+    float4x4 prevClipFromClip;
     float3x4 renderFromCamera;
     float3x4 cameraFromRender;
     float3x4 lightFromRender;
