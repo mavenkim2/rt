@@ -268,7 +268,11 @@ if (USE_GPU)
         "${SHADER_SRC_DIR}/clas/allocate_instances.hlsl"
         "${SHADER_SRC_DIR}/clas/free_instances.hlsl"
         "${SHADER_SRC_DIR}/calculate_motion_vectors.hlsl"
+        "${SHADER_SRC_DIR}/clas/task.hlsl"
     )
+    set_property(SOURCE 
+        "${SHADER_SRC_DIR}/clas/task.hlsl"
+        PROPERTY name "task")
     set_property(SOURCE 
         "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl" 
         "${SHADER_SRC_DIR}/render_raytrace_miss.hlsl"
@@ -325,6 +329,8 @@ if (USE_GPU)
             set (SHADER_TYPE_FLAG "-T lib_6_6")
         elseif (${SHADER_TYPE} STREQUAL "cs")
             set (SHADER_TYPE_FLAG "-T cs_6_6")
+        elseif (${SHADER_TYPE} STREQUAL "task")
+            set (SHADER_TYPE_FLAG "-T as_6_6")
         endif()
     
         add_custom_command(

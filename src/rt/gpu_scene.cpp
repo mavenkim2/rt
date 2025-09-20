@@ -292,7 +292,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                               VK_IMAGE_TILING_OPTIMAL);
     GPUImage depthBuffer = device->CreateImage(depthBufferDesc);
     ImageDesc targetUavDesc(ImageType::Type2D, targetWidth, targetHeight, 1, 1, 1,
-                            VK_FORMAT_R16G16B16A16_SFLOAT, MemoryUsage::GPU_ONLY,
+                            VK_FORMAT_R8G8B8A8_UNORM, MemoryUsage::GPU_ONLY,
                             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                             VK_IMAGE_TILING_OPTIMAL);
     GPUImage image = device->CreateImage(targetUavDesc);
@@ -971,7 +971,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         // Input
         {
-            f32 speed = 100.f;
+            f32 speed = 2000.f;
 
             f32 rotationSpeed = 0.001f * PI;
             camera.RotateCamera(dMouseP, rotationSpeed);
@@ -1357,10 +1357,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         // if (device->frameCount > 200)
         // {
-        //     GPUBuffer readback0 =
-        //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        //                              depthBuffer.desc.width * depthBuffer.desc.height * 16,
-        //                              MemoryUsage::GPU_TO_CPU);
+        //     GPUBuffer readback0 = device->CreateBuffer(
+        //         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        //         depthBuffer.desc.width * depthBuffer.desc.height * 4,
+        //         MemoryUsage::GPU_TO_CPU);
         //     //
         //     //     // GPUBuffer readback2 =
         //     //     //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -1373,11 +1373,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
         //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
         //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     cmd->Barrier(&normalRoughness, VK_IMAGE_LAYOUT_GENERAL,
-        //                  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        //                  VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-        //                  VK_ACCESS_2_TRANSFER_READ_BIT);
+        //     cmd->Barrier(
+        //         &depthBuffer, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        //         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        //         VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
         //     //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
         //     //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
         //     //     // VK_ACCESS_2_SHADER_WRITE_BIT,
@@ -1387,14 +1386,14 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         //     BufferImageCopy copy = {};
         //     copy.extent =
         //         Vec3u(motionVectorBuffer.desc.width, motionVectorBuffer.desc.height, 1);
-        //     cmd->CopyImageToBuffer(&readback0, &normalRoughness, &copy, 1);
+        //     cmd->CopyImageToBuffer(&readback0, &depthBuffer, &copy, 1);
         //     Semaphore testSemaphore   = device->CreateSemaphore();
         //     testSemaphore.signalValue = 1;
         //     cmd->SignalOutsideFrame(testSemaphore);
         //     device->SubmitCommandBuffer(cmd);
         //     device->Wait(testSemaphore);
         //
-        //     Vec4f *data = (Vec4f *)readback0.mappedPtr;
+        //     f32 *data = (f32 *)readback0.mappedPtr;
         //
         //     int stop = 5;
         // }

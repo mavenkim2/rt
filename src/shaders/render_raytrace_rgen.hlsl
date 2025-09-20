@@ -10,6 +10,7 @@
 #include "hit.hlsli"
 #include "bsdf/bxdf.hlsli"
 #include "bsdf/bsdf.hlsli"
+#include "bsdf/disney_bsdf.hlsli"
 #include "rt.hlsli"
 #include "ray_triangle_intersection.hlsli"
 #include "sampling.hlsli"
@@ -618,7 +619,7 @@ void main()
                 hitInfo.ts = tb[1];
 
 #else
-                hitInfo.n = dg.DecodeNormal(vertexOffset);
+                hitInfo.n = normal;
                 hitInfo.gn = hitInfo.n;
                 float2x3 tb = BuildOrthonormalBasis(hitInfo.n);
                 hitInfo.ss = tb[0];
@@ -661,7 +662,8 @@ void main()
 
                 float4 reflectance = float4(0.f, 1.f, 0.f, 1.f);
 
-                dir = SampleDiffuse(reflectance.xyz, wo, sample, throughput, printDebug);
+                //dir = SampleDiffuse(reflectance.xyz, wo, sample, throughput, printDebug);
+                dir = SampleDisneyThin(sample, throughput, wo);
 #if 0
                 if (depth == 1)
                 {
@@ -694,7 +696,11 @@ void main()
             float viewDepth = clipPos.z / clipPos.w;
             depthBuffer[swizzledThreadID] = viewDepth;
             normalRougnessBuffer[swizzledThreadID] = float4(normalize(mul(adjugate, hitInfo.n)), 1.f);
-            diffuseAlbedo[swizzledThreadID] = float4(0.f, 1.f, 0.f, 1.f);
+
+            // TODO
+            float3 baseColor = float3(.554, .689, .374);
+            baseColor = pow(baseColor, 2.2f);
+            diffuseAlbedo[swizzledThreadID] = float4(baseColor, 1.f);
             specularAlbedo[swizzledThreadID] = 0.f;
             specularHitDistance[swizzledThreadID] = 0.f;
         }

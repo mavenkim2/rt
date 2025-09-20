@@ -4,7 +4,7 @@
 #include "../common.hlsli"
 
 // TODO: don't hardcode this 
-static const float zNear = 1e-2f;
+static const float zNear = 10.f;
 
 // See if child should be visited
 float2 TestNode(float3x4 renderFromObject, float3x4 cameraFromRender, float4 lodBounds, float maxScale, out float test, bool culled)

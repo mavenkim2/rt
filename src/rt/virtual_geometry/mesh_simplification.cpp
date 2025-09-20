@@ -3899,6 +3899,20 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
         ind.alphaTexture     = 0;
         primIndices[i]       = ind;
     }
+
+    // for (u32 i = 0; i < meshes->numIndices / 3; i++)
+    // {
+    //     Vec3f p0 = meshes->p[meshes->indices[3 * i]];
+    //     Vec3f p1 = meshes->p[meshes->indices[3 * i + 1]];
+    //     Vec3f p2 = meshes->p[meshes->indices[3 * i + 2]];
+    //
+    //     Vec3f n  = Normalize(Cross(p1 - p0, p2 - p0));
+    //     Vec3f n0 = meshes->n[meshes->indices[3 * i]];
+    //     Vec3f n1 = meshes->n[meshes->indices[3 * i + 1]];
+    //     Vec3f n2 = meshes->n[meshes->indices[3 * i + 2]];
+    //     int stop = 5;
+    // }
+
     ScenePrimitives scene = {};
     scene.primitives      = meshes;
     scene.numPrimitives   = numMeshes;
@@ -4555,7 +4569,8 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
                     });
             }
 
-            if (bool(voxelGroupCount.load()) || bool(potentialVoxelGroupCount.load()))
+            if (depth != 0 &&
+                (bool(voxelGroupCount.load()) || bool(potentialVoxelGroupCount.load())))
             {
                 ParallelForLoop(
                     0, partitionResult.ranges.Length(), 1, 1, [&](int jobID, int groupIndex) {
@@ -5049,7 +5064,7 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
             }
 
             // Write obj to disk
-#if 1
+#if 0
             ArrayView<ClusterGroup> levelClusterGroups(clusterGroups, totalNumGroups,
                                                        partitionResult.ranges.Length());
             u32 vertexCount = numVertices.load();
@@ -5481,7 +5496,7 @@ static void CheckVoxelOccupancy(Arena *arena, ScenePrimitives *scene,
                                 f32 voxelSize)
 {
     ScratchArena scratch(&arena, 1);
-    const u32 numRays = 128;
+    const u32 numRays = 16;
 
     struct SGGX
     {
@@ -5514,6 +5529,65 @@ static void CheckVoxelOccupancy(Arena *arena, ScenePrimitives *scene,
             nyz += n.y * n.z;
 
             nzz += n.z * n.z;
+        }
+
+        float ProjectedArea(float3 wi)
+        {
+            float3 temp;
+            temp.x = nxy * wi.y;
+            temp.y = nyz * wi.z;
+            temp.z = nxz * wi.x;
+
+            temp *= 2.f;
+
+            temp.x += nxx * wi.x;
+            temp.y += nyy * wi.y;
+            temp.z += nzz * wi.z;
+
+            return Dot(temp, wi);
+        }
+
+        Vec3f SampleSGGX(Vec3f w, Vec3f wk, Vec3f wj, Vec2f u)
+        {
+            Mat3 S = Mat3(nxx, nxy, nxz, nxy, nyy, nyz, nxz, nyz, nzz);
+
+            float skk = ProjectedArea(wk);
+            float sjj = ProjectedArea(wj);
+            float sii = ProjectedArea(w);
+
+            Vec3f sw = S * w;
+
+            float ski = Dot(wk, sw);
+            float skj = Dot(wk, S * wj);
+            float sji = Dot(wj, sw);
+
+            float div = Rsqrt(sii);
+
+            float sqrtDet = Sqrt(Abs(skk * sjj * sii - skj * skj * sii - ski * ski * sjj -
+                                     sji * sji * skk + 2 * skj * skj * sji));
+            float test    = sjj * sii - sji * sji;
+            float val     = Sqrt(Max(0.f, sjj * sii - sji * sji));
+            float mjxDiv  = 1.f / val;
+
+            Vec3f mk = Vec3f(sqrtDet * mjxDiv, 0, 0);
+            Vec3f mj = div * Vec3f(-(ski * sji - skj * sii) * mjxDiv, val, 0.f);
+            Vec3f mi = div * Vec3f(ski, sji, sii);
+
+            // printf("%f \n %f %f %f\n%f %f %f\n%f %f %f\n%f %f %f", SqrtDet, mk.x, mk.y,
+            // mk.z, mj.x, mj.y, mj.z, mi.x, mi.y, mi.z, sjj, sii, sji);
+
+            // Vec3f p = SampleUniformSphere(u);
+            Vec3f p;
+            float r   = Sqrt(u.x);
+            float phi = 2.f * PI * u.y;
+            p.x       = r * Cos(phi);
+            p.y       = r * Sin(phi);
+            p.z       = Sqrt(1 - p.x * p.x - p.y * p.y);
+            Vec3f wm  = Normalize(p.x * mk + p.y * mj + p.z * mi);
+
+            wm = Normalize(wm.x * wk + wm.y * wj + wm.z * w);
+
+            return wm;
         }
 
         Vec3f Fit(u32 hitCount, Vec2f &alpha)
@@ -5670,7 +5744,14 @@ static void CheckVoxelOccupancy(Arena *arena, ScenePrimitives *scene,
 
                 if (intersect)
                 {
-                    n      = si.n;
+                    u32 prim    = si.faceIndices;
+                    n           = si.shading.n;
+                    Mesh *mesh  = (Mesh *)scene->primitives;
+                    Vec3f p0    = mesh->p[mesh->indices[3 * prim + 0]];
+                    Vec3f p1    = mesh->p[mesh->indices[3 * prim + 1]];
+                    Vec3f p2    = mesh->p[mesh->indices[3 * prim + 2]];
+                    Vec3f testN = Normalize(Cross(p1 - p0, p2 - p0));
+
                     geomID = si.geomID;
                     hitCount++;
 
@@ -5694,12 +5775,18 @@ static void CheckVoxelOccupancy(Arena *arena, ScenePrimitives *scene,
                 Voxel v;
                 v.loc    = voxel;
                 v.normal = sggx.Fit(hitCount, alpha);
+                v.normal = n;
 
                 v.coverage = coverage;
                 // v.coverage = alpha.x > alpha.y ? 1.f - 0.5f * alpha.y / alpha.x
                 //                                : 0.5f * alpha.x / alpha.y;
                 v.sggx   = sggx.Compact();
                 v.geomID = geomID;
+
+                Vec3f randomDir = SampleUniformSphere(Vec2f(.342342f, .68935498f));
+                Vec3f v1, v2;
+                CoordinateSystem(randomDir, &v1, &v2);
+                Vec3f resultDir = sggx.SampleSGGX(randomDir, v1, v2, Vec2f(0.5));
 
                 voxels.Push(v);
 

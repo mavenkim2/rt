@@ -2838,7 +2838,7 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
             return 1;
         });
 
-    u32 finalNumPartitions = numPartitions.load() / 4;
+    u32 finalNumPartitions = numPartitions.load() / 8;
     maxPartitions          = finalNumPartitions;
 
     allocatedPartitionIndices =
