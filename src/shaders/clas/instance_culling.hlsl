@@ -5,26 +5,24 @@
 #include "../../rt/shader_interop/as_shaderinterop.h"
 #include "../../rt/shader_interop/hierarchy_traversal_shaderinterop.h"
 #include "../../rt/shader_interop/dense_geometry_shaderinterop.h"
+#include "lod_error_test.hlsli"
 
 // TODO: hierarchical instance culling
-RWStructuredBuffer<GPUInstance> gpuInstances : register(u0);
-RWStructuredBuffer<uint> globals : register(u1);
-RWStructuredBuffer<CandidateNode> nodeQueue : register(u2);
-RWStructuredBuffer<Queue> queue : register(u3);
-RWStructuredBuffer<BLASData> blasDatas : register(u4);
-StructuredBuffer<AABB> aabbs : register(t5);
-ConstantBuffer<GPUScene> gpuScene : register(b6);
+ConstantBuffer<GPUScene> gpuScene : register(b0);
+RWStructuredBuffer<GPUInstance> gpuInstances : register(u1);
+RWStructuredBuffer<uint> globals : register(u2);
+StructuredBuffer<AABB> aabbs : register(t3);
 
-RWStructuredBuffer<PTLAS_WRITE_INSTANCE_INFO> ptlasInstanceWriteInfos : register(u7);
-RWStructuredBuffer<PTLAS_UPDATE_INSTANCE_INFO> ptlasInstanceUpdateInfos : register(u8);
-StructuredBuffer<uint64_t> mergedPartitionDeviceAddresses : register(t9);
-StructuredBuffer<GPUTransform> instanceTransforms : register(t10);
-StructuredBuffer<PartitionInfo> partitionInfos : register(t11);
-RWStructuredBuffer<StreamingRequest> requests : register(u12);
+RWStructuredBuffer<PTLAS_WRITE_INSTANCE_INFO> ptlasInstanceWriteInfos : register(u4);
+RWStructuredBuffer<PTLAS_UPDATE_INSTANCE_INFO> ptlasInstanceUpdateInfos : register(u5);
+StructuredBuffer<uint64_t> mergedPartitionDeviceAddresses : register(t6);
+StructuredBuffer<GPUTransform> instanceTransforms : register(t7);
+StructuredBuffer<PartitionInfo> partitionInfos : register(t8);
+RWStructuredBuffer<StreamingRequest> requests : register(u9);
+StructuredBuffer<Resource> resources : register(t10);
 
-RWStructuredBuffer<uint> instanceBitmasks : register(u13);
-StructuredBuffer<Resource> resources : register(t14);
-RWStructuredBuffer<uint> resourceBitVector : register(u15);
+StructuredBuffer<ResourceSharingInfo> resourceSharingInfos : register(t11);
+RWStructuredBuffer<uint> maxMinLodLevel : register(u12);
 
 #include "ptlas_write_instances.hlsli"
 
@@ -78,33 +76,70 @@ void main(uint3 dtID : SV_DispatchThreadID)
 
     Resource resource = resources[instance.resourceID];
 
-    uint blasIndex;
-    InterlockedAdd(globals[GLOBALS_BLAS_COUNT_INDEX], 1, blasIndex);
-    BLASData blasData = (BLASData)0;
-    blasData.instanceID = instanceIndex;
+    PartitionInfo info = partitionInfos[instance.partitionIndex];
+    float3x4 renderFromObject = ConvertGPUMatrix(instanceTransforms[instance.transformIndex], info.base, info.scale); 
+    AABB aabb = aabbs[instance.resourceID];
+    bool cull = FrustumCull(gpuScene.clipFromRender, renderFromObject, 
+            float3(aabb.minX, aabb.minY, aabb.minZ),
+            float3(aabb.maxX, aabb.maxY, aabb.maxZ), gpuScene.p22, gpuScene.p23);
+    Translate(renderFromObject, -gpuScene.cameraP);
 
-    if (resource.flags & RESOURCE_FLAG_ONE_CLUSTER)
+    // BLAS Sharing
+    // https://github.com/nvpro-samples/vk_lod_clusters/blob/main/docs/blas_sharing.md
+    bool testMin = true;
+    float scaleX = length2(float3(renderFromObject[0].x, renderFromObject[1].x, renderFromObject[2].x));
+    float scaleY = length2(float3(renderFromObject[0].y, renderFromObject[1].y, renderFromObject[2].y));
+    float scaleZ = length2(float3(renderFromObject[0].z, renderFromObject[1].z, renderFromObject[2].z));
+
+    float3 scale = float3(scaleX, scaleY, scaleZ);
+    scale = sqrt(scale);
+    float minScale = min(scale.x, min(scale.y, scale.z));
+    float maxScale = max(scale.x, max(scale.y, scale.z));
+
+    uint minLevel = 0;
+    uint maxLevel = resource.numLodLevels - 1;
+    for (uint lodLevel = 0; lodLevel < resource.numLodLevels; lodLevel++)
     {
-        uint wasSet;
-        uint bit = 1u << (instance.resourceID & 31u);
-        InterlockedOr(resourceBitVector[instance.resourceID >> 5u], bit, wasSet);
-
-        if (wasSet & bit)
+        uint infoIndex = resource.resourceSharingInfoOffset + lodLevel;
+        ResourceSharingInfo info = resourceSharingInfos[infoIndex];
+        float test;
+        if (testMin)
         {
-            instanceBitmasks[instanceIndex] = 1;
-            blasDatas[blasIndex] = blasData;
-            return;
+            float2 edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, resource.lodBounds, maxScale, test, cull);
+            if (edgeScales.x <= info.maxError * gpuScene.lodScale * minScale)
+            {
+                testMin = false;
+                minLevel = lodLevel;
+            }
+        }
+        if (!testMin)
+        {
+            float4 lodBounds = resource.lodBounds;
+            float3 cameraForward = -gpuScene.cameraFromRender[2].xyz;
+            lodBounds.xyz = mul(renderFromObject, float4(lodBounds.xyz, 1.f));
+            lodBounds.w = lodBounds.w * maxScale;
+            lodBounds.xyz += normalize(cameraForward) * (lodBounds.w - maxScale * info.smallestBounds.w);
+            lodBounds.w = info.smallestBounds.w * maxScale;
+
+            float3x4 identity = float3x4(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0);
+
+            float2 edgeScales = TestNode(identity, gpuScene.cameraFromRender, lodBounds, 1.f, test, cull);
+            if (edgeScales.x <= info.smallestError * gpuScene.lodScale * minScale)
+            {
+                maxLevel = lodLevel;
+                break;
+            }
         }
     }
 
-    blasDatas[blasIndex] = blasData;
-
-    PartitionInfo info = partitionInfos[instance.partitionIndex];
-    float3x4 worldFromObject = ConvertGPUMatrix(instanceTransforms[instance.transformIndex], info.base, info.scale); 
-    AABB aabb = aabbs[instance.resourceID];
-    bool cull = FrustumCull(gpuScene.clipFromRender, worldFromObject, 
-            float3(aabb.minX, aabb.minY, aabb.minZ),
-            float3(aabb.maxX, aabb.maxY, aabb.maxZ), gpuScene.p22, gpuScene.p23);
+    // TODO: don't hardcode
+    if (maxLevel <= 3)
+    {
+        uint packed = (minLevel << 27u) | instanceIndex;
+        InterlockedMax(maxMinLodLevel[instance.resourceID], packed);
+    }
+    gpuInstances[instanceIndex].minLodLevel = minLevel;
+    gpuInstances[instanceIndex].maxLodLevel = maxLevel;
 
     if (cull)
     {
@@ -114,16 +149,5 @@ void main(uint3 dtID : SV_DispatchThreadID)
     {
         gpuInstances[instanceIndex].flags &= ~GPU_INSTANCE_FLAG_CULL;
     }
-
-    CandidateNode candidateNode;
-    candidateNode.instanceID = instanceIndex;
-    candidateNode.nodeOffset = 0;
-    candidateNode.blasIndex = blasIndex;
-    candidateNode.pad = 0;
-
-    uint nodeIndex;
-    InterlockedAdd(queue[0].nodeWriteOffset, 1, nodeIndex);
-    InterlockedAdd(queue[0].numNodes, 1);
-
-    nodeQueue[nodeIndex] = candidateNode;
+    //gpuInstances[instanceIndex].flags &= ~(GPU_INSTANCE_FLAG_MERGED_INSTANCE | GPU_INSTANCE_FLAG_SHARED_INSTANCE);
 }

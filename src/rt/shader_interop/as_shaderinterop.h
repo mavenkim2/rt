@@ -332,11 +332,13 @@ float3x4 ConvertGPUMatrix(GPUTransform transform, float3 anchor, float3 scale)
 }
 #endif
 
-#define GPU_INSTANCE_FLAG_CULL         (1u << 0u)
-#define GPU_INSTANCE_FLAG_MERGED       (1u << 1u)
-#define GPU_INSTANCE_FLAG_WAS_RENDERED (1u << 2u)
-#define GPU_INSTANCE_FLAG_FREED        (1u << 3u)
-#define GPU_INSTANCE_FLAG_INDIV        (1u << 4u)
+#define GPU_INSTANCE_FLAG_CULL            (1u << 0u)
+#define GPU_INSTANCE_FLAG_MERGED          (1u << 1u)
+#define GPU_INSTANCE_FLAG_WAS_RENDERED    (1u << 2u)
+#define GPU_INSTANCE_FLAG_FREED           (1u << 3u)
+#define GPU_INSTANCE_FLAG_INDIV           (1u << 4u)
+#define GPU_INSTANCE_FLAG_SHARED_INSTANCE (1u << 5u)
+#define GPU_INSTANCE_FLAG_MERGED_INSTANCE (1u << 6u)
 
 struct GPUInstance
 {
@@ -347,6 +349,9 @@ struct GPUInstance
     uint voxelAddressOffset;
     uint clusterLookupTableOffset;
     uint flags;
+
+    uint minLodLevel;
+    uint maxLodLevel;
 };
 
 #define PARTITION_FLAG_INSTANCES_RENDERED (1u << 0)
@@ -377,10 +382,22 @@ struct Brick
 #define RESOURCE_FLAG_ONE_CLUSTER (1u << 0u)
 struct Resource
 {
-    uint finestAddressIndex;
+    uint mergedAddressIndex;
+    uint sharedAddressIndex;
     uint clusterLookupTableOffset;
     uint voxelAddressOffset;
     uint flags;
+
+    float4 lodBounds;
+    uint resourceSharingInfoOffset;
+    uint numLodLevels;
+};
+
+struct ResourceSharingInfo
+{
+    float4 smallestBounds;
+    float smallestError;
+    float maxError;
 };
 
 struct VoxelAddressTableEntry

@@ -207,6 +207,7 @@ struct VirtualGeometryManager
         Graph<ClusterFixup> pageToParentClusters;
 
         StaticArray<VoxelClusterGroupFixup> voxelClusterGroupFixups;
+        StaticArray<ResourceSharingInfo> resourceSharingInfos;
 
         TruncatedEllipsoid ellipsoid;
 
@@ -227,6 +228,10 @@ struct VirtualGeometryManager
 
         PackedHierarchyNode *nodes;
         u32 numNodes;
+
+        Vec4f lodBounds;
+        u32 depth;
+        u32 resourceSharingInfoOffset;
     };
 
     u32 currentClusterTotal;
@@ -320,6 +325,9 @@ struct VirtualGeometryManager
     DescriptorSetLayout instanceCullingLayout = {};
     VkPipeline instanceCullingPipeline;
 
+    DescriptorSetLayout assignInstancesLayout = {};
+    VkPipeline assignInstancesPipeline = {};
+
     GPUBuffer evictedPagesBuffer;
     GPUBuffer hierarchyNodeBuffer;
     GPUBuffer clusterPageDataBuffer;
@@ -378,7 +386,8 @@ struct VirtualGeometryManager
     // GPUBuffer ptlasInstanceBitVectorBuffer;
     // GPUBuffer ptlasInstanceFrameBitVectorBuffer0;
     // GPUBuffer ptlasInstanceFrameBitVectorBuffer1;
-    GPUBuffer instanceBitmasksBuffer;
+    GPUBuffer resourceSharingInfosBuffer;
+    GPUBuffer maxMinLodLevelBuffer;
 
     GPUBuffer voxelAABBBuffer;
     GPUBuffer voxelBlasBuffer;
@@ -433,6 +442,7 @@ struct VirtualGeometryManager
     u32 virtualInstanceOffset;
     u32 voxelAddressOffset;
     u32 clusterLookupTableOffset;
+    u32 resourceSharingInfoOffset;
 
     u32 maxPartitions;
     u32 numAllocatedPartitions;

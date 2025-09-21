@@ -51,9 +51,8 @@ RWStructuredBuffer<VisibleCluster> selectedClusters : register(u7);
 RWStructuredBuffer<BLASData> blasDatas : register(u9);
 
 RWStructuredBuffer<StreamingRequest> requests : register(u10);
-RWStructuredBuffer<uint> instanceBitmasks : register(u11);
-StructuredBuffer<GPUTransform> instanceTransforms : register(t12);
-StructuredBuffer<PartitionInfo> partitionInfos : register(t13);
+StructuredBuffer<GPUTransform> instanceTransforms : register(t11);
+StructuredBuffer<PartitionInfo> partitionInfos : register(t12);
 
 struct ClusterCull 
 {
@@ -63,6 +62,7 @@ struct ClusterCull
         candidateNode.instanceID = workItem.x;
         candidateNode.nodeOffset = workItem.y;
         candidateNode.blasIndex = workItem.z;
+        candidateNode.flags = workItem.w;
 
         GPUInstance instance = gpuInstances[candidateNode.instanceID];
         uint nodeOffset = instance.globalRootNodeOffset + candidateNode.nodeOffset;
@@ -71,6 +71,8 @@ struct ClusterCull
         bool isValid = node.childRef[childIndex] != ~0u;
         bool isLeaf = node.leafInfo[childIndex] != ~0u;
         bool isVisible = false;
+        bool highestDetail = candidateNode.flags & CANDIDATE_NODE_FLAG_HIGHEST_DETAIL;
+        bool streamingOnly = candidateNode.flags & CANDIDATE_NODE_FLAG_STREAMING_ONLY;
 
         float2 edgeScales = float2(0, 0);
         float minScale = 0.f;
@@ -103,7 +105,7 @@ struct ClusterCull
 
             float threshold = maxParentError * minScale * gpuScene.lodScale;
 
-            isVisible = edgeScales.x <= threshold;
+            isVisible = highestDetail || edgeScales.x <= threshold;
             isValid &= isVisible;
 
             priority = threshold == 0.f ? 0.f : threshold / edgeScales.x;
@@ -137,7 +139,7 @@ struct ClusterCull
             childCandidateNode.x = candidateNode.instanceID;
             childCandidateNode.y = node.childRef[childIndex];
             childCandidateNode.z = candidateNode.blasIndex;
-            childCandidateNode.w = asuint(test);
+            childCandidateNode.w = candidateNode.flags;
 
             nodeQueue[nodeWriteOffset] = childCandidateNode;
         }
@@ -153,7 +155,7 @@ struct ClusterCull
             uint numPages = BitFieldExtractU32(leafInfo, MAX_PARTS_PER_GROUP_BITS, MAX_CLUSTERS_PER_PAGE_BITS + MAX_CLUSTERS_PER_GROUP_BITS);
             uint localPageIndex = leafInfo >> (MAX_CLUSTERS_PER_PAGE_BITS + MAX_CLUSTERS_PER_GROUP_BITS + MAX_PARTS_PER_GROUP_BITS);
 
-            if (isValid)
+            if (isValid && !streamingOnly)
             {
                 uint leafWriteOffset;
                 InterlockedAdd(queue[0].leafWriteOffset, numClusters, leafWriteOffset);
@@ -169,13 +171,13 @@ struct ClusterCull
                     candidateCluster.x = (gpuPageIndex << MAX_CLUSTERS_PER_PAGE_BITS) | (pageClusterIndex + i);
                     candidateCluster.y = candidateNode.instanceID;
                     candidateCluster.z = candidateNode.blasIndex;
-                    candidateCluster.w = 0;//node.flags & (1u << childIndex);
+                    candidateCluster.w = candidateNode.flags;
 
                     leafQueue[leafWriteOffset + i] = candidateCluster;
                 }
             }
 
-            if (isVisible)
+            if (isVisible && !highestDetail)
             {
                 StreamingRequest request;
                 request.priority = priority;
@@ -202,6 +204,8 @@ struct ClusterCull
         uint clusterIndex = workItem.x & (MAX_CLUSTERS_PER_PAGE - 1);
         uint instanceID = workItem.y;
         uint blasIndex = workItem.z;
+        uint flags = workItem.w;
+        bool highestDetail = flags & CANDIDATE_NODE_FLAG_HIGHEST_DETAIL;
 
         GPUInstance instance = gpuInstances[instanceID];
 
@@ -232,15 +236,12 @@ struct ClusterCull
         float2 edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, maxScale, test, cull);
 
         uint depth = header.depth;
-        bool isValid = (edgeScales.x > gpuScene.lodScale * lodError * minScale) || (header.flags & CLUSTER_STREAMING_LEAF_FLAG);
+        bool isValid = (!highestDetail && ((edgeScales.x > gpuScene.lodScale * lodError * minScale) || (header.flags & CLUSTER_STREAMING_LEAF_FLAG)))
+                        || (highestDetail && (header.flags & CLUSTER_STREAMING_LEAF_FLAG));
 
         uint clusterOffset;
         WaveInterlockedAddScalarTest(globals[GLOBALS_VISIBLE_CLUSTER_COUNT_INDEX], isValid && !isVoxel, 1, clusterOffset);
 
-        if (isValid)
-        {
-            InterlockedOr(instanceBitmasks[instanceID], 1u << depth);
-        }
         if (isValid && !isVoxel)
         {
             bool isVoxel = (bool)header.numBricks;

@@ -17,12 +17,15 @@ struct Queue
     uint debugLeafWriteOffset;
 };
 
+#define CANDIDATE_NODE_FLAG_STREAMING_ONLY (1u << 0u)
+#define CANDIDATE_NODE_FLAG_HIGHEST_DETAIL (1u << 1u)
+
 struct CandidateNode
 {
     uint instanceID;
     uint nodeOffset;
     uint blasIndex;
-    uint pad;
+    uint flags;
 };
 
 struct VisibleCluster

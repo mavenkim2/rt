@@ -1164,7 +1164,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         cmd->ClearBuffer(&virtualGeometryManager.clasGlobalsBuffer);
         cmd->ClearBuffer(&virtualGeometryManager.resourceBitVector);
-        cmd->ClearBuffer(&virtualGeometryManager.instanceBitmasksBuffer);
+        cmd->ClearBuffer(&virtualGeometryManager.maxMinLodLevelBuffer);
         cmd->ClearBuffer(&virtualGeometryManager.partitionCountsBuffer);
         cmd->ClearBuffer(&virtualGeometryManager.ptlasIndirectCommandBuffer);
 
@@ -1191,7 +1191,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 cmd, &sceneTransferBuffers[currentBuffer].buffer, true);
         }
 
-        cmd->ClearBuffer(&virtualGeometryManager.resourceBitVector);
         cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                      VK_ACCESS_2_TRANSFER_WRITE_BIT,
                      VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);

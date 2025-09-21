@@ -1,11 +1,9 @@
 #include "../../rt/shader_interop/as_shaderinterop.h"
 
 RWStructuredBuffer<BLASData> blasDatas : register(u0);
-RWStructuredBuffer<BUILD_CLUSTERS_BOTTOM_LEVEL_INFO> buildClusterBottomLevelInfos : register(u1);
-RWStructuredBuffer<uint> globals : register(u2);
-StructuredBuffer<GPUInstance> gpuInstances : register(t3);
-StructuredBuffer<Resource> resources : register(t4);
-StructuredBuffer<uint> instanceBitmasks : register(t5);
+RWStructuredBuffer<uint> globals : register(u1);
+StructuredBuffer<GPUInstance> gpuInstances : register(t2);
+StructuredBuffer<Resource> resources : register(t3);
 
 [[vk::push_constant]] AddressPushConstant pc;
 
@@ -16,26 +14,27 @@ void main(uint3 DTid : SV_DispatchThreadID)
     if (blasIndex >= globals[GLOBALS_BLAS_COUNT_INDEX]) return;
 
     BLASData blas = blasDatas[blasIndex];
-    uint bitMask = instanceBitmasks[blas.instanceID];
-
-    if (blas.clusterCount == 0 && bitMask == 0) return;
-
+    uint flags = blas.addressIndex;
     uint resourceID = gpuInstances[blas.instanceID].resourceID;
+    Resource resource = resources[resourceID];
 
-    if (bitMask == 1)
+    if (flags & GPU_INSTANCE_FLAG_MERGED_INSTANCE)
     {
-        blasDatas[blasIndex].addressIndex = resources[resourceID].finestAddressIndex;
-        return;
+        blasDatas[blasIndex].addressIndex = resources[resourceID].mergedAddressIndex;
+    }
+    else if (flags & GPU_INSTANCE_FLAG_SHARED_INSTANCE)
+    {
+        blasDatas[blasIndex].addressIndex = resources[resourceID].sharedAddressIndex;
     }
 
+#if 0
     uint descriptorIndex;
     InterlockedAdd(globals[GLOBALS_BLAS_FINAL_COUNT_INDEX], 1, descriptorIndex);
-
-    blasDatas[blasIndex].addressIndex = descriptorIndex;
 
     uint64_t clasBaseAddress = ((uint64_t(pc.addressHighBits) << 32) | (pc.addressLowBits));
 
     buildClusterBottomLevelInfos[descriptorIndex].clusterReferencesCount = blas.clusterCount;
     buildClusterBottomLevelInfos[descriptorIndex].clusterReferencesStride = RAY_TRACING_ADDRESS_STRIDE;
     buildClusterBottomLevelInfos[descriptorIndex].clusterReferences = clasBaseAddress + RAY_TRACING_ADDRESS_STRIDE * blas.clusterStartIndex;
+#endif
 }

@@ -12,9 +12,8 @@ StructuredBuffer<BLASData> blasDatas : register(t4);
 RWStructuredBuffer<GPUInstance> gpuInstances : register(u5);
 StructuredBuffer<AABB> aabbs : register(t6);
 StructuredBuffer<VoxelAddressTableEntry> voxelAddressTable : register(t7);
-StructuredBuffer<uint> instanceBitmasks : register(t8);
-StructuredBuffer<GPUTransform> instanceTransforms : register(t9);
-StructuredBuffer<PartitionInfo> partitionInfos : register(t10);
+StructuredBuffer<GPUTransform> instanceTransforms : register(t8);
+StructuredBuffer<PartitionInfo> partitionInfos : register(t9);
 
 #include "ptlas_write_instances.hlsli"
 
@@ -26,12 +25,11 @@ void main(uint3 dtID : SV_DispatchThreadID)
 
     BLASData blasData = blasDatas[blasIndex];
     uint instanceIndex = blasData.instanceID;
-    uint bitMask = instanceBitmasks[blasData.instanceID];
     GPUInstance instance = gpuInstances[blasData.instanceID];
-    if (blasData.clusterCount == 0 && bitMask == 0)
-    {
-        return;
-    }
+    //if (blasData.clusterCount == 0&& bitMask == 0)
+    //{
+        //return;
+    //}
 
     uint64_t address = 0;
     uint tableOffset = 0;
