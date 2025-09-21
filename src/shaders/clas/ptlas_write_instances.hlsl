@@ -33,9 +33,9 @@ void main(uint3 dtID : SV_DispatchThreadID)
         return;
     }
 
-
     uint64_t address = 0;
     uint tableOffset = 0;
+#if 0
     // TODO: this needs to remove the bottom n bits, where n is the number of voxel-free levels
     if (bitMask & ~3)
     {
@@ -57,7 +57,9 @@ void main(uint3 dtID : SV_DispatchThreadID)
     {
         address = blasAddresses[blasData.addressIndex];
     }
+#endif
 
+    address = blasAddresses[blasData.addressIndex];
     if (address == 0) return;
 
     AABB aabb = aabbs[instance.resourceID];

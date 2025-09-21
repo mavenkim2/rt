@@ -529,8 +529,8 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
                               maxPages * MAX_CLUSTERS_PER_PAGE,
                               maxPages * MAX_CLUSTERS_PER_PAGE * MAX_CLUSTER_TRIANGLES,
                               maxPages * MAX_CLUSTERS_PER_PAGE * MAX_CLUSTER_TRIANGLE_VERTICES,
-                              MAX_CLUSTER_TRIANGLES, MAX_CLUSTER_VERTICES, clasScratchSize,
-                              clasAccelerationStructureSize);
+                              MAX_CLUSTER_TRIANGLES, MAX_CLUSTER_TRIANGLE_VERTICES,
+                              clasScratchSize, clasAccelerationStructureSize);
 
     Assert(clasAccelerationStructureSize <= expectedSize);
     clasImplicitData =
@@ -540,6 +540,17 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
     totalNumBytes += clasImplicitData.size;
 
     accelScratchBufferSize = Max(accelScratchBufferSize, clasScratchSize);
+
+    VkAccelerationStructureGeometryKHR geometry;
+    geometry.geometryType   = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+    geometry.geometry.aabbs = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_AABBS_DATA_KHR};
+    VkAccelerationStructureBuildRangeInfoKHR buildRange = {};
+    buildRange.primitiveCount                           = 400896;
+    u32 maxPrimitiveCounts                              = 400896;
+    u32 testScratch, testSize;
+    device->GetBuildSizes(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, &geometry, 1,
+                          &buildRange, &maxPrimitiveCounts, testScratch, testSize);
 
     u32 moveScratchSize, moveStructureSize;
     device->GetMoveBuildSizes(CLASOpMode::ExplicitDestinations, maxWriteClusters,
@@ -985,7 +996,6 @@ void VirtualGeometryManager::FinalizeResources(CommandBuffer *cmd)
         resource.flags    = meshInfo.numNodes == 1 && (*(u32 *)meshInfo.pageData == 1)
                                 ? RESOURCE_FLAG_ONE_CLUSTER
                                 : 0;
-        // resource.maxClusters = meshInfo.numFinestClusters;
         resources.Push(resource);
 
         AABB aabb;
@@ -2337,7 +2347,6 @@ void VirtualGeometryManager::HierarchyTraversal(CommandBuffer *cmd, GPUBuffer *g
 
 void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd)
 {
-
     {
         device->BeginEvent(cmd, "Get BLAS Address Offset");
         // Calculate where clas addresses should be written for each blas
@@ -2482,6 +2491,47 @@ void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd)
                      VK_ACCESS_2_SHADER_READ_BIT);
         cmd->FlushBarriers();
         device->EndEvent(cmd);
+    }
+
+    if (device->frameCount > 1000)
+    {
+        GPUBuffer readback0 = device->CreateBuffer(
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT, blasAccelSizes.size, MemoryUsage::GPU_TO_CPU);
+        //
+        //     // GPUBuffer readback2 =
+        //     //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        //     //     thisFrameBitVector->size,
+        //     //                          MemoryUsage::GPU_TO_CPU);
+        cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                     VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                     VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                     VK_ACCESS_2_TRANSFER_READ_BIT);
+        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                     VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+        // cmd->Barrier(&depthBuffer, VK_IMAGE_LAYOUT_GENERAL,
+        //              VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        //              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        //              VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+        //              VK_ACCESS_2_TRANSFER_READ_BIT);
+        //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+        //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        //     // VK_ACCESS_2_SHADER_WRITE_BIT,
+        //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
+        cmd->FlushBarriers();
+        cmd->CopyBuffer(&readback0, &blasAccelSizes);
+        // BufferImageCopy copy = {};
+        // copy.extent = Vec3u(motionVectorBuffer.desc.width,
+        // motionVectorBuffer.desc.height,
+        // 1); cmd->CopyImageToBuffer(&readback0, &depthBuffer, &copy, 1);
+        Semaphore testSemaphore   = device->CreateSemaphore();
+        testSemaphore.signalValue = 1;
+        cmd->SignalOutsideFrame(testSemaphore);
+        device->SubmitCommandBuffer(cmd);
+        device->Wait(testSemaphore);
+
+        u32 *data = (u32 *)readback0.mappedPtr;
+
+        int stop = 5;
     }
 }
 
@@ -2838,7 +2888,7 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
             return 1;
         });
 
-    u32 finalNumPartitions = numPartitions.load() / 8;
+    u32 finalNumPartitions = 1; // numPartitions.load();
     maxPartitions          = finalNumPartitions;
 
     allocatedPartitionIndices =
@@ -3022,91 +3072,99 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
         {
             Instance &instance = partitionInstanceGraph.data[instanceIndex];
             MeshInfo &meshInfo = meshInfos[instance.id];
-            if (meshInfo.ellipsoid.sphere.w != 0.f)
+            if (meshInfo.ellipsoid.sphere.w != 0.f && meshInfo.numNodes > 1)
             {
                 numEllipsoids++;
             }
         }
 
-        AccelBuildInfo accelBuildInfo  = {};
-        accelBuildInfo.primitiveOffset = sizeof(AABB) * numAABBs;
-        accelBuildInfo.primitiveCount  = numEllipsoids;
-        numAABBs += accelBuildInfo.primitiveCount;
+        if (numEllipsoids)
+        {
+            AccelBuildInfo accelBuildInfo  = {};
+            accelBuildInfo.primitiveOffset = sizeof(AABB) * numAABBs;
+            accelBuildInfo.primitiveCount  = numEllipsoids;
+            numAABBs += accelBuildInfo.primitiveCount;
 
-        accelBuildInfos.Push(accelBuildInfo);
+            accelBuildInfos.Push(accelBuildInfo);
+        }
     }
 
-    // TODO: separate this out
-    StaticArray<AccelerationStructureSizes> sizes =
-        device->GetBLASBuildSizes(scratch.temp.arena, accelBuildInfos);
-
-    StaticArray<AccelerationStructureCreate> creates(scratch.temp.arena,
-                                                     accelBuildInfos.Length());
-
-    u32 totalScratch = 0;
-    u32 totalAccel   = 0;
-    for (AccelerationStructureSizes sizeInfo : sizes)
+    if (accelBuildInfos.Length())
     {
-        totalAccel = AlignPow2(totalAccel, 256);
+        StaticArray<AccelerationStructureSizes> sizes =
+            device->GetBLASBuildSizes(scratch.temp.arena, accelBuildInfos);
 
-        AccelerationStructureCreate create = {};
-        create.accelSize                   = sizeInfo.accelSize;
-        create.bufferOffset                = totalAccel;
-        create.type                        = AccelerationStructureType::Bottom;
+        StaticArray<AccelerationStructureCreate> creates(scratch.temp.arena,
+                                                         accelBuildInfos.Length());
 
-        creates.Push(create);
+        u32 totalScratch = 0;
+        u32 totalAccel   = 0;
+        for (AccelerationStructureSizes sizeInfo : sizes)
+        {
+            totalAccel = AlignPow2(totalAccel, 256);
 
-        totalAccel += sizeInfo.accelSize;
-        totalScratch += sizeInfo.scratchSize;
+            AccelerationStructureCreate create = {};
+            create.accelSize                   = sizeInfo.accelSize;
+            create.bufferOffset                = totalAccel;
+            create.type                        = AccelerationStructureType::Bottom;
+
+            creates.Push(create);
+
+            totalAccel += sizeInfo.accelSize;
+            totalScratch += sizeInfo.scratchSize;
+        }
+
+        blasProxyScratchBuffer = device->CreateBuffer(
+            VK_BUFFER_USAGE_2_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT |
+                VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT,
+            totalScratch);
+        GPUBuffer accelBuffer =
+            device->CreateBuffer(VK_BUFFER_USAGE_2_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                                     VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT,
+                                 totalAccel);
+        totalNumBytes += blasProxyScratchBuffer.size;
+        totalNumBytes += accelBuffer.size;
+
+        mergedInstancesAABBBuffer = device->CreateBuffer(
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+            sizeof(AABB) * numAABBs);
+
+        uint64_t scratchDataDeviceAddress = device->GetDeviceAddress(&blasProxyScratchBuffer);
+        uint64_t aabbDeviceAddress = device->GetDeviceAddress(&mergedInstancesAABBBuffer);
+        totalScratch               = 0;
+
+        for (AccelerationStructureCreate &create : creates)
+        {
+            create.buffer = &accelBuffer;
+        }
+        device->CreateAccelerationStructures(creates);
+
+        StaticArray<u64> accelDeviceAddresses(scratch.temp.arena, finalNumPartitions);
+
+        for (u32 sizeIndex = 0; sizeIndex < sizes.Length(); sizeIndex++)
+        {
+            AccelerationStructureSizes &sizeInfo = sizes[sizeIndex];
+            AccelerationStructureCreate &create  = creates[sizeIndex];
+
+            accelDeviceAddresses.Push(create.asDeviceAddress);
+            AccelBuildInfo &buildInfo          = accelBuildInfos[sizeIndex];
+            buildInfo.scratchDataDeviceAddress = scratchDataDeviceAddress + totalScratch;
+            buildInfo.dataDeviceAddress        = aabbDeviceAddress;
+            buildInfo.as                       = create.as;
+
+            totalScratch += sizeInfo.scratchSize;
+        }
+
+        mergedPartitionDeviceAddresses = device->CreateBuffer(
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            sizeof(u64) * finalNumPartitions);
+        cmd->SubmitBuffer(&mergedPartitionDeviceAddresses, accelDeviceAddresses.data,
+                          sizeof(u64) * finalNumPartitions);
+        totalNumBytes += mergedPartitionDeviceAddresses.size;
     }
-
-    blasProxyScratchBuffer = device->CreateBuffer(
-        VK_BUFFER_USAGE_2_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-            VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT,
-        totalScratch);
-    GPUBuffer accelBuffer =
-        device->CreateBuffer(VK_BUFFER_USAGE_2_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
-                                 VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT,
-                             totalAccel);
-    totalNumBytes += blasProxyScratchBuffer.size;
-    totalNumBytes += accelBuffer.size;
-
-    mergedInstancesAABBBuffer = device->CreateBuffer(
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        sizeof(AABB) * numAABBs);
-
-    uint64_t scratchDataDeviceAddress = device->GetDeviceAddress(&blasProxyScratchBuffer);
-    uint64_t aabbDeviceAddress        = device->GetDeviceAddress(&mergedInstancesAABBBuffer);
-    totalScratch                      = 0;
-
-    for (AccelerationStructureCreate &create : creates)
-    {
-        create.buffer = &accelBuffer;
-    }
-    device->CreateAccelerationStructures(creates);
-
-    StaticArray<u64> accelDeviceAddresses(scratch.temp.arena, finalNumPartitions);
-
-    for (u32 sizeIndex = 0; sizeIndex < sizes.Length(); sizeIndex++)
-    {
-        AccelerationStructureSizes &sizeInfo = sizes[sizeIndex];
-        AccelerationStructureCreate &create  = creates[sizeIndex];
-
-        accelDeviceAddresses.Push(create.asDeviceAddress);
-        AccelBuildInfo &buildInfo          = accelBuildInfos[sizeIndex];
-        buildInfo.scratchDataDeviceAddress = scratchDataDeviceAddress + totalScratch;
-        buildInfo.dataDeviceAddress        = aabbDeviceAddress;
-        buildInfo.as                       = create.as;
-
-        totalScratch += sizeInfo.scratchSize;
-    }
-
-    mergedPartitionDeviceAddresses = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                              VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                                          sizeof(u64) * finalNumPartitions);
-    totalNumBytes += mergedPartitionDeviceAddresses.size;
 
     partitionInfosBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -3157,39 +3215,33 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
     totalNumBytes += transformSize;
     cmd->SubmitBuffer(&instanceTransformsBuffer, instanceTransforms.data, transformSize);
 
-    // cmd->SubmitBuffer(&instancesBuffer, proxyInstances.data,
-    //                   sizeof(GPUInstance) * proxyInstances.Length());
-    // numInstances = proxyInstances.Length();
-
-    // cmd->SubmitBuffer(&instancesBuffer, inputInstances.data,
-    //                   sizeof(GPUInstance) * inputInstances.Length());
-    // numInstances = inputInstances.Length();
     cmd->SubmitBuffer(&partitionInfosBuffer, partitionInfos.data,
                       sizeof(PartitionInfo) * (finalNumPartitions));
-    cmd->SubmitBuffer(&mergedPartitionDeviceAddresses, accelDeviceAddresses.data,
-                      sizeof(u64) * finalNumPartitions);
 
     cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                  VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
     cmd->FlushBarriers();
 
-    cmd->StartBindingCompute(decodeMergedInstancesPipeline, &decodeMergedInstancesLayout)
-        .Bind(&instanceTransformsBuffer)
-        .Bind(&resourceAABBBuffer)
-        .Bind(&mergedInstancesAABBBuffer)
-        .Bind(&partitionInfosBuffer)
-        .Bind(&resourceTruncatedEllipsoidsBuffer)
-        .End();
+    if (accelBuildInfos.Length())
+    {
+        cmd->StartBindingCompute(decodeMergedInstancesPipeline, &decodeMergedInstancesLayout)
+            .Bind(&instanceTransformsBuffer)
+            .Bind(&resourceAABBBuffer)
+            .Bind(&mergedInstancesAABBBuffer)
+            .Bind(&partitionInfosBuffer)
+            .Bind(&resourceTruncatedEllipsoidsBuffer)
+            .End();
 
-    cmd->Dispatch(finalNumPartitions, 1, 1);
+        cmd->Dispatch(finalNumPartitions, 1, 1);
 
-    cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                 VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                 VK_ACCESS_2_SHADER_WRITE_BIT,
-                 VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
-    cmd->FlushBarriers();
+        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                     VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                     VK_ACCESS_2_SHADER_WRITE_BIT,
+                     VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+        cmd->FlushBarriers();
 
-    cmd->BuildCustomBLAS(accelBuildInfos);
+        cmd->BuildCustomBLAS(accelBuildInfos);
+    }
 
     Print("%llu total num bytes\n", totalNumBytes);
 }

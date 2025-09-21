@@ -1117,8 +1117,7 @@ f32 MeshSimplifier::Simplify(u32 targetNumVerts, u32 targetNumTris, f32 targetEr
 
     u32 numTriangles = numIndices / 3;
 
-    pairs = StaticArray<Pair>(scratch.temp.arena, 3 * numTriangles);
-    Heap<Pair> heap(scratch.temp.arena, 3 * numTriangles);
+    pairs = Array<Pair>(scratch.temp.arena, 3 * numTriangles);
 
     for (u32 i = 0; i < numIndices; i++)
     {
@@ -1154,7 +1153,10 @@ f32 MeshSimplifier::Simplify(u32 targetNumVerts, u32 targetNumTris, f32 targetEr
         }
     }
 
-    for (int pairIndex = 0; pairIndex < pairs.size(); pairIndex++)
+    ConstructVirtualEdges(scratch.temp.arena);
+    Heap<Pair> heap(scratch.temp.arena, pairs.Length());
+
+    for (int pairIndex = 0; pairIndex < pairs.Length(); pairIndex++)
     {
         EvaluatePair(pairs[pairIndex]);
         heap.Add(pairs.data, pairIndex);
@@ -1567,6 +1569,316 @@ void MeshSimplifier::Finalize(u32 &finalNumVertices, u32 &finalNumIndices, u32 *
     finalNumIndices  = 3 * triangleCount;
 
     // Print("%u %u\n", finalNumVertices, finalNumIndices);
+}
+
+static void edgeEdgeDist(Vec3f &x, Vec3f &y,             // closest points
+                         const Vec3f &p, const Vec3f &a, // seg 1 origin, vector
+                         const Vec3f &q, const Vec3f &b) // seg 2 origin, vector
+{
+    const Vec3f T   = q - p;
+    const f32 ADotA = Dot(a, a);
+    const f32 BDotB = Dot(b, b);
+    const f32 ADotB = Dot(a, b);
+    const f32 ADotT = Dot(a, T);
+    const f32 BDotT = Dot(b, T);
+
+    // t parameterizes ray (p, a)
+    // u parameterizes ray (q, b)
+
+    // Compute t for the closest point on ray (p, a) to ray (q, b)
+    const f32 Denom = ADotA * BDotB - ADotB * ADotB;
+
+    f32 t; // We will clamp result so t is on the segment (p, a)
+    if (Denom != 0.0f) t = Clamp((ADotT * BDotB - BDotT * ADotB) / Denom, 0.0f, 1.0f);
+    else t = 0.0f;
+
+    // find u for point on ray (q, b) closest to point at t
+    f32 u;
+    if (BDotB != 0.0f)
+    {
+        u = (t * ADotB - BDotT) / BDotB;
+
+        // if u is on segment (q, b), t and u correspond to closest points, otherwise, clamp u,
+        // recompute and clamp t
+        if (u < 0.0f)
+        {
+            u = 0.0f;
+            if (ADotA != 0.0f) t = Clamp(ADotT / ADotA, 0.0f, 1.0f);
+            else t = 0.0f;
+        }
+        else if (u > 1.0f)
+        {
+            u = 1.0f;
+            if (ADotA != 0.0f) t = Clamp((ADotB + ADotT) / ADotA, 0.0f, 1.0f);
+            else t = 0.0f;
+        }
+    }
+    else
+    {
+        u = 0.0f;
+        if (ADotA != 0.0f) t = Clamp(ADotT / ADotA, 0.0f, 1.0f);
+        else t = 0.0f;
+    }
+
+    x = p + a * t;
+    y = q + b * u;
+}
+
+static float TriangleDistSqr(Vec3f &cp, Vec3f &cq, const Vec3f p[3], const Vec3f q[3])
+{
+    Vec3f Sv[3];
+    Sv[0] = p[1] - p[0];
+    Sv[1] = p[2] - p[1];
+    Sv[2] = p[0] - p[2];
+
+    Vec3f Tv[3];
+    Tv[0] = q[1] - q[0];
+    Tv[1] = q[2] - q[1];
+    Tv[2] = q[0] - q[2];
+
+    Vec3f minP, minQ;
+    bool shown_disjoint = false;
+
+    float mindd = FLT_MAX;
+
+    for (u32 i = 0; i < 3; i++)
+    {
+        for (u32 j = 0; j < 3; j++)
+        {
+            edgeEdgeDist(cp, cq, p[i], Sv[i], q[j], Tv[j]);
+            const Vec3f V  = cq - cp;
+            const float dd = Dot(V, V);
+
+            if (dd <= mindd)
+            {
+                minP  = cp;
+                minQ  = cq;
+                mindd = dd;
+
+                u32 id = i + 2;
+                if (id >= 3) id -= 3;
+                Vec3f Z = p[id] - cp;
+                float a = Dot(Z, V);
+                id      = j + 2;
+                if (id >= 3) id -= 3;
+                Z       = q[id] - cq;
+                float b = Dot(Z, V);
+
+                if ((a <= 0.0f) && (b >= 0.0f)) return Dot(V, V);
+
+                if (a <= 0.0f) a = 0.0f;
+                else if (b > 0.0f) b = 0.0f;
+
+                if ((mindd - a + b) > 0.0f) shown_disjoint = true;
+            }
+        }
+    }
+
+    Vec3f Sn  = Cross(Sv[0], Sv[1]);
+    float Snl = Dot(Sn, Sn);
+
+    if (Snl > 1e-15f)
+    {
+        const Vec3f Tp(Dot(p[0] - q[0], Sn), Dot((p[0] - q[1]), Sn), Dot((p[0] - q[2]), Sn));
+
+        int index = -1;
+        if ((Tp[0] > 0.0f) && (Tp[1] > 0.0f) && (Tp[2] > 0.0f))
+        {
+            if (Tp[0] < Tp[1]) index = 0;
+            else index = 1;
+            if (Tp[2] < Tp[index]) index = 2;
+        }
+        else if ((Tp[0] < 0.0f) && (Tp[1] < 0.0f) && (Tp[2] < 0.0f))
+        {
+            if (Tp[0] > Tp[1]) index = 0;
+            else index = 1;
+            if (Tp[2] > Tp[index]) index = 2;
+        }
+
+        if (index >= 0)
+        {
+            shown_disjoint = true;
+
+            const Vec3f &qIndex = q[index];
+
+            Vec3f V = qIndex - p[0];
+            Vec3f Z = Cross(Sn, Sv[0]);
+            if (Dot(V, Z) > 0.0f)
+            {
+                V = qIndex - p[1];
+                Z = Cross(Sn, Sv[1]);
+                if (Dot(V, Z) > 0.0f)
+                {
+                    V = qIndex - p[2];
+                    Z = Cross(Sn, Sv[2]);
+                    if (Dot(V, Z) > 0.0f)
+                    {
+                        cp = qIndex + Sn * Tp[index] / Snl;
+                        cq = qIndex;
+                        return LengthSquared(cp - cq);
+                    }
+                }
+            }
+        }
+    }
+
+    Vec3f Tn  = Cross(Tv[0], Tv[1]);
+    float Tnl = Dot(Tn, Tn);
+
+    if (Tnl > 1e-15f)
+    {
+        const Vec3f Sp(Dot((q[0] - p[0]), Tn), Dot((q[0] - p[1]), Tn), Dot((q[0] - p[2]), Tn));
+
+        int index = -1;
+        if ((Sp[0] > 0.0f) && (Sp[1] > 0.0f) && (Sp[2] > 0.0f))
+        {
+            if (Sp[0] < Sp[1]) index = 0;
+            else index = 1;
+            if (Sp[2] < Sp[index]) index = 2;
+        }
+        else if ((Sp[0] < 0.0f) && (Sp[1] < 0.0f) && (Sp[2] < 0.0f))
+        {
+            if (Sp[0] > Sp[1]) index = 0;
+            else index = 1;
+            if (Sp[2] > Sp[index]) index = 2;
+        }
+
+        if (index >= 0)
+        {
+            shown_disjoint = true;
+
+            const Vec3f &pIndex = p[index];
+
+            Vec3f V = pIndex - q[0];
+            Vec3f Z = Cross(Tn, Tv[0]);
+            if (Dot(V, Z) > 0.0f)
+            {
+                V = pIndex - q[1];
+                Z = Cross(Tn, Tv[1]);
+                if (Dot(V, Z) > 0.0f)
+                {
+                    V = pIndex - q[2];
+                    Z = Cross(Tn, Tv[2]);
+                    if (Dot(V, Z) > 0.0f)
+                    {
+                        cp = pIndex;
+                        cq = pIndex + Tn * Sp[index] / Tnl;
+                        return LengthSquared(cp - cq);
+                    }
+                }
+            }
+        }
+    }
+
+    if (shown_disjoint)
+    {
+        cp = minP;
+        cq = minQ;
+        return mindd;
+    }
+    else return 0.0f;
+}
+
+void MeshSimplifier::ConstructVirtualEdges(Arena *arena)
+{
+    ScratchArena scratch(&arena, 1);
+    u32 numTriangles = numIndices / 3;
+    StaticArray<u32> islandIDs(scratch.temp.arena, numTriangles, numTriangles);
+    BitVector visited(scratch.temp.arena, numTriangles);
+    u32 numIslands = 0;
+
+    StaticArray<u32> stack(scratch.temp.arena, numTriangles);
+
+    for (int index = 0; index < numTriangles; index++)
+    {
+        stack.Empty();
+        u32 islandIndex = numIslands;
+        if (!visited.GetBit(index))
+        {
+            numIslands++;
+            visited.SetBit(index);
+            stack.Push(index);
+        }
+        while (stack.Length())
+        {
+            u32 tri        = stack.Pop();
+            islandIDs[tri] = islandIndex;
+
+            for (int vertexIndex = 0; vertexIndex < 3; vertexIndex++)
+            {
+                Vec3f &p = GetPosition(indices[3 * tri + vertexIndex]);
+                int hash = Hash(p);
+                for (int hashIndex = cornerHash.FirstInHash(hash); hashIndex != -1;
+                     hashIndex     = cornerHash.NextInHash(hashIndex))
+                {
+                    u32 otherTri = (u32)hashIndex / 3;
+                    if (otherTri != tri)
+                    {
+                        Vec3f &otherP = GetPosition(indices[hashIndex]);
+                        if (otherP == p)
+                        {
+                            if (!visited.GetBit(otherTri))
+                            {
+                                visited.SetBit(otherTri);
+                                stack.Push(otherTri);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for (u32 triangle = 0; triangle < numTriangles; triangle++)
+    {
+        Vec3f p[3] = {
+            GetPosition(indices[3 * triangle + 0]),
+            GetPosition(indices[3 * triangle + 1]),
+            GetPosition(indices[3 * triangle + 2]),
+        };
+        Vec3f cp = Normalize(Cross(p[1] - p[0], p[2] - p[0]));
+        for (u32 otherTriangle = triangle + 1; otherTriangle < numTriangles; otherTriangle++)
+        {
+            if (islandIDs[triangle] != islandIDs[otherTriangle])
+            {
+                Vec3f q[3] = {
+                    GetPosition(indices[3 * otherTriangle + 0]),
+                    GetPosition(indices[3 * otherTriangle + 1]),
+                    GetPosition(indices[3 * otherTriangle + 2]),
+                };
+                Vec3f cq = Normalize(Cross(q[1] - q[0], q[2] - q[0]));
+
+                f32 threshold = .1f;
+                if (TriangleDistSqr(cp, cq, p, q) < threshold * threshold)
+                {
+                    Vec3f bestPairP0;
+                    Vec3f bestPairP1;
+                    f32 dist = FLT_MAX;
+                    for (u32 i = 0; i < 3; i++)
+                    {
+                        for (u32 j = i + 1; j < 3; j++)
+                        {
+                            f32 testDist = Length(p[i] - q[j]);
+                            if (testDist < dist)
+                            {
+                                bestPairP0 = p[i];
+                                bestPairP1 = q[j];
+                                dist       = testDist;
+                            }
+                        }
+                    }
+
+                    Pair pair;
+                    pair.p0 = bestPairP0;
+                    pair.p1 = bestPairP1;
+                    if (AddUniquePair(pair, pairs.Length()))
+                    {
+                        pairs.Push(pair);
+                    }
+                }
+            }
+        }
+    }
 }
 
 struct ClusterGroup
@@ -4569,8 +4881,9 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
                     });
             }
 
-            if (depth != 0 &&
-                (bool(voxelGroupCount.load()) || bool(potentialVoxelGroupCount.load())))
+            // if (depth != 0 &&
+            //     (bool(voxelGroupCount.load()) || bool(potentialVoxelGroupCount.load())))
+            if (0)
             {
                 ParallelForLoop(
                     0, partitionResult.ranges.Length(), 1, 1, [&](int jobID, int groupIndex) {
@@ -4740,7 +5053,7 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
                     });
             }
 
-            if (voxelGroupCount.load())
+            if (0) // voxelGroupCount.load())
             {
                 voxelStartDepth = Min(voxelStartDepth, depth + 1);
                 ParallelForLoop(
@@ -5064,7 +5377,7 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
             }
 
             // Write obj to disk
-#if 0
+#if 1
             ArrayView<ClusterGroup> levelClusterGroups(clusterGroups, totalNumGroups,
                                                        partitionResult.ranges.Length());
             u32 vertexCount = numVertices.load();

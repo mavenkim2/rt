@@ -1038,7 +1038,8 @@ void DenseGeometryBuildData::WriteTriangleData(StaticArray<int> &triangleIndices
 
     // Write reuse buffer (byte aligned)
     u32 numIndexBits = Log2Int(Max(maxReuseIndex, 1u)) + 1;
-    Assert(numIndexBits >= 1 && numIndexBits <= 8);
+    ErrorExit(numIndexBits >= 1 && numIndexBits <= 8, "%u %u %u\n", numIndexBits,
+              maxReuseIndex, addedVertexCount);
     u32 ctrlBitSize = ((clusterNumTriangles + 31) >> 5u) * 12u;
     u32 bitStreamSize =
         ((numIndexBits * reuseBuffer.Length() + currentFirstUseBit + 7) >> 3) + ctrlBitSize;

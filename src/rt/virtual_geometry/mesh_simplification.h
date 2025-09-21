@@ -91,7 +91,7 @@ struct MeshSimplifier
     QuadricGrad *triangleAttrQuadrics;
 
     // Adjacency
-    StaticArray<Pair> pairs;
+    Array<Pair> pairs;
     HashIndex cornerHash;
     HashIndex vertexHash;
     HashIndex pairHash0;
@@ -121,6 +121,7 @@ struct MeshSimplifier
     f32 Simplify(u32 targetNumVerts, u32 targetNumTris, f32 targetError, u32 limitNumVerts,
                  u32 limitNumTris, f32 limitError);
     void Finalize(u32 &finalNumVertices, u32 &finalNumIndices, u32 *geomIDs);
+    void ConstructVirtualEdges(Arena *arena);
 };
 
 void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndices,

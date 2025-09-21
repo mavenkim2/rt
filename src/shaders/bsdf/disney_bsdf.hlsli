@@ -115,7 +115,7 @@ float3 SampleDisneyThin(float2 u, inout float3 throughput, float3 wo)
         dir = -SampleCosineHemisphere(u);
         value = cdLin;
     }
-    throughput *= cdLin;
+    throughput *= value;
     return dir;
 }
 

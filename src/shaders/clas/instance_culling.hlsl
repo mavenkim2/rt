@@ -121,7 +121,6 @@ void main(uint3 dtID : SV_DispatchThreadID)
     candidateNode.blasIndex = blasIndex;
     candidateNode.pad = 0;
 
-
     uint nodeIndex;
     InterlockedAdd(queue[0].nodeWriteOffset, 1, nodeIndex);
     InterlockedAdd(queue[0].numNodes, 1);

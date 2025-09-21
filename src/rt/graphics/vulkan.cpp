@@ -3206,7 +3206,7 @@ void CommandBuffer::ComputeCLASSizes(GPUBuffer *srcInfosArray, GPUBuffer *scratc
     opInput.triangleClusters.maxNumTriangles     = maxNumTriangles;
     opInput.triangleClusters.maxNumVertices      = maxNumVertices;
     opInput.triangleClusters.maxClusterTriangles = MAX_CLUSTER_TRIANGLES;
-    opInput.triangleClusters.maxClusterVertices  = MAX_CLUSTER_VERTICES;
+    opInput.triangleClusters.maxClusterVertices  = MAX_CLUSTER_TRIANGLE_VERTICES;
 
     opInput.maxAccelerationStructureCount = maxNumClusters;
 
@@ -3259,7 +3259,7 @@ void CommandBuffer::BuildCLAS(CLASOpMode opMode, GPUBuffer *dstImplicitData,
     opInput.triangleClusters.maxNumTriangles     = maxNumTriangles;
     opInput.triangleClusters.maxNumVertices      = maxNumVertices;
     opInput.triangleClusters.maxClusterTriangles = MAX_CLUSTER_TRIANGLES;
-    opInput.triangleClusters.maxClusterVertices  = MAX_CLUSTER_VERTICES;
+    opInput.triangleClusters.maxClusterVertices  = MAX_CLUSTER_TRIANGLE_VERTICES;
 
     opInput.maxAccelerationStructureCount = maxNumClusters;
 

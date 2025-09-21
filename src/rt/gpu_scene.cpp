@@ -240,8 +240,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     u32 targetHeight;
 
     device->GetDLSSTargetDimensions(targetWidth, targetHeight);
-    targetWidth  = 1920;
-    targetHeight = 1080;
+    // targetWidth  = 1920;
+    // targetHeight = 1080;
 
     Swapchain swapchain = device->CreateSwapchain(params->window, VK_FORMAT_R8G8B8A8_SRGB,
                                                   params->width, params->height);
@@ -971,7 +971,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         // Input
         {
-            f32 speed = 2000.f;
+            f32 speed = 5000.f;
 
             f32 rotationSpeed = 0.001f * PI;
             camera.RotateCamera(dMouseP, rotationSpeed);
@@ -1355,53 +1355,12 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             .End();
         cmd->Dispatch((targetWidth + 7) / 8, (targetHeight + 7) / 8, 1);
 
-        // if (device->frameCount > 200)
-        // {
-        //     GPUBuffer readback0 = device->CreateBuffer(
-        //         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        //         depthBuffer.desc.width * depthBuffer.desc.height * 4,
-        //         MemoryUsage::GPU_TO_CPU);
-        //     //
-        //     //     // GPUBuffer readback2 =
-        //     //     //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        //     //     //     thisFrameBitVector->size,
-        //     //     //                          MemoryUsage::GPU_TO_CPU);
-        //     cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-        //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-        //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-        //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     cmd->Barrier(
-        //         &depthBuffer, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        //         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //         VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-        //     //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //     //     // VK_ACCESS_2_SHADER_WRITE_BIT,
-        //     //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     cmd->FlushBarriers();
-        //     // cmd->CopyBuffer(&readback0, &instancesBuffer);
-        //     BufferImageCopy copy = {};
-        //     copy.extent =
-        //         Vec3u(motionVectorBuffer.desc.width, motionVectorBuffer.desc.height, 1);
-        //     cmd->CopyImageToBuffer(&readback0, &depthBuffer, &copy, 1);
-        //     Semaphore testSemaphore   = device->CreateSemaphore();
-        //     testSemaphore.signalValue = 1;
-        //     cmd->SignalOutsideFrame(testSemaphore);
-        //     device->SubmitCommandBuffer(cmd);
-        //     device->Wait(testSemaphore);
-        //
-        //     f32 *data = (f32 *)readback0.mappedPtr;
-        //
-        //     int stop = 5;
-        // }
-
+        device->BeginEvent(cmd, "DLSS RR");
         cmd->DLSS(targets, gpuScene.cameraFromRender, gpuScene.renderFromCamera,
                   params->NDCFromCamera, params->cameraFromClip, clipToPrevClip,
                   prevClipToClip, camera.position, params->up, camera.forward, camera.right,
                   params->fov, params->aspectRatio, Vec2f(outJitterX, outJitterY));
+        device->EndEvent(cmd);
         // Copy feedback from device to host
         CommandBuffer *transferCmd =
             device->BeginCommandBuffer(QueueType_Copy, "feedback copy cmd");
