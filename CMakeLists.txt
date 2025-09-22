@@ -154,6 +154,7 @@ set (RT_SOURCE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/virtual_geometry/virtual_geometry_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/scene/scene.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/image.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/graphics/render_graph.cpp
 )
 
 if (NOT USE_GPU)

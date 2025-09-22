@@ -35,7 +35,7 @@ StructuredBuffer<GPUMaterial> materials : register(t4);
 ConstantBuffer<ShaderDebugInfo> debugInfo: register(b7);
 
 //RWStructuredBuffer<uint> feedbackBuffer : register(u12);
-StructuredBuffer<uint> clusterLookupTable : register(t13);
+//StructuredBuffer<uint> clusterLookupTable : register(t13);
 StructuredBuffer<GPUInstance> gpuInstances : register(t14);
 RWStructuredBuffer<uint> proxyCounts : register(u15);
 StructuredBuffer<GPUTruncatedEllipsoid> truncatedEllipsoids : register(t16);
@@ -216,7 +216,8 @@ void main()
                 uint voxelIndex = primIndex & 63;
                 uint tableOffset = primIndex >> 13;
 
-                uint clusterID = clusterLookupTable[levelTableOffset + tableOffset];
+                uint clusterID = 0;
+                //uint clusterID = clusterLookupTable[levelTableOffset + tableOffset];
 
                 uint pageIndex = GetPageIndexFromClusterID(clusterID); 
                 uint clusterIndex = GetClusterIndexFromClusterID(clusterID);
@@ -286,7 +287,7 @@ void main()
                 uint brickIndex = primIndex & 127;
                 uint tableOffset = primIndex >> 7;
 
-                uint clusterID = clusterLookupTable[tableBaseOffset + tableOffset];
+                uint clusterID = 0;//clusterLookupTable[tableBaseOffset + tableOffset];
 
                 uint pageIndex = GetPageIndexFromClusterID(clusterID); 
                 uint clusterIndex = GetClusterIndexFromClusterID(clusterID);
@@ -581,7 +582,7 @@ void main()
                 uint tableOffset = primIndex >> 7;
 #endif
                 uint tableBaseOffset = gpuInstances[instanceID].clusterLookupTableOffset;
-                uint clusterID = clusterLookupTable[tableBaseOffset + tableOffset];
+                uint clusterID = 0;//clusterLookupTable[tableBaseOffset + tableOffset];
 
                 uint pageIndex = GetPageIndexFromClusterID(clusterID); 
                 uint clusterIndex = GetClusterIndexFromClusterID(clusterID);

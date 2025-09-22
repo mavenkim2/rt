@@ -803,10 +803,17 @@ struct CommandBuffer
                       GPUBuffer *dstImplicitData, GPUBuffer *scratchBuffer,
                       GPUBuffer *dstAddresses, GPUBuffer *dstSizes, GPUBuffer *srcInfosArray,
                       GPUBuffer *srcInfosCount, u32 srcInfosOffset, u32 dstClasOffset = 0);
+    void CLASIndirect(CLASOpInput opInput, CLASOpMode opMode, CLASOpType opType,
+                      u64 dstImplicitData, u64 scratchBuffer, u64 dstAddresses,
+                      u32 dstAddressesSize, u64 dstSizes, u32 dstSizesSize, u64 srcInfosArray,
+                      u32 srcInfosArraySize, u64 srcInfosCount);
     void ComputeCLASSizes(GPUBuffer *srcInfosArray, GPUBuffer *scratchBuffer,
                           GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
                           u32 dstClasOffset, u32 maxNumTriangles, u32 maxNumVertices,
                           u32 maxNumClusters);
+    void ComputeCLASSizes(u64 srcInfosArray, u32 srcInfosArraySize, u64 scratchBuffer,
+                          u64 dstSizes, u32 dstSizesSize, u64 srcInfosCount,
+                          u32 maxNumTriangles, u32 maxNumVertices, u32 maxNumClusters);
     void ComputeBLASSizes(GPUBuffer *srcInfosArray, GPUBuffer *scratchBuffer,
                           GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
                           u32 maxTotalClusterCount,
