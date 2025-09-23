@@ -52,6 +52,19 @@ ResourceHandle RenderGraph::RegisterExternalResource(GPUBuffer *buffer)
     return handle;
 }
 
+ResourceHandle RenderGraph::RegisterExternalResource(GPUImage *image)
+{
+    RenderGraphResource resource = {};
+    resource.alignment           = 0;
+    resource.flags               = ResourceFlags::External;
+
+    ResourceHandle handle;
+    handle.index = resources.Length();
+
+    resources.Push(resource);
+    return handle;
+}
+
 int RenderGraph::Overlap(const ResourceLifeTimeRange &lhs,
                          const ResourceLifeTimeRange &rhs) const
 {
@@ -68,8 +81,65 @@ int RenderGraph::Overlap(const ResourceLifeTimeRange &lhs,
 Pass &RenderGraph::StartPass(u32 numResources, PassFunction &&func)
 {
     Pass pass;
-    pass.resourceHandles = StaticArray<ResourceHandle>(arena, numResources);
-    pass.func            = func;
+    pass.resourceHandles    = StaticArray<ResourceHandle>(arena, numResources);
+    pass.resourceUsageTypes = StaticArray<ResourceUsageType>(arena, numResources);
+    pass.func               = func;
+    passes.Push(pass);
+    return passes[passes.Length() - 1];
+}
+
+Pass &RenderGraph::StartComputePass(VkPipeline pipeline, DescriptorSetLayout &layout,
+                                    u32 numResources, PassFunction &&func)
+{
+    u32 passIndex       = passes.Length();
+    auto AddComputePass = [passIndex, this, func](CommandBuffer *cmd) {
+        Pass &pass       = passes[passIndex];
+        DescriptorSet ds = pass.layout->CreateDescriptorSet();
+        BindResources(pass, ds);
+        cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
+                                pass.layout->pipelineLayout);
+
+        func(cmd);
+    };
+    Pass pass;
+    pass.pipeline           = pipeline;
+    pass.layout             = &layout;
+    pass.resourceHandles    = StaticArray<ResourceHandle>(arena, numResources);
+    pass.resourceUsageTypes = StaticArray<ResourceUsageType>(arena, numResources);
+    pass.func               = AddComputePass;
+    passes.Push(pass);
+    return passes[passes.Length() - 1];
+}
+
+Pass &RenderGraph::StartIndirectComputePass(string name, VkPipeline pipeline,
+                                            DescriptorSetLayout &layout, u32 numResources,
+                                            ResourceHandle indirectBuffer,
+                                            u32 indirectBufferOffset, PassFunction &&func)
+{
+    string str          = PushStr8Copy(arena, name);
+    u32 passIndex       = passes.Length();
+    auto AddComputePass = [str, passIndex, this, func, indirectBuffer,
+                           indirectBufferOffset](CommandBuffer *cmd) {
+        Pass &pass       = passes[passIndex];
+        DescriptorSet ds = pass.layout->CreateDescriptorSet();
+        BindResources(pass, ds);
+        cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
+                                pass.layout->pipelineLayout);
+        device->BeginEvent(cmd, str);
+        RenderGraphResource &resource      = resources[indirectBuffer.index];
+        ResidentResource &residentResource = residentResources[resource.residentResourceIndex];
+        cmd->DispatchIndirect(&residentResource.gpuBuffer,
+                              resource.aliasOffset + indirectBufferOffset);
+
+        func(cmd);
+        device->EndEvent(cmd);
+    };
+    Pass pass;
+    pass.pipeline           = pipeline;
+    pass.layout             = &layout;
+    pass.resourceHandles    = StaticArray<ResourceHandle>(arena, numResources);
+    pass.resourceUsageTypes = StaticArray<ResourceUsageType>(arena, numResources);
+    pass.func               = AddComputePass;
     passes.Push(pass);
     return passes[passes.Length() - 1];
 }
@@ -92,7 +162,7 @@ void RenderGraph::BindResources(Pass &pass, DescriptorSet &ds)
                 residentResources[resource.residentResourceIndex];
             ds.Bind(&residentResource.gpuBuffer, resource.aliasOffset, resource.bufferSize);
         }
-        else if (resource.flags = ResourceFlags::External)
+        else if (resource.flags == ResourceFlags::External)
         {
             GPUBuffer temp = {};
             temp.buffer    = resource.bufferHandle;
@@ -278,13 +348,19 @@ void RenderGraph::Compile()
     Print("Transient Resource Size: %u\n", totalSize);
 }
 
-void RenderGraph::Execute()
+void RenderGraph::Execute(CommandBuffer *cmd)
 {
-    CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Graphics);
     for (Pass &pass : passes)
     {
         pass.func(cmd);
     }
+}
+
+void RenderGraph::BeginFrame() { watermark = ArenaPos(arena); }
+void RenderGraph::EndFrame()
+{
+    ArenaPopTo(arena, watermark);
+    passes.Clear();
 }
 
 } // namespace rt

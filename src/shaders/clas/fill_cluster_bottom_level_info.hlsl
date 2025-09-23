@@ -1,11 +1,13 @@
 #include "../../rt/shader_interop/as_shaderinterop.h"
 
 RWStructuredBuffer<BLASData> blasDatas : register(u0);
-RWStructuredBuffer<uint> globals : register(u1);
+StructuredBuffer<uint> globals : register(t1);
 StructuredBuffer<GPUInstance> gpuInstances : register(t2);
 StructuredBuffer<Resource> resources : register(t3);
 
+#if 0
 [[vk::push_constant]] AddressPushConstant pc;
+#endif
 
 [numthreads(FILL_CLUSTER_BOTTOM_LEVEL_INFO_GROUPSIZE, 1, 1)]
 void main(uint3 DTid : SV_DispatchThreadID)

@@ -2,7 +2,7 @@
 
 RWStructuredBuffer<GPUInstance> instances : register(u0);
 StructuredBuffer<uint2> freedPartitions : register(t1);
-RWStructuredBuffer<uint> globals : register(u2);
+StructuredBuffer<uint> globals : register(t2);
 RWStructuredBuffer<uint> instanceFreeList : register(u3);
 
 [numthreads(64, 1, 1)]

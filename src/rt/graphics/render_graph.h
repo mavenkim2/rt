@@ -92,17 +92,35 @@ struct RenderGraph
     StaticArray<Pass> passes;
     Array<RenderGraphResource> resources;
 
-    HashIndex residentResourceHash;
+    u32 watermark;
+    // HashIndex residentResourceHash;
     StaticArray<ResidentResource> residentResources;
     CrossQueueDependencies dependencies;
 
+    void BeginFrame();
+    void EndFrame();
     ResourceHandle CreateBufferResource(VkBufferUsageFlags2 usageFlags, u32 size,
                                         ResourceFlags flags = ResourceFlags::Transient);
     void UpdateBufferResource(ResourceHandle handle, VkBufferUsageFlags2 usageFlags, u32 size);
     ResourceHandle RegisterExternalResource(GPUBuffer *buffer);
+    ResourceHandle RegisterExternalResource(GPUImage *image);
     int Overlap(const ResourceLifeTimeRange &lhs, const ResourceLifeTimeRange &rhs) const;
     Pass &StartPass(u32 numResources, PassFunction &&func);
+    Pass &StartComputePass(VkPipeline pipeline, DescriptorSetLayout &layout, u32 numResources,
+                           PassFunction &&func);
+    Pass &StartIndirectComputePass(string name, VkPipeline pipeline,
+                                   DescriptorSetLayout &layout, u32 numResources,
+                                   ResourceHandle indirectBuffer, u32 indirectBufferOffset,
+                                   PassFunction &&func);
     void BindResources(Pass &pass, DescriptorSet &ds);
+
+    template <typename T>
+    T *Allocate(T *ptr, u32 count)
+    {
+        T *out = (T *)PushArrayNoZero(arena, u8, sizeof(T) * count);
+        MemoryCopy(out, ptr, sizeof(T) * count);
+        return out;
+    }
 
     GPUBuffer *GetBuffer(ResourceHandle handle, u32 &offset, u32 &size);
     GPUBuffer *GetBuffer(ResourceHandle handle, u32 &offset);
@@ -110,24 +128,18 @@ struct RenderGraph
 
     template <typename T>
     Pass &StartComputePass(VkPipeline pipeline, DescriptorSetLayout &layout, u32 numResources,
-                           PassFunction &&func, PushConstant *pc, T *push = 0)
+                           PassFunction &&func, PushConstant *pc, T *push)
     {
         u32 passIndex = passes.Length();
-        T *p          = 0;
-        if (push)
-        {
-            p = (T *)PushArrayNoZero(arena, u8, sizeof(T));
-        }
-        auto AddComputePass = [pc, p, passIndex, &passes](CommandBuffer *cmd) {
+        Assert(push);
+        T *p                = (T *)PushArrayNoZero(arena, u8, sizeof(T));
+        auto AddComputePass = [pc, p, passIndex, this, func](CommandBuffer *cmd) {
             Pass &pass       = passes[passIndex];
             DescriptorSet ds = pass.layout->CreateDescriptorSet();
             BindResources(pass, ds);
             cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
                                     pass.layout->pipelineLayout);
-            if (p)
-            {
-                cmd->PushConstants(pc, p, pass.layout->pipelineLayout);
-            }
+            cmd->PushConstants(pc, p, pass.layout->pipelineLayout);
 
             func(cmd);
         };
@@ -145,27 +157,23 @@ struct RenderGraph
     Pass &StartIndirectComputePass(VkPipeline pipeline, DescriptorSetLayout &layout,
                                    u32 numResources, ResourceHandle indirectBuffer,
                                    u32 indirectBufferOffset, PassFunction &&func,
-                                   PushConstant *pc, T *push = 0)
+                                   PushConstant *pc, T *push)
     {
         u32 passIndex = passes.Length();
-        T *p          = 0;
-        if (push)
-        {
-            p = (T *)PushArrayNoZero(arena, u8, sizeof(T));
-        }
-        auto AddComputePass = [pc, p, passIndex, &passes](CommandBuffer *cmd) {
+        Assert(push);
+        T *p                = (T *)PushArrayNoZero(arena, u8, sizeof(T));
+        auto AddComputePass = [pc, p, passIndex, this, func, indirectBuffer,
+                               indirectBufferOffset](CommandBuffer *cmd) {
             Pass &pass       = passes[passIndex];
             DescriptorSet ds = pass.layout->CreateDescriptorSet();
             BindResources(pass, ds);
             cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
                                     pass.layout->pipelineLayout);
-            if (p)
-            {
-                cmd->PushConstants(pc, p, pass.layout->pipelineLayout);
-            }
+            cmd->PushConstants(pc, p, pass.layout->pipelineLayout);
 
-            RenderGraphResource &resource      = resources[indirectBuffer.index];
-            ResidentResource &residentResource = resource.residentResourceIndex;
+            RenderGraphResource &resource = resources[indirectBuffer.index];
+            ResidentResource &residentResource =
+                residentResources[resource.residentResourceIndex];
             cmd->DispatchIndirect(&residentResource.gpuBuffer,
                                   resource.aliasOffset + indirectBufferOffset);
 
@@ -181,53 +189,8 @@ struct RenderGraph
         return passes[passes.Length() - 1];
     }
 
-    // template <typename T>
-    // Pass &StartComputePass(string eventName, VkPipeline pipeline, DescriptorSetLayout
-    // &layout,
-    //                        u32 numResources, u32 dispatchX, u32 dispatchY, u32 dispatchZ,
-    //                        PushConstant *pc, T *push = 0)
-    // {
-    //     u32 passIndex = passes.Length();
-    //     T *p          = 0;
-    //     if (push)
-    //     {
-    //         p = (T *)PushArrayNoZero(arena, u8, sizeof(T));
-    //     }
-    //     string name         = PushStr8Copy(arena, eventName);
-    //     auto AddComputePass = [name, pc, p, passIndex, &passes](CommandBuffer *cmd) {
-    //         Pass &pass       = passes[passIndex];
-    //         DescriptorSet ds = pass.layout->CreateDescriptorSet();
-    //         for (ResourceHandle &handle : pass.resourceHandles)
-    //         {
-    //             RenderGraphResource &resource = resources[handle.index];
-    //             ResidentResource &residentResource =
-    //                 residentResources[resource.residentResourceIndex];
-    //             ds.Bind(&residentResource.gpuBuffer, resource.aliasOffset,
-    //                     resource.bufferSize);
-    //         }
-    //         cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
-    //                                 pass.layout->pipelineLayout);
-    //         if (p)
-    //         {
-    //             cmd->PushConstants(pc, p, pass.layout->pipelineLayout);
-    //         }
-    //
-    //         device->BeginEvent(cmd, name);
-    //         cmd->Dispatch(dispatchX, dispatchY, dispatchZ);
-    //         device->EndEvent(cmd);
-    //     };
-    //     Pass pass;
-    //     pass.pipeline           = pipeline;
-    //     pass.layout             = &layout;
-    //     pass.resourceHandles    = StaticArray<ResourceHandle>(arena, numResources);
-    //     pass.resourceUsageTypes = StaticArray<ResourceUsageType>(arena, numResources);
-    //     pass.func               = AddComputePass;
-    //     passes.Push(pass);
-    //     return passes[passes.Length() - 1];
-    // }
-
     void Compile();
-    void Execute();
+    void Execute(CommandBuffer *cmd);
 };
 
 extern RenderGraph *renderGraph_;

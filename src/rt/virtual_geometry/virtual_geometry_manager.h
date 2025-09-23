@@ -330,26 +330,33 @@ struct VirtualGeometryManager
     VkPipeline assignInstancesPipeline        = {};
 
     ResourceHandle evictedPagesBuffer;
-    ResourceHandle hierarchyNodeBuffer;
-    ResourceHandle clusterPageDataBuffer;
+    GPUBuffer hierarchyNodeBuffer;
+    ResourceHandle hierarchyNodeBufferHandle;
+    GPUBuffer clusterPageDataBuffer;
+    ResourceHandle clusterPageDataBufferHandle;
 
     ResourceHandle clusterFixupBuffer;
     ResourceHandle voxelPageDecodeBuffer;
 
-    ResourceHandle pageUploadBuffer;
-    ResourceHandle fixupBuffer;
-    ResourceHandle voxelTransferBuffer;
+    GPUBuffer pageUploadBuffer;
+    GPUBuffer fixupBuffer;
+    GPUBuffer voxelTransferBuffer;
 
     // ResourceHandle uploadBuffer;
     ResourceHandle streamingRequestsBuffer;
-    ResourceHandle readbackBuffer;
+    GPUBuffer readbackBuffer;
+    ResourceHandle readbackBufferHandle;
 
     ResourceHandle visibleClustersBuffer;
     ResourceHandle queueBuffer;
-    ResourceHandle workItemQueueBuffer;
 
-    ResourceHandle clusterAccelAddresses;
-    ResourceHandle clusterAccelSizes;
+    ResourceHandle candidateNodeBuffer;
+    ResourceHandle candidateClusterBuffer;
+
+    GPUBuffer clusterAccelAddresses;
+    ResourceHandle clusterAccelAddressesHandle;
+    GPUBuffer clusterAccelSizes;
+    ResourceHandle clusterAccelSizesHandle;
 
     ResourceHandle indexBuffer;
     ResourceHandle vertexBuffer;
@@ -357,18 +364,22 @@ struct VirtualGeometryManager
 
     ResourceHandle decodeClusterDataBuffer;
     ResourceHandle buildClusterTriangleInfoBuffer;
-    ResourceHandle clasPageInfoBuffer;
+    GPUBuffer clasPageInfoBuffer;
+    ResourceHandle clasPageInfoBufferHandle;
 
     ResourceHandle clasScratchBuffer;
     GPUBuffer clasImplicitData;
     ResourceHandle clasImplicitDataHandle;
 
+    ResourceHandle moveScratchBuffer;
     ResourceHandle moveDescriptors;
     ResourceHandle moveDstAddresses;
     ResourceHandle moveDstSizes;
 
-    ResourceHandle clasBlasImplicitBuffer;
+    GPUBuffer clasBlasImplicitBuffer;
+    ResourceHandle clasBlasImplicitHandle;
 
+    ResourceHandle blasScratchBuffer;
     ResourceHandle blasDataBuffer;
     ResourceHandle buildClusterBottomLevelInfoBuffer;
     ResourceHandle blasClasAddressBuffer;
@@ -383,13 +394,15 @@ struct VirtualGeometryManager
     // ResourceHandle instanceIDFreeListBuffer;
     ResourceHandle debugBuffer;
 
-    ResourceHandle resourceBuffer;
+    GPUBuffer resourceBuffer;
+    ResourceHandle resourceBufferHandle;
     ResourceHandle resourceBitVector;
 
     // ResourceHandle ptlasInstanceBitVectorBuffer;
     // ResourceHandle ptlasInstanceFrameBitVectorBuffer0;
     // ResourceHandle ptlasInstanceFrameBitVectorBuffer1;
-    ResourceHandle resourceSharingInfosBuffer;
+    GPUBuffer resourceSharingInfosBuffer;
+    ResourceHandle resourceSharingInfosBufferHandle;
     ResourceHandle maxMinLodLevelBuffer;
 
     ResourceHandle voxelAABBBuffer;
@@ -398,26 +411,32 @@ struct VirtualGeometryManager
     ResourceHandle voxelCompactedBlasBuffer;
     // ResourceHandle clusterLookupTableBuffer;
 
-    ResourceHandle tlasAccelBuffer;
+    GPUBuffer tlasAccelBuffer;
+    ResourceHandle tlasAccelHandle;
+    ResourceHandle tlasScratchHandle;
 
-    ResourceHandle accelScratchBuffer;
-    ResourceHandle blasProxyScratchBuffer;
-    u32 accelScratchBufferSize;
+    GPUBuffer blasProxyScratchBuffer;
 
-    ResourceHandle resourceAABBBuffer;
-    ResourceHandle resourceTruncatedEllipsoidsBuffer;
-    ResourceHandle partitionInfosBuffer;
-    ResourceHandle partitionReadbackBuffer;
-    ResourceHandle instanceTransformsBuffer;
-    ResourceHandle partitionCountsBuffer;
-    ResourceHandle mergedPartitionDeviceAddresses;
+    GPUBuffer resourceAABBBuffer;
+    ResourceHandle resourceAABBBufferHandle;
+    GPUBuffer resourceTruncatedEllipsoidsBuffer;
+    ResourceHandle resourceTruncatedEllipsoidsBufferHandle;
+    GPUBuffer partitionInfosBuffer;
+    ResourceHandle partitionInfosBufferHandle;
+    // ResourceHandle partitionReadbackBuffer;
+    GPUBuffer instanceTransformsBuffer;
+    ResourceHandle instanceTransformsBufferHandle;
+    // ResourceHandle partitionCountsBuffer;
+
+    GPUBuffer mergedPartitionDeviceAddresses;
+    ResourceHandle mergedPartitionDeviceAddressesHandle;
     GPUBuffer instancesBuffer;
     ResourceHandle instancesBufferHandle;
     BitVector partitionStreamedIn;
     Graph<Instance> partitionInstanceGraph;
     StaticArray<u32> allocatedPartitionIndices;
 
-    ResourceHandle mergedInstancesAABBBuffer;
+    GPUBuffer mergedInstancesAABBBuffer;
 
     u32 numStreamedInstances;
     ResourceHandle instanceUploadBuffer;
@@ -463,8 +482,8 @@ struct VirtualGeometryManager
     void ProcessRequests(CommandBuffer *cmd, bool test);
     u32 AddNewMesh(Arena *arena, CommandBuffer *cmd, string filename);
     void FinalizeResources(CommandBuffer *cmd);
-    void PrepareInstances(CommandBuffer *cmd, ResourceHandle *sceneBuffer, bool ptlas);
-    void HierarchyTraversal(CommandBuffer *cmd, ResourceHandle *gpuSceneBuffer);
+    void PrepareInstances(CommandBuffer *cmd, ResourceHandle sceneBuffer, bool ptlas);
+    void HierarchyTraversal(CommandBuffer *cmd, ResourceHandle gpuSceneBuffer);
     void BuildClusterBLAS(CommandBuffer *cmd);
     void AllocateInstances(StaticArray<GPUInstance> &gpuInstances);
     void BuildPTLAS(CommandBuffer *cmd);

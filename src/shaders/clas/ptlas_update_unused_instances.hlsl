@@ -2,8 +2,7 @@
 
 RWStructuredBuffer<GPUInstance> gpuInstances : register(u0);
 RWStructuredBuffer<uint> globals : register(u1);
-RWStructuredBuffer<PTLAS_UPDATE_INSTANCE_INFO> ptlasInstanceUpdateInfos : register(u2);
-RWStructuredBuffer<PTLAS_WRITE_INSTANCE_INFO> ptlasWriteInstanceInfos : register(u3);
+RWStructuredBuffer<PTLAS_WRITE_INSTANCE_INFO> ptlasWriteInstanceInfos : register(u2);
 
 [numthreads(64, 1, 1)]
 void main(uint dtID : SV_DispatchThreadID)

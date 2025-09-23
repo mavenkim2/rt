@@ -819,6 +819,11 @@ struct CommandBuffer
                           u32 maxTotalClusterCount,
                           u32 maxClusterCountPerAccelerationStructure,
                           u32 maxAccelerationStructureCount);
+    void ComputeBLASSizes(u64 srcInfosArray, u32 srcInfosArraySize, u64 scratchBuffer,
+                          u64 dstSizes, u32 dstSizesSize, u64 srcInfosCount,
+                          u32 maxTotalClusterCount,
+                          u32 maxClusterCountPerAccelerationStructure,
+                          u32 maxAccelerationStructureCount);
     void ComputeCLASTemplateSizes(GPUBuffer *srcInfosArray, GPUBuffer *scratchBuffer,
                                   GPUBuffer *dstSizes, GPUBuffer *srcInfosCount,
                                   u32 srcInfosOffset, u32 maxNumTriangles, u32 maxNumVertices,
@@ -829,19 +834,35 @@ struct CommandBuffer
                    GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
                    int maxNumClusters, u32 maxNumTriangles, u32 maxNumVertices,
                    u32 dstClasOffset = 0);
+    void BuildCLAS(CLASOpMode opMode, u64 dstImplicitData, u64 scratchBuffer,
+                   u64 srcInfosArray, u32 srcInfosArraySize, u64 dstAddressesArray,
+                   u32 dstAddressesSize, u64 dstSizes, u32 dstSizesSize, u64 srcInfosCount,
+                   u32 maxNumTriangles, u32 maxNumVertices, u32 maxNumClusters);
     void MoveCLAS(CLASOpMode opMode, GPUBuffer *dstImplicitData, GPUBuffer *scratchBuffer,
                   GPUBuffer *dstAddresses, GPUBuffer *dstSizes, GPUBuffer *srcInfosArray,
                   GPUBuffer *srcInfosCount, u32 srcInfosOffset, int maxNumClusters,
                   u64 maxMovedBytes, bool noMoveOverlap, u32 dstClasOffset = 0);
+    void MoveCLAS(CLASOpMode opMode, u64 dstImplicitData, u64 scratchBuffer, u64 srcInfosArray,
+                  u32 srcInfosArraySize, u64 dstAddressesArray, u32 dstAddressesSize,
+                  u32 dstSizes, u32 dstSizesSize, u64 srcInfosCount, int maxNumClusters,
+                  u64 maxMovedBytes, bool noMoveOverlap);
     void BuildPTLAS(GPUBuffer *ptlasBuffer, GPUBuffer *scratchBuffer, GPUBuffer *srcInfos,
                     GPUBuffer *srcInfosCount, u32 srcInfosOffset, u32 instanceCount,
                     u32 maxInstancesPerPartition, u32 partitionCount,
+                    u32 maxInstanceInGlobalPartitionCount);
+    void BuildPTLAS(u64 ptlasBuffer, u64 scratchBuffer, u64 srcInfosBuffer, u64 srcInfosCount,
+                    u32 instanceCount, u32 maxInstancesPerPartition, u32 partitionCount,
                     u32 maxInstanceInGlobalPartitionCount);
     void BuildClusterBLAS(CLASOpMode opMode, GPUBuffer *implicitBuffer,
                           GPUBuffer *scratchBuffer, GPUBuffer *bottomLevelInfo,
                           GPUBuffer *dstAddresses, GPUBuffer *dstSizes,
                           GPUBuffer *srcInfosCount, u32 srcInfosOffset,
                           u32 maxClusterCountPerAccelerationStructure,
+                          u32 maxTotalClusterCount, u32 maxAccelerationStructureCount);
+    void BuildClusterBLAS(CLASOpMode opMode, u64 dstImplicitData, u64 scratchBuffer,
+                          u64 srcInfosArray, u32 srcInfosArraySize, u64 dstAddressesArray,
+                          u32 dstAddressesSize, u64 dstSizes, u32 dstSizesSize,
+                          u64 srcInfosCount, u32 maxClusterCountPerAccelerationStructure,
                           u32 maxTotalClusterCount, u32 maxAccelerationStructureCount);
     void BuildCLASTemplates(CLASOpMode opMode, GPUBuffer *dstImplicitData,
                             GPUBuffer *scratchBuffer, GPUBuffer *dstAddresses,
@@ -867,7 +888,7 @@ struct CommandBuffer
                                          u32 maxInstances);
     GPUAccelerationStructurePayload BuildCustomBLAS(GPUBuffer *aabbsBuffer, u32 numAabbs);
     void BuildCustomBLAS(StaticArray<AccelBuildInfo> &blasBuildInfos);
-    void ClearBuffer(GPUBuffer *b, u32 val = 0);
+    void ClearBuffer(GPUBuffer *b, u32 val = 0, u32 dstOffset = 0, u32 dstSize = VK_WHOLE_SIZE);
     void ClearImage(GPUImage *image, u32 value, u32 baseMip = 0,
                     u32 numMips = VK_REMAINING_MIP_LEVELS, u32 baseLayer = 0,
                     u32 numLayers = VK_REMAINING_ARRAY_LAYERS);

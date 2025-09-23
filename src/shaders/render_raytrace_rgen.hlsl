@@ -37,13 +37,13 @@ ConstantBuffer<ShaderDebugInfo> debugInfo: register(b7);
 //RWStructuredBuffer<uint> feedbackBuffer : register(u12);
 //StructuredBuffer<uint> clusterLookupTable : register(t13);
 StructuredBuffer<GPUInstance> gpuInstances : register(t14);
-RWStructuredBuffer<uint> proxyCounts : register(u15);
+//RWStructuredBuffer<uint> proxyCounts : register(u15);
 StructuredBuffer<GPUTruncatedEllipsoid> truncatedEllipsoids : register(t16);
 StructuredBuffer<GPUTransform> instanceTransforms : register(t17);
 StructuredBuffer<PartitionInfo> partitionInfos : register(t18);
 
-RWStructuredBuffer<float2> debugBuffer : register(u19);
-RWStructuredBuffer<uint> globals : register(u20);
+//RWStructuredBuffer<float2> debugBuffer : register(u19);
+//RWStructuredBuffer<uint> globals : register(u20);
 
 RWTexture2D<float> depthBuffer : register(u21);
 RWTexture2D<float4> normalRougnessBuffer : register(u22);

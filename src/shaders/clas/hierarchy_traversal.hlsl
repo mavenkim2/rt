@@ -309,7 +309,6 @@ void TraverseHierarchy(uint dtID)
             workItem = WaveReadLaneAt(workItem, waveIndex & ~(CHILDREN_PER_HIERARCHY_NODE - 1));
 
             processed = false;
-            // TODO: ?
             bool isValid = (workItem.x != ~0u && workItem.y != ~0u && workItem.z != ~0u) && nodeReadOffset < queue[0].nodeWriteOffset;
             
             if (isValid)

@@ -28,7 +28,7 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
       meshInfos(arena, maxInstances), numInstances(0), numAllocatedPartitions(0),
       virtualInstanceOffset(0), voxelAddressOffset(0), clusterLookupTableOffset(0),
       currentClusterTotal(0), currentTriangleClusterTotal(0), totalNumVirtualPages(0),
-      totalNumNodes(0), lruHead(-1), lruTail(-1), accelScratchBufferSize(0)
+      totalNumNodes(0), lruHead(-1), lruTail(-1)
 {
     for (u32 i = 0; i < maxVirtualPages; i++)
     {
@@ -337,7 +337,7 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
                                       &computeBlasAddressesPush, "compute blas addresses");
 
     // ptlas write instances
-    for (int i = 0; i <= 9; i++)
+    for (int i = 0; i <= 8; i++)
     {
         ptlasWriteInstancesLayout.AddBinding(i, DescriptorType::StorageBuffer,
                                              VK_SHADER_STAGE_COMPUTE_BIT);
@@ -346,7 +346,7 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
         &ptlasWriteInstancesShader, &ptlasWriteInstancesLayout, 0, "ptlas write instances");
 
     // ptlas update unused instances
-    for (int i = 0; i <= 3; i++)
+    for (int i = 0; i <= 2; i++)
     {
         ptlasUpdateUnusedInstancesLayout.AddBinding(i, DescriptorType::StorageBuffer,
                                                     VK_SHADER_STAGE_COMPUTE_BIT);
@@ -431,7 +431,7 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
 
     instanceCullingLayout.AddBinding(0, DescriptorType::UniformBuffer,
                                      VK_SHADER_STAGE_COMPUTE_BIT);
-    for (int i = 1; i <= 12; i++)
+    for (int i = 1; i <= 11; i++)
     {
         instanceCullingLayout.AddBinding(i, DescriptorType::StorageBuffer,
                                          VK_SHADER_STAGE_COMPUTE_BIT);
@@ -467,9 +467,11 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
     streamingRequestsBuffer = rg->CreateBufferResource(
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
         sizeof(StreamingRequest) * maxStreamingRequestsPerFrame);
-    readbackBuffer = rg->CreateBufferResource(
+    readbackBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        sizeof(StreamingRequest) * maxStreamingRequestsPerFrame, ResourceFlags::External);
+        sizeof(StreamingRequest) * maxStreamingRequestsPerFrame);
+    readbackBufferHandle = rg->RegisterExternalResource(&readbackBuffer);
+
     pageUploadBuffer      = {};
     fixupBuffer           = {};
     voxelTransferBuffer   = {};
@@ -483,26 +485,31 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
                                                       VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                                   sizeof(u32) * maxPageInstallsPerFrame);
 
-    clusterPageDataBuffer = rg->CreateBufferResource(
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        maxPages * CLUSTER_PAGE_SIZE, ResourceFlags::External);
-    hierarchyNodeBuffer = rg->CreateBufferResource(
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        maxNodes * sizeof(PackedHierarchyNode), ResourceFlags::External);
-    clusterFixupBuffer = rg->CreateBufferResource(
+    clusterPageDataBuffer       = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                           VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                       maxPages * CLUSTER_PAGE_SIZE);
+    clusterPageDataBufferHandle = rg->RegisterExternalResource(&clusterPageDataBuffer);
+    hierarchyNodeBuffer         = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                           VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                                           VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                                       maxNodes * sizeof(PackedHierarchyNode));
+    hierarchyNodeBufferHandle   = rg->RegisterExternalResource(&hierarchyNodeBuffer);
+    clusterFixupBuffer          = rg->CreateBufferResource(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         maxClusterFixupsPerFrame * sizeof(GPUClusterFixup));
 
-    clusterAccelAddresses = rg->CreateBufferResource(
+    clusterAccelAddresses = device->CreateBuffer(
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        sizeof(u64) * (maxPages * MAX_CLUSTERS_PER_PAGE), ResourceFlags::External);
-    clusterAccelSizes = rg->CreateBufferResource(
+        sizeof(u64) * (maxPages * MAX_CLUSTERS_PER_PAGE));
+
+    clusterAccelAddressesHandle = rg->RegisterExternalResource(&clusterAccelAddresses);
+    clusterAccelSizes           = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        sizeof(u32) * (maxPages * MAX_CLUSTERS_PER_PAGE), ResourceFlags::External);
+        sizeof(u32) * (maxPages * MAX_CLUSTERS_PER_PAGE));
+    clusterAccelSizesHandle = rg->RegisterExternalResource(&clusterAccelAddresses);
 
     indexBuffer = rg->CreateBufferResource(
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
@@ -538,8 +545,12 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
                                  VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
                              expectedSize);
     clasImplicitDataHandle = rg->RegisterExternalResource(&clasImplicitData);
-
-    accelScratchBufferSize = Max(accelScratchBufferSize, clasScratchSize);
+    clasScratchBuffer      = rg->CreateBufferResource(
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        clasScratchSize);
 
     // VkAccelerationStructureGeometryKHR geometry;
     // geometry.geometryType   = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
@@ -557,22 +568,33 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
                               clasImplicitData.size, false, moveScratchSize,
                               moveStructureSize);
 
-    accelScratchBufferSize = Max(accelScratchBufferSize, moveScratchSize);
+    moveScratchBuffer = rg->CreateBufferResource(
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        moveScratchSize);
 
     u32 clasBlasScratchSize, clasBlasAccelSize;
     // maxWriteClusters = 200000;
     device->GetClusterBLASBuildSizes(CLASOpMode::ExplicitDestinations, maxTotalClusterCount,
                                      maxClusterCountPerAccelerationStructure, maxInstances,
                                      clasBlasScratchSize, clasBlasAccelSize);
-    accelScratchBufferSize = Max(accelScratchBufferSize, clasBlasScratchSize);
 
     u32 blasSize = megabytes(512); // clasBlasAccelSize * maxInstances;
 
-    clasBlasImplicitBuffer = rg->CreateBufferResource(
+    clasBlasImplicitBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
-        blasSize, ResourceFlags::External);
+        blasSize);
+    clasBlasImplicitHandle = rg->RegisterExternalResource(&clasBlasImplicitBuffer);
+    blasScratchBuffer      = rg->CreateBufferResource(
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        clasBlasScratchSize);
 
     blasDataBuffer = rg->CreateBufferResource(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                                   VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -606,8 +628,6 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
 
     instanceUploadBuffer = {};
     resourceBitVector    = rg->CreateBufferResource(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1024);
-    resourceBuffer       = rg->CreateBufferResource(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1024,
-                                                    ResourceFlags::External);
 
     ptlasIndirectCommandBuffer = rg->CreateBufferResource(
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
@@ -656,9 +676,10 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
         sizeof(BUILD_CLUSTERS_TRIANGLE_INFO) * maxNumClusters);
-    clasPageInfoBuffer = rg->CreateBufferResource(
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        sizeof(CLASPageInfo) * maxPages, ResourceFlags::External);
+    clasPageInfoBuffer       = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                                    sizeof(CLASPageInfo) * maxPages);
+    clasPageInfoBufferHandle = rg->RegisterExternalResource(&clasPageInfoBuffer);
 
     moveDescriptors = rg->CreateBufferResource(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
@@ -690,10 +711,13 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena)
     queueBuffer = rg->CreateBufferResource(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, sizeof(Queue));
 
-    // TODO: don't do hierarchy traversal when there's only 1 node
-    workItemQueueBuffer = rg->CreateBufferResource(
+    candidateNodeBuffer = rg->CreateBufferResource(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                       VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                                   sizeof(Vec4u) * (MAX_CANDIDATE_NODES));
+
+    candidateClusterBuffer = rg->CreateBufferResource(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        sizeof(Vec4u) * (MAX_CANDIDATE_NODES + MAX_CANDIDATE_CLUSTERS));
+        sizeof(Vec4u) * (MAX_CANDIDATE_CLUSTERS));
 
     AABB aabb;
     aabb.minX = -1;
@@ -1061,28 +1085,39 @@ void VirtualGeometryManager::FinalizeResources(CommandBuffer *cmd)
         ellipsoid.boundsMax = meshInfo.ellipsoid.boundsMax;
         truncatedEllipsoids.Push(ellipsoid);
     }
+
+    RenderGraph *rg      = GetRenderGraph();
+    resourceBuffer       = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                                sizeof(Resource) * meshInfos.Length());
+    resourceBufferHandle = rg->RegisterExternalResource(&resourceBuffer);
     cmd->SubmitBuffer(&resourceBuffer, resources.data, sizeof(Resource) * meshInfos.Length());
 
-    resourceAABBBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                  VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                              sizeof(AABB) * resourceAABBs.Length());
+    resourceAABBBuffer       = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                    sizeof(AABB) * resourceAABBs.Length());
+    resourceAABBBufferHandle = rg->RegisterExternalResource(&resourceAABBBuffer);
     cmd->SubmitBuffer(&resourceAABBBuffer, resourceAABBs.data,
                       sizeof(AABB) * resourceAABBs.Length());
 
     resourceTruncatedEllipsoidsBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         sizeof(TruncatedEllipsoid) * truncatedEllipsoids.Length());
+    resourceTruncatedEllipsoidsBufferHandle =
+        rg->RegisterExternalResource(&resourceTruncatedEllipsoidsBuffer);
     cmd->SubmitBuffer(&resourceTruncatedEllipsoidsBuffer, truncatedEllipsoids.data,
                       sizeof(TruncatedEllipsoid) * truncatedEllipsoids.Length());
 
     resourceSharingInfosBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         sizeof(ResourceSharingInfo) * resourceSharingInfos.Length());
+    resourceSharingInfosBufferHandle =
+        rg->RegisterExternalResource(&resourceSharingInfosBuffer);
     cmd->SubmitBuffer(&resourceSharingInfosBuffer, resourceSharingInfos.data,
                       sizeof(ResourceSharingInfo) * resourceSharingInfos.Length());
-    maxMinLodLevelBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                                sizeof(u32) * meshInfos.Length());
+
+    maxMinLodLevelBuffer = rg->CreateBufferResource(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                                    sizeof(u32) * meshInfos.Length());
 }
 
 void VirtualGeometryManager::RecursePageDependencies(StaticArray<VirtualPageHandle> &pages,
@@ -1403,6 +1438,7 @@ bool VirtualGeometryManager::ProcessInstanceRequests(CommandBuffer *cmd)
 
 void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd, bool test)
 {
+    RenderGraph *rg            = GetRenderGraph();
     StreamingRequest *requests = (StreamingRequest *)readbackBuffer.mappedPtr;
     u32 numRequests            = requests[0].pageIndex_numPages;
     numRequests                = Min(numRequests, maxStreamingRequestsPerFrame - 1u);
@@ -1716,6 +1752,8 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd, bool test)
     Array<Vec2u> voxelAddressTableOffsets(scratch.temp.arena, pagesToInstall);
     Array<Vec2u> clusterLookupTableCopies(scratch.temp.arena,
                                           pageIndices.Length() * MAX_CLUSTERS_PER_PAGE);
+
+#if 0
     for (u32 resourceIndex : updatedResourceIndices)
     {
         MeshInfo &meshInfo = meshInfos[resourceIndex];
@@ -1783,6 +1821,7 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd, bool test)
             }
         }
     }
+#endif
 
     for (VirtualPageHandle installRequest : installRequests)
     {
@@ -1806,28 +1845,51 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd, bool test)
         {
             device->DestroyBuffer(&fixupBuffer);
         }
-        Assert(totalSize);
         fixupBuffer = device->CreateBuffer(VK_BUFFER_USAGE_2_TRANSFER_SRC_BIT, totalSize,
                                            MemoryUsage::CPU_TO_GPU);
+        Assert(totalSize);
 
         u32 offset = hierarchyFixupSize;
         MemoryCopy(fixupBuffer.mappedPtr, hierarchyFixupData.data, hierarchyFixupSize);
 
-        cmd->CopyBuffer(&clusterPageDataBuffer, &pageUploadBuffer, pageInstallCopies.data,
-                        pageInstallCopies.Length());
-        cmd->CopyBuffer(&hierarchyNodeBuffer, &fixupBuffer, nodeInstallCopies.data,
-                        nodeInstallCopies.Length());
+        u32 numPageInstallCopies = pageInstallCopies.Length();
+        BufferToBufferCopy *pageCopies =
+            rg->Allocate(pageInstallCopies.data, numPageInstallCopies);
+        u32 numNodeInstallCopies = nodeInstallCopies.Length();
+        BufferToBufferCopy *nodeCopies =
+            rg->Allocate(nodeInstallCopies.data, numNodeInstallCopies);
+        rg->StartPass(2,
+                      [&clusterPageDataBuffer = this->clusterPageDataBuffer,
+                       &hierarchyNodeBuffer   = this->hierarchyNodeBuffer,
+                       &pageUploadBuffer      = this->pageUploadBuffer,
+                       &fixupBuffer           = this->fixupBuffer, pageCopies, nodeCopies,
+                       numPageInstallCopies, numNodeInstallCopies](CommandBuffer *cmd) {
+                          cmd->CopyBuffer(&clusterPageDataBuffer, &pageUploadBuffer,
+                                          pageCopies, numPageInstallCopies);
+                          cmd->CopyBuffer(&hierarchyNodeBuffer, &fixupBuffer, nodeCopies,
+                                          numNodeInstallCopies);
+                      })
+            .AddHandle(clusterPageDataBufferHandle, ResourceUsageType::Write)
+            .AddHandle(hierarchyNodeBufferHandle, ResourceUsageType::Write);
 
-        BufferToBufferCopy pageInstallCopy;
-        pageInstallCopy.srcOffset = offset;
-        pageInstallCopy.dstOffset = 0;
-        pageInstallCopy.size      = pageInstallSize;
-        MemoryCopy((u8 *)fixupBuffer.mappedPtr + pageInstallCopy.srcOffset, pageIndices.data,
-                   pageInstallSize);
+        MemoryCopy((u8 *)fixupBuffer.mappedPtr + offset, pageIndices.data, pageInstallSize);
 
-        offset += pageInstallCopy.size;
+        rg->StartPass(1, [rg, &fixupBuffer = this->fixupBuffer,
+                          &evictedPagesBufferHandle = this->evictedPagesBuffer, offset,
+                          pageInstallSize](CommandBuffer *cmd) {
+              u32 dstOffset;
+              GPUBuffer *evictedPagesBuffer =
+                  rg->GetBuffer(evictedPagesBufferHandle, dstOffset);
 
-        cmd->CopyBuffer(&evictedPagesBuffer, &fixupBuffer, &pageInstallCopy, 1);
+              BufferToBufferCopy pageInstallCopy;
+              pageInstallCopy.srcOffset = offset;
+              pageInstallCopy.dstOffset = dstOffset;
+              pageInstallCopy.size      = pageInstallSize;
+
+              cmd->CopyBuffer(evictedPagesBuffer, &fixupBuffer, &pageInstallCopy, 1);
+          }).AddHandle(evictedPagesBuffer, ResourceUsageType::Write);
+
+        offset += pageInstallSize;
 
         // TODO: this still triggers
         Assert(gpuClusterFixup.Length() <= maxClusterFixupsPerFrame);
@@ -1835,33 +1897,42 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd, bool test)
         // Cluster fixups
         if (gpuClusterFixup.Length())
         {
-            BufferToBufferCopy clusterFixupsCopy;
-            clusterFixupsCopy.srcOffset = offset;
-            clusterFixupsCopy.dstOffset = 0;
-            clusterFixupsCopy.size      = gpuClusterFixupSize;
-            MemoryCopy((u8 *)fixupBuffer.mappedPtr + clusterFixupsCopy.srcOffset,
-                       gpuClusterFixup.data, clusterFixupsCopy.size);
-            cmd->CopyBuffer(&clusterFixupBuffer, &fixupBuffer, &clusterFixupsCopy, 1);
-            cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                         VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-            offset += clusterFixupsCopy.size;
+            MemoryCopy((u8 *)fixupBuffer.mappedPtr + offset, gpuClusterFixup.data,
+                       gpuClusterFixupSize);
+            rg->StartPass(1, [&clusterFixupBufferHandle = this->clusterFixupBuffer,
+                              &fixupBuffer              = this->fixupBuffer, offset,
+                              gpuClusterFixupSize](CommandBuffer *cmd) {
+                u32 dstOffset;
+                GPUBuffer *clusterFixupBuffer =
+                    GetRenderGraph()->GetBuffer(clusterFixupBufferHandle, dstOffset);
+
+                BufferToBufferCopy clusterFixupsCopy;
+                clusterFixupsCopy.srcOffset = offset;
+                clusterFixupsCopy.dstOffset = dstOffset;
+                clusterFixupsCopy.size      = gpuClusterFixupSize;
+                cmd->CopyBuffer(clusterFixupBuffer, &fixupBuffer, &clusterFixupsCopy, 1);
+            });
+            offset += gpuClusterFixupSize;
         }
 
-        cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-        cmd->FlushBarriers();
+        rg->StartPass(0, [](CommandBuffer *cmd) {
+            cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                         VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+            cmd->FlushBarriers();
+        });
 
-        device->BeginEvent(cmd, "Cluster Fixups");
         NumPushConstant pc;
-        pc.num = gpuClusterFixup.Length();
-        cmd->StartBindingCompute(clusterFixupPipeline, &clusterFixupLayout)
-            .Bind(&clusterFixupBuffer)
-            .Bind(&clusterPageDataBuffer)
-            .PushConstants(&clusterFixupPush, &pc)
-            .End();
-        cmd->Dispatch((gpuClusterFixup.Length() + 31) >> 5, 1, 1);
-        device->EndEvent(cmd);
+        pc.num        = gpuClusterFixup.Length();
+        u32 numFixups = gpuClusterFixup.Length();
+        rg->StartComputePass(
+            clusterFixupPipeline, clusterFixupLayout, 2,
+            [numFixups](CommandBuffer *cmd) {
+                device->BeginEvent(cmd, "Cluster Fixups");
+                cmd->Dispatch((numFixups + 31) >> 5, 1, 1);
+                device->EndEvent(cmd);
+            },
+            &clusterFixupPush, &pc);
     }
 
     for (int requestIndex = 0; requestIndex < pagesToInstall; requestIndex++)
@@ -1902,7 +1973,9 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd, bool test)
     u32 newClasOffset = currentTriangleClusterTotal;
     currentTriangleClusterTotal += triangleClustersToAdd;
 
+#if 0
     int buildIndex = TIMED_CPU_RANGE_BEGIN();
+
     StaticArray<AccelBuildInfo> staticBuildInfos(buildInfos.data, buildInfos.Length());
     if (numAABBs)
     {
@@ -2057,6 +2130,7 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd, bool test)
         cmd->FlushBarriers();
     }
     TIMED_RANGE_END(buildIndex);
+#endif
 
     u32 numEvictedPages = pageIndices.Length() - evictedPageStart;
 
@@ -2064,7 +2138,6 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd, bool test)
 
     if (pageIndices.Length() == 0) return;
 
-    RenderGraph *rg = GetRenderGraph();
     // Prepare move descriptors
     {
         DefragPushConstant pc;
@@ -2090,14 +2163,14 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd, bool test)
                   device->EndEvent(cmd);
               },
               &clasDefragPush, &pc)
-            .AddHandle(evictedPagesBuffer_, ResourceUsageType::Read)
-            .AddHandle(&clasPageInfoBuffer_, ResourceUsageType::RW)
-            .AddHandle(&clusterAccelAddresses_, ResourceUsageType::Read)
-            .AddHandle(&clusterAccelSizes_, ResourceUsageType::Read)
-            .AddHandle(&clasGlobalsBuffer_, ResourceUsageType::Write)
-            .AddHandle(&moveDescriptors_, ResourceUsageType::Write)
-            .AddHandle(&moveDstAddresses_, ResourceUsageType::Write)
-            .AddHandle(&moveDstSizes_, ResourceUsageType::Write);
+            .AddHandle(evictedPagesBuffer, ResourceUsageType::Read)
+            .AddHandle(clasPageInfoBufferHandle, ResourceUsageType::RW)
+            .AddHandle(clusterAccelAddressesHandle, ResourceUsageType::Read)
+            .AddHandle(clusterAccelSizesHandle, ResourceUsageType::Read)
+            .AddHandle(clasGlobalsBuffer, ResourceUsageType::Write)
+            .AddHandle(moveDescriptors, ResourceUsageType::Write)
+            .AddHandle(moveDstAddresses, ResourceUsageType::Write)
+            .AddHandle(moveDstSizes, ResourceUsageType::Write);
     }
 
     if (numEvictedPages)
@@ -2105,69 +2178,155 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd, bool test)
         Assert(0);
         Print("Evicting %u pages\n", numEvictedPages);
 
-        device->BeginEvent(cmd, "Defrag Clas");
-        cmd->MoveCLAS(CLASOpMode::ExplicitDestinations, NULL, &accelScratchBuffer,
-                      &moveDstAddresses, &moveDstSizes, &moveDescriptors, &clasGlobalsBuffer,
-                      sizeof(u32) * GLOBALS_DEFRAG_CLAS_COUNT, maxWriteClusters,
-                      clasImplicitData.size, false);
-        device->EndEvent(cmd);
+        u32 maxMovedBytes = clasImplicitData.size;
+        rg->StartPass(
+              6,
+              [moveDescriptors   = this->moveDescriptors,
+               moveScratchBuffer = this->moveScratchBuffer,
+               moveDstAddresses = this->moveDstAddresses, moveDstSizes = this->moveDstSizes,
+               maxPages = this->maxPages, clasGlobalsBuffer = this->clasGlobalsBuffer,
+               maxWriteClusters = this->maxWriteClusters, maxMovedBytes](CommandBuffer *cmd) {
+                  RenderGraph *rg = GetRenderGraph();
+                  u32 moveInfoOffset, moveInfoSize, scratchBufferOffset, srcInfosCountOffset;
+                  GPUBuffer *moveInfo =
+                      rg->GetBuffer(moveDescriptors, moveInfoOffset, moveInfoSize);
+                  u64 moveInfoAddress = device->GetDeviceAddress(moveInfo) + moveInfoOffset;
 
-        device->BeginEvent(cmd, "Write CLAS Defrag Addresses");
+                  GPUBuffer *scratchBuffer =
+                      rg->GetBuffer(moveScratchBuffer, scratchBufferOffset);
+                  u64 scratchBufferAddress =
+                      device->GetDeviceAddress(scratchBuffer) + scratchBufferOffset;
 
-        cmd->StartBindingCompute(writeClasDefragPipeline, &writeClasDefragLayout)
-            .Bind(&clasPageInfoBuffer)
-            .Bind(&moveDstAddresses)
-            .Bind(&moveDstSizes)
-            .Bind(&clusterAccelAddresses)
-            .Bind(&clusterAccelSizes)
-            .End();
+                  u32 moveAddressesOffset, moveSizesOffset;
+                  GPUBuffer *moveAddresses =
+                      rg->GetBuffer(moveDstAddresses, moveAddressesOffset);
+                  u64 dstAddressesAddress =
+                      device->GetDeviceAddress(moveAddresses) + moveAddressesOffset;
+                  u32 dstAddressesSize = sizeof(u64) * (maxPages * MAX_CLUSTERS_PER_PAGE);
 
-        cmd->Dispatch(pagesToUpdate, 1, 1);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                     VK_ACCESS_2_SHADER_READ_BIT);
-        cmd->FlushBarriers();
-        device->EndEvent(cmd);
+                  GPUBuffer *moveSizes = rg->GetBuffer(moveDstSizes, moveSizesOffset);
+                  u64 dstSizesAddress  = device->GetDeviceAddress(moveSizes);
+                  u32 dstSizesSize     = sizeof(u32) * (maxPages * MAX_CLUSTERS_PER_PAGE);
+
+                  GPUBuffer *srcInfosCount =
+                      rg->GetBuffer(clasGlobalsBuffer, srcInfosCountOffset);
+                  u64 srcInfosCountAddress = device->GetDeviceAddress(srcInfosCount) +
+                                             srcInfosCountOffset +
+                                             sizeof(u32) * GLOBALS_DEFRAG_CLAS_COUNT;
+
+                  device->BeginEvent(cmd, "Defrag Clas");
+                  cmd->MoveCLAS(CLASOpMode::ExplicitDestinations, 0, scratchBufferAddress,
+                                moveInfoAddress, moveInfoSize, dstAddressesAddress,
+                                dstAddressesSize, dstSizesAddress, dstSizesSize,
+                                srcInfosCountAddress, maxWriteClusters, maxMovedBytes, false);
+                  device->EndEvent(cmd);
+              })
+            .AddHandle(moveScratchBuffer, ResourceUsageType::RW)
+            .AddHandle(moveDstAddresses, ResourceUsageType::Read)
+            .AddHandle(moveDstSizes, ResourceUsageType::Read)
+            .AddHandle(moveDescriptors, ResourceUsageType::Read)
+            .AddHandle(clasGlobalsBuffer, ResourceUsageType::Read)
+            .AddHandle(clasImplicitDataHandle, ResourceUsageType::RW);
+
+        rg->StartComputePass(writeClasDefragPipeline, writeClasDefragLayout, 5,
+                             [pagesToUpdate](CommandBuffer *cmd) {
+                                 device->BeginEvent(cmd, "Write CLAS Defrag Addresses");
+
+                                 cmd->Dispatch(pagesToUpdate, 1, 1);
+                                 cmd->Barrier(
+                                     VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                     VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                                     VK_ACCESS_2_SHADER_READ_BIT);
+                                 cmd->FlushBarriers();
+                                 device->EndEvent(cmd);
+                             })
+            .AddHandle(clasPageInfoBufferHandle, ResourceUsageType::Read)
+            .AddHandle(moveDstAddresses, ResourceUsageType::Read)
+            .AddHandle(moveDstSizes, ResourceUsageType::Read)
+            .AddHandle(clusterAccelAddressesHandle, ResourceUsageType::Write)
+            .AddHandle(clusterAccelSizesHandle, ResourceUsageType::Write);
     }
 
+    u32 numNewPages = pageIndices.Length();
     // Write cluster build descriptors
     {
-        device->BeginEvent(cmd, "Fill Cluster Triangle Info");
-        u64 indexBufferAddress  = device->GetDeviceAddress(indexBuffer.buffer);
-        u64 vertexBufferAddress = device->GetDeviceAddress(vertexBuffer.buffer);
-        FillClusterTriangleInfoPushConstant fillPc;
-        fillPc.indexBufferBaseAddressLowBits   = indexBufferAddress & 0xffffffff;
-        fillPc.indexBufferBaseAddressHighBits  = (indexBufferAddress >> 32u) & 0xffffffff;
-        fillPc.vertexBufferBaseAddressLowBits  = vertexBufferAddress & 0xffffffff;
-        fillPc.vertexBufferBaseAddressHighBits = (vertexBufferAddress >> 32u) & 0xffffffff;
-        fillPc.clusterOffset                   = newClasOffset;
+        //     rg->StartComputePass(
+        //         fillClusterTriangleInfoPipeline, fillClusterTriangleInfoLayout, 6,
+        //         [indexBuffer = this->indexBuffer, vertexBuffer = this->vertexBuffer,
+        //          &fillClusterTriangleInfoPush = this->fillClusterTriangleInfoPush,
+        //          newClasOffset, numNewPages](CommandBuffer *cmd) {
+        //             device->BeginEvent(cmd, "Fill Cluster Triangle Info");
+        //
+        //             RenderGraph *rg = GetRenderGraph();
+        //             u32 indexBufferOffset, vertexBufferOffset;
+        //             GPUBuffer *indexGPUBuffer  = rg->GetBuffer(indexBuffer,
+        //             indexBufferOffset); GPUBuffer *vertexGPUBuffer =
+        //             rg->GetBuffer(vertexBuffer, vertexBufferOffset); u64 indexBufferAddress
+        //             =
+        //                 device->GetDeviceAddress(indexGPUBuffer) + indexBufferOffset;
+        //             u64 vertexBufferAddress =
+        //                 device->GetDeviceAddress(vertexGPUBuffer) + vertexBufferOffset;
+        //
+        //             FillClusterTriangleInfoPushConstant fillPc;
+        //             fillPc.indexBufferBaseAddressLowBits = indexBufferAddress & 0xffffffff;
+        //             fillPc.indexBufferBaseAddressHighBits =
+        //                 (indexBufferAddress >> 32u) & 0xffffffff;
+        //             fillPc.vertexBufferBaseAddressLowBits = vertexBufferAddress &
+        //             0xffffffff; fillPc.vertexBufferBaseAddressHighBits =
+        //                 (vertexBufferAddress >> 32u) & 0xffffffff;
+        //             fillPc.clusterOffset = newClasOffset;
+        //
+        //             cmd->PushConstants(&fillClusterTriangleInfoPush, &fillPc,
+        //                                fillClusterTriangleInfoLayout.pipelineLayout);
+        //             cmd->Dispatch(numNewPages, 1, 1);
+        //             cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        //                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        //                          VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+        //             cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        //                          VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+        //                          VK_ACCESS_2_SHADER_WRITE_BIT,
+        //                          VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+        //             cmd->FlushBarriers();
+        //             device->EndEvent(cmd);
+        //         });
 
-        cmd->StartBindingCompute(fillClusterTriangleInfoPipeline,
-                                 &fillClusterTriangleInfoLayout)
-            .Bind(&evictedPagesBuffer)
-            .Bind(&buildClusterTriangleInfoBuffer)
-            .Bind(&decodeClusterDataBuffer)
-            .Bind(&clasGlobalsBuffer)
-            .Bind(&clasPageInfoBuffer)
-            .Bind(&clusterPageDataBuffer)
-            .PushConstants(&fillClusterTriangleInfoPush, &fillPc)
-            .End();
+        // cmd->StartBindingCompute(fillClusterTriangleInfoPipeline,
+        //                          &fillClusterTriangleInfoLayout)
+        //     .Bind(&evictedPagesBuffer)
+        //     .Bind(&buildClusterTriangleInfoBuffer)
+        //     .Bind(&decodeClusterDataBuffer)
+        //     .Bind(&clasGlobalsBuffer)
+        //     .Bind(&clasPageInfoBuffer)
+        //     .Bind(&clusterPageDataBuffer)
+        //     .PushConstants(&fillClusterTriangleInfoPush, &fillPc)
+        //     .End();
 
-        cmd->Dispatch(pageIndices.Length(), 1, 1);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_SHADER_READ_BIT);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
-        cmd->FlushBarriers();
-        device->EndEvent(cmd);
-
-        u32 numNewPages = pageIndices.Length();
         rg->StartComputePass(
               fillClusterTriangleInfoPipeline, fillClusterTriangleInfoLayout, 6,
-              [numNewPages](CommandBuffer *cmd) {
+              [indexBuffer = this->indexBuffer, vertexBuffer = this->vertexBuffer,
+               &fillClusterTriangleInfoPush   = this->fillClusterTriangleInfoPush,
+               &fillClusterTriangleInfoLayout = this->fillClusterTriangleInfoLayout,
+               newClasOffset, numNewPages](CommandBuffer *cmd) {
+                  RenderGraph *rg = GetRenderGraph();
+                  u32 indexBufferOffset, vertexBufferOffset;
+                  GPUBuffer *indexGPUBuffer  = rg->GetBuffer(indexBuffer, indexBufferOffset);
+                  GPUBuffer *vertexGPUBuffer = rg->GetBuffer(vertexBuffer, vertexBufferOffset);
+                  u64 indexBufferAddress =
+                      device->GetDeviceAddress(indexGPUBuffer) + indexBufferOffset;
+                  u64 vertexBufferAddress =
+                      device->GetDeviceAddress(vertexGPUBuffer) + vertexBufferOffset;
+
+                  FillClusterTriangleInfoPushConstant fillPc;
+                  fillPc.indexBufferBaseAddressLowBits = indexBufferAddress & 0xffffffff;
+                  fillPc.indexBufferBaseAddressHighBits =
+                      (indexBufferAddress >> 32u) & 0xffffffff;
+                  fillPc.vertexBufferBaseAddressLowBits = vertexBufferAddress & 0xffffffff;
+                  fillPc.vertexBufferBaseAddressHighBits =
+                      (vertexBufferAddress >> 32u) & 0xffffffff;
+                  fillPc.clusterOffset = newClasOffset;
+                  cmd->PushConstants(&fillClusterTriangleInfoPush, &fillPc,
+                                     fillClusterTriangleInfoLayout.pipelineLayout);
                   cmd->Dispatch(numNewPages, 1, 1);
                   cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -2177,22 +2336,20 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd, bool test)
                                VK_ACCESS_2_SHADER_WRITE_BIT,
                                VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
                   cmd->FlushBarriers();
-              },
-              &fillClusterTriangleInfoPush, &fillPc)
+              })
             .AddHandle(evictedPagesBuffer, ResourceUsageType::Read)
             .AddHandle(buildClusterTriangleInfoBuffer, ResourceUsageType::Write)
             .AddHandle(decodeClusterDataBuffer, ResourceUsageType::Write)
             .AddHandle(clasGlobalsBuffer, ResourceUsageType::Write)
-            .AddHandle(clasPageInfoBuffer, ResourceUsageType::Write);
+            .AddHandle(clasPageInfoBufferHandle, ResourceUsageType::Write)
+            .AddHandle(clusterPageDataBufferHandle, ResourceUsageType::Read);
     }
 
     // Decode the clusters
     {
-        device->BeginEvent(cmd, "Decode Installed Pages");
-
         rg->StartIndirectComputePass(
-              decodeDgfClustersPipeline, decodeDgfClustersLayout, 5, clasGlobalsBuffer,
-              sizeof(u32) * GLOBALS_CLAS_COUNT_INDEX,
+              "Decode Installed Pages", decodeDgfClustersPipeline, decodeDgfClustersLayout, 5,
+              clasGlobalsBuffer, sizeof(u32) * GLOBALS_CLAS_COUNT_INDEX,
               [](CommandBuffer *cmd) {
                   cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
@@ -2206,7 +2363,7 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd, bool test)
             .AddHandle(vertexBuffer, ResourceUsageType::Write)
             .AddHandle(decodeClusterDataBuffer, ResourceUsageType::Read)
             .AddHandle(clasGlobalsBuffer, ResourceUsageType::Read)
-            .AddHandle(clusterPageDataBuffer, ResourceUsageType::Read);
+            .AddHandle(clusterPageDataBufferHandle, ResourceUsageType::Read);
 
         Assert(voxelPageDecodeData.Length() == 0);
         // if (voxelPageDecodeData.Length())
@@ -2225,381 +2382,461 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd, bool test)
         // }
     }
 
-    if (staticBuildInfos.Length())
-    {
-        Assert(0);
-        cmd->BuildCustomBLAS(staticBuildInfos);
-    }
+    // if (staticBuildInfos.Length())
+    // {
+    //     Assert(0);
+    //     cmd->BuildCustomBLAS(staticBuildInfos);
+    // }
 
     // Compute the CLAS addresses
     {
-        device->BeginEvent(cmd, "Compute New CLAS Addresses");
         AddressPushConstant pc;
         pc.addressLowBits  = address & 0xffffffff;
         pc.addressHighBits = address >> 32u;
 
         rg->StartPass(
-            4, [maxNumTriangles = this->maxNumTriangles, maxNumVertices = this->maxNumVertices,
-                maxNumClusters                 = this->maxNumClusters, newClasOffset, rg,
-                buildClusterTriangleInfoBuffer = this->buildClusterTriangleInfoBuffer,
-                clasScratchBuffer              = this->clasScratchBuffer,
-                clusterAccelSizes              = this->clusterAccelSizes,
-                clasGlobalsBuffer              = this->clasGlobalsBuffer](CommandBuffer *cmd) {
-                u32 triangleInfoOffset, triangleInfoSize, clasScratchBufferOffset,
-                    dstSizesOffset, dstSizesSize, srcInfosCountOffset;
-                GPUBuffer *buildClusterTriangleInfo = rg->GetBuffer(
-                    buildClusterTriangleInfoBuffer, triangleInfoOffset, triangleInfoSize);
-                u64 buildClusterTriangleInfoAddress =
-                    device->GetDeviceAddress(buildClusterTriangleInfo) + triangleInfoOffset;
+              4,
+              [maxNumTriangles = this->maxNumTriangles, maxNumVertices = this->maxNumVertices,
+               maxNumClusters                 = this->maxNumClusters, newClasOffset, rg,
+               buildClusterTriangleInfoBuffer = this->buildClusterTriangleInfoBuffer,
+               clasScratchBuffer              = this->clasScratchBuffer,
+               &clusterAccelSizes             = this->clusterAccelSizes,
+               clasGlobalsBuffer              = this->clasGlobalsBuffer,
+               maxPages                       = this->maxPages](CommandBuffer *cmd) {
+                  device->BeginEvent(cmd, "Compute New CLAS Addresses");
+                  u32 triangleInfoOffset, triangleInfoSize, clasScratchBufferOffset,
+                      srcInfosCountOffset;
+                  GPUBuffer *buildClusterTriangleInfo = rg->GetBuffer(
+                      buildClusterTriangleInfoBuffer, triangleInfoOffset, triangleInfoSize);
+                  u64 buildClusterTriangleInfoAddress =
+                      device->GetDeviceAddress(buildClusterTriangleInfo) + triangleInfoOffset;
 
-                GPUBuffer *scratchBuffer =
-                    rg->GetBuffer(clasScratchBuffer, clasScratchBufferOffset);
-                u64 scratchBufferAddress =
-                    device->GetDeviceAddress(scratchBuffer) + clasScratchBufferOffset;
+                  GPUBuffer *scratchBuffer =
+                      rg->GetBuffer(clasScratchBuffer, clasScratchBufferOffset);
+                  u64 scratchBufferAddress =
+                      device->GetDeviceAddress(scratchBuffer) + clasScratchBufferOffset;
 
-                GPUBuffer *dstSizes =
-                    rg->GetBuffer(clusterAccelSizes, dstSizesOffset, dstSizesSize);
-                u64 dstSizesAddress = device->GetDeviceAddress(dstSizes) + dstSizesOffset +
-                                      sizeof(u32) * newClasOffset;
+                  u64 dstSizesAddress = device->GetDeviceAddress(&clusterAccelSizes) +
+                                        sizeof(u32) * newClasOffset;
+                  u32 dstSizesSize =
+                      sizeof(u32) * (maxPages * MAX_CLUSTERS_PER_PAGE - newClasOffset);
 
-                GPUBuffer *srcInfosCount =
-                    rg->GetBuffer(clasGlobalsBuffer, srcInfosCountOffset);
-                u64 srcInfosCountAddress = device->GetDeviceAddress(srcInfosCount) +
-                                           sizeof(u32) * GLOBALS_CLAS_COUNT_INDEX;
+                  GPUBuffer *srcInfosCount =
+                      rg->GetBuffer(clasGlobalsBuffer, srcInfosCountOffset);
+                  u64 srcInfosCountAddress = device->GetDeviceAddress(srcInfosCount) +
+                                             srcInfosCountOffset +
+                                             sizeof(u32) * GLOBALS_CLAS_COUNT_INDEX;
 
-                cmd->ComputeCLASSizes(buildClusterTriangleInfoAddress, triangleInfoSize,
-                                      scratchBufferAddress, dstSizesAddress, dstSizesSize,
-                                      srcInfosCountAddress, maxNumTriangles, maxNumVertices,
-                                      maxNumClusters);
+                  cmd->ComputeCLASSizes(buildClusterTriangleInfoAddress, triangleInfoSize,
+                                        scratchBufferAddress, dstSizesAddress, dstSizesSize,
+                                        srcInfosCountAddress, maxNumTriangles, maxNumVertices,
+                                        maxNumClusters);
 
-                cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                             VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                             VK_ACCESS_2_SHADER_READ_BIT);
-                cmd->FlushBarriers();
-            });
+                  cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                               VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                               VK_ACCESS_2_SHADER_READ_BIT);
+                  cmd->FlushBarriers();
+              })
+            .AddHandle(buildClusterTriangleInfoBuffer, ResourceUsageType::Read)
+            .AddHandle(clasScratchBuffer, ResourceUsageType::RW)
+            .AddHandle(clusterAccelSizesHandle, ResourceUsageType::Read)
+            .AddHandle(clasGlobalsBuffer, ResourceUsageType::Read);
 
-        cmd->StartBindingCompute(computeClasAddressesPipeline, &computeClasAddressesLayout)
-            .Bind(&evictedPagesBuffer)
-            .Bind(&clusterAccelAddresses)
-            .Bind(&clusterAccelSizes)
-            .Bind(&clasGlobalsBuffer)
-            .Bind(&clasPageInfoBuffer)
-            .Bind(&decodeClusterDataBuffer)
-            .Bind(&clusterPageDataBuffer)
-            .PushConstants(&computeClasAddressesPush, &pc)
-            .End();
-
-        cmd->Dispatch(pageIndices.Length(), 1, 1);
-
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                     VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
-        cmd->FlushBarriers();
-        device->EndEvent(cmd);
+        rg->StartComputePass(
+              computeClasAddressesPipeline, computeClasAddressesLayout, 7,
+              [numNewPages](CommandBuffer *cmd) {
+                  cmd->Dispatch(numNewPages, 1, 1);
+                  cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                               VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                               VK_ACCESS_2_SHADER_WRITE_BIT,
+                               VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+                  cmd->FlushBarriers();
+                  device->EndEvent(cmd);
+              },
+              &computeClasAddressesPush, &pc)
+            .AddHandle(evictedPagesBuffer, ResourceUsageType::Read)
+            .AddHandle(clusterAccelAddressesHandle, ResourceUsageType::Write)
+            .AddHandle(clusterAccelSizesHandle, ResourceUsageType::Read)
+            .AddHandle(clasGlobalsBuffer, ResourceUsageType::Write)
+            .AddHandle(clasPageInfoBufferHandle, ResourceUsageType::Write)
+            .AddHandle(decodeClusterDataBuffer, ResourceUsageType::Read)
+            .AddHandle(clusterPageDataBufferHandle, ResourceUsageType::Read);
     }
 
     // Build the CLAS
-    {
+    rg->StartPass(6, [&clasImplicitData              = this->clasImplicitData,
+                      &clusterAccelAddresses         = this->clusterAccelAddresses,
+                      &clusterAccelSizes             = this->clusterAccelSizes,
+                      clasScratchBuffer              = this->clasScratchBuffer,
+                      buildClusterTriangleInfoBuffer = this->buildClusterTriangleInfoBuffer,
+                      maxPages = this->maxPages, maxNumTriangles = this->maxNumTriangles,
+                      maxNumVertices    = this->maxNumVertices,
+                      maxNumClusters    = this->maxNumClusters,
+                      clasGlobalsBuffer = this->clasGlobalsBuffer,
+                      newClasOffset](CommandBuffer *cmd) {
+        RenderGraph *rg = GetRenderGraph();
+        u32 triangleInfoOffset, triangleInfoSize, clasScratchBufferOffset, srcInfosCountOffset;
+        GPUBuffer *buildClusterTriangleInfo = rg->GetBuffer(
+            buildClusterTriangleInfoBuffer, triangleInfoOffset, triangleInfoSize);
+        u64 buildClusterTriangleInfoAddress =
+            device->GetDeviceAddress(buildClusterTriangleInfo) + triangleInfoOffset;
+
+        GPUBuffer *scratchBuffer = rg->GetBuffer(clasScratchBuffer, clasScratchBufferOffset);
+        u64 scratchBufferAddress =
+            device->GetDeviceAddress(scratchBuffer) + clasScratchBufferOffset;
+
+        u64 dstSizesAddress =
+            device->GetDeviceAddress(&clusterAccelSizes) + sizeof(u32) * newClasOffset;
+        u32 dstSizesSize = sizeof(u32) * (maxPages * MAX_CLUSTERS_PER_PAGE - newClasOffset);
+        u64 dstAddressesAddress =
+            device->GetDeviceAddress(&clusterAccelAddresses) + sizeof(u32) * newClasOffset;
+        u32 dstAddressesSize =
+            sizeof(u64) * (maxPages * MAX_CLUSTERS_PER_PAGE - newClasOffset);
+
+        GPUBuffer *srcInfosCount = rg->GetBuffer(clasGlobalsBuffer, srcInfosCountOffset);
+        u64 srcInfosCountAddress = device->GetDeviceAddress(srcInfosCount) +
+                                   srcInfosCountOffset +
+                                   sizeof(u32) * GLOBALS_CLAS_COUNT_INDEX;
+
+        u64 dstImplicitData = device->GetDeviceAddress(&clasImplicitData);
         device->BeginEvent(cmd, "Build New CLAS");
-        cmd->BuildCLAS(CLASOpMode::ExplicitDestinations, &clasImplicitData,
-                       &accelScratchBuffer, &buildClusterTriangleInfoBuffer,
-                       &clusterAccelAddresses, &clusterAccelSizes, &clasGlobalsBuffer,
-                       sizeof(u32) * GLOBALS_CLAS_COUNT_INDEX, maxNumClusters, maxNumTriangles,
-                       maxNumVertices, newClasOffset);
+        cmd->BuildCLAS(CLASOpMode::ExplicitDestinations, dstImplicitData, scratchBufferAddress,
+                       buildClusterTriangleInfoAddress, triangleInfoSize, dstAddressesAddress,
+                       dstAddressesSize, dstSizesAddress, dstSizesSize, srcInfosCountAddress,
+                       maxNumTriangles, maxNumVertices, maxNumClusters);
+        cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                     VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+        cmd->FlushBarriers();
         device->EndEvent(cmd);
-    }
+    });
 }
 
-void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, GPUBuffer *sceneBuffer,
+void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, ResourceHandle sceneBuffer,
                                               bool ptlas)
 {
-    {
-        device->BeginEvent(cmd, "Merged Instances Test");
-        NumPushConstant pc;
-        pc.num = maxPartitions;
-        cmd->StartBindingCompute(mergedInstancesTestPipeline, &mergedInstancesTestLayout)
-            .Bind(&partitionInfosBuffer)
-            .Bind(&clasGlobalsBuffer)
-            .Bind(&mergedPartitionDeviceAddresses)
-            .Bind(&visiblePartitionsBuffer)
-            .Bind(&evictedPartitionsBuffer)
-            .Bind(&instanceFreeListBuffer)
-            .Bind(sceneBuffer)
-            .PushConstants(&mergedInstancesTestPush, &pc)
-            .End();
-        cmd->Dispatch((maxPartitions + 31) / 32, 1, 1);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_SHADER_READ_BIT);
-        cmd->FlushBarriers();
-        device->EndEvent(cmd);
-    }
+    RenderGraph *rg = GetRenderGraph();
+    NumPushConstant pc;
+    pc.num = maxPartitions;
 
-    {
-        device->BeginEvent(cmd, "Free instances");
-        cmd->StartBindingCompute(freeInstancesPipeline, &freeInstancesLayout)
-            .Bind(&instancesBuffer)
-            .Bind(&evictedPartitionsBuffer)
-            .Bind(&clasGlobalsBuffer)
-            .Bind(&instanceFreeListBuffer)
-            .End();
-        cmd->Dispatch(maxInstances / 64, 1, 1);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
-                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_SHADER_WRITE_BIT);
-        cmd->FlushBarriers();
-        device->EndEvent(cmd);
-    }
+    rg->StartComputePass(
+          mergedInstancesTestPipeline, mergedInstancesTestLayout, 7,
+          [maxPartitions = this->maxPartitions](CommandBuffer *cmd) {
+              device->BeginEvent(cmd, "Merged Instances Test");
+              cmd->Dispatch((maxPartitions + 31) / 32, 1, 1);
+              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+              cmd->FlushBarriers();
+              device->EndEvent(cmd);
+          },
+          &mergedInstancesTestPush, &pc)
+        .AddHandle(partitionInfosBufferHandle, ResourceUsageType::RW)
+        .AddHandle(clasGlobalsBuffer, ResourceUsageType::Write)
+        .AddHandle(mergedPartitionDeviceAddressesHandle, ResourceUsageType::Read)
+        .AddHandle(visiblePartitionsBuffer, ResourceUsageType::Write)
+        .AddHandle(evictedPartitionsBuffer, ResourceUsageType::Write)
+        .AddHandle(instanceFreeListBufferHandle, ResourceUsageType::RW)
+        .AddHandle(sceneBuffer, ResourceUsageType::Read);
 
-    {
-        device->BeginEvent(cmd, "Allocate instances");
-        cmd->StartBindingCompute(allocateInstancesPipeline, &allocateInstancesLayout)
-            .Bind(&visiblePartitionsBuffer)
-            .Bind(&clasGlobalsBuffer)
-            .Bind(&instanceTransformsBuffer)
-            .Bind(&partitionInfosBuffer)
-            .Bind(&instanceFreeListBuffer)
-            .Bind(&instancesBuffer)
-            .End();
-        // cmd->DispatchIndirect(&clasGlobalsBuffer,
-        //                       sizeof(u32) * GLOBALS_VISIBLE_PARTITION_INDIRECT_X);
-        cmd->Dispatch((maxPartitions + 31) / 32, 1, 1);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_SHADER_READ_BIT);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_SHADER_WRITE_BIT);
-        cmd->FlushBarriers();
-        device->EndEvent(cmd);
-    }
+    rg->StartComputePass(freeInstancesPipeline, freeInstancesLayout, 4,
+                         [maxInstances = this->maxInstances](CommandBuffer *cmd) {
+                             device->BeginEvent(cmd, "Free instances");
+                             cmd->Dispatch(maxInstances / 64, 1, 1);
+                             cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                          VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
+                                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                          VK_ACCESS_2_SHADER_WRITE_BIT,
+                                          VK_ACCESS_2_SHADER_READ_BIT |
+                                              VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+                             cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                          VK_ACCESS_2_SHADER_WRITE_BIT,
+                                          VK_ACCESS_2_SHADER_WRITE_BIT);
+                             cmd->FlushBarriers();
+                             device->EndEvent(cmd);
+                         })
+        .AddHandle(instancesBufferHandle, ResourceUsageType::RW)
+        .AddHandle(evictedPartitionsBuffer, ResourceUsageType::Read)
+        .AddHandle(clasGlobalsBuffer, ResourceUsageType::Read)
+        .AddHandle(instanceFreeListBufferHandle, ResourceUsageType::RW);
 
-    {
-        InstanceCullingPushConstant instanceCullingPushConstant;
-        instanceCullingPushConstant.num            = numInstances;
-        instanceCullingPushConstant.oneBlasAddress = ptlas ? oneBlasBuildAddress : 0;
-        device->BeginEvent(cmd, "Instance Culling");
+    rg->StartComputePass(
+          allocateInstancesPipeline, allocateInstancesLayout, 6,
+          [maxPartitions = this->maxPartitions](CommandBuffer *cmd) {
+              device->BeginEvent(cmd, "Allocate instances");
+              cmd->Dispatch((maxPartitions + 31) / 32, 1, 1);
+              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+              cmd->FlushBarriers();
+              device->EndEvent(cmd);
+          })
+        .AddHandle(visiblePartitionsBuffer, ResourceUsageType::Read)
+        .AddHandle(clasGlobalsBuffer, ResourceUsageType::Read)
+        .AddHandle(instanceTransformsBufferHandle, ResourceUsageType::Read)
+        .AddHandle(partitionInfosBufferHandle, ResourceUsageType::Read)
+        .AddHandle(instanceFreeListBufferHandle, ResourceUsageType::RW)
+        .AddHandle(instancesBufferHandle, ResourceUsageType::Write);
 
-        cmd->StartBindingCompute(instanceCullingPipeline, &instanceCullingLayout)
-            .Bind(sceneBuffer)
-            .Bind(&instancesBuffer)
-            .Bind(&clasGlobalsBuffer)
-            .Bind(&resourceAABBBuffer)
-            .Bind(&ptlasWriteInfosBuffer)
-            .Bind(&ptlasUpdateInfosBuffer)
-            .Bind(&mergedPartitionDeviceAddresses)
-            .Bind(&instanceTransformsBuffer)
-            .Bind(&partitionInfosBuffer)
-            .Bind(&streamingRequestsBuffer)
-            .Bind(&resourceBuffer)
-            .Bind(&resourceSharingInfosBuffer)
-            .Bind(&maxMinLodLevelBuffer)
-            .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
-            .End();
+    InstanceCullingPushConstant instanceCullingPushConstant;
+    instanceCullingPushConstant.num            = numInstances;
+    instanceCullingPushConstant.oneBlasAddress = ptlas ? oneBlasBuildAddress : 0;
+    rg->StartComputePass(
+          instanceCullingPipeline, instanceCullingLayout, 12,
+          [maxInstances = this->maxInstances](CommandBuffer *cmd) {
+              device->BeginEvent(cmd, "Instance Culling");
+              cmd->Dispatch(maxInstances / 64, 1, 1);
+              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                               VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+                           VK_ACCESS_2_SHADER_WRITE_BIT,
+                           VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+              cmd->FlushBarriers();
+              device->EndEvent(cmd);
+          },
+          &instanceCullingPush, &instanceCullingPushConstant)
+        .AddHandle(sceneBuffer, ResourceUsageType::Read)
+        .AddHandle(instancesBufferHandle, ResourceUsageType::RW)
+        .AddHandle(clasGlobalsBuffer, ResourceUsageType::Write)
+        .AddHandle(resourceAABBBufferHandle, ResourceUsageType::Read)
+        .AddHandle(ptlasWriteInfosBuffer, ResourceUsageType::Write)
+        .AddHandle(ptlasUpdateInfosBuffer, ResourceUsageType::Write)
+        .AddHandle(mergedPartitionDeviceAddressesHandle, ResourceUsageType::Read)
+        .AddHandle(instanceTransformsBufferHandle, ResourceUsageType::Read)
+        .AddHandle(partitionInfosBufferHandle, ResourceUsageType::Read)
+        .AddHandle(streamingRequestsBuffer, ResourceUsageType::Write)
+        .AddHandle(resourceBufferHandle, ResourceUsageType::Read)
+        .AddHandle(resourceSharingInfosBufferHandle, ResourceUsageType::Read)
+        .AddHandle(maxMinLodLevelBuffer, ResourceUsageType::Write);
 
-        cmd->Dispatch(maxInstances / 64, 1, 1);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_SHADER_READ_BIT);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
-                         VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
-                     VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
-        cmd->FlushBarriers();
-        device->EndEvent(cmd);
-    }
-
-    {
-
-        device->BeginEvent(cmd, "Assign Instances");
-        cmd->StartBindingCompute(assignInstancesPipeline, &assignInstancesLayout)
-            .Bind(&clasGlobalsBuffer)
-            .Bind(&blasDataBuffer)
-            .Bind(&instancesBuffer)
-            .Bind(&maxMinLodLevelBuffer)
-            .Bind(&workItemQueueBuffer, 0, sizeof(Vec4u) * MAX_CANDIDATE_NODES)
-            .Bind(&queueBuffer)
-            .Bind(&resourceBitVector)
-            .End();
-        cmd->Dispatch(maxInstances / 64, 1, 1);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_SHADER_READ_BIT);
-        cmd->FlushBarriers();
-        device->EndEvent(cmd);
-    }
+    rg->StartComputePass(
+          assignInstancesPipeline, assignInstancesLayout, 7,
+          [maxInstances = this->maxInstances](CommandBuffer *cmd) {
+              device->BeginEvent(cmd, "Assign Instances");
+              cmd->Dispatch(maxInstances / 64, 1, 1);
+              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+              cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                           VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
+              cmd->FlushBarriers();
+              device->EndEvent(cmd);
+          })
+        .AddHandle(clasGlobalsBuffer, ResourceUsageType::Write)
+        .AddHandle(blasDataBuffer, ResourceUsageType::Write)
+        .AddHandle(instancesBufferHandle, ResourceUsageType::Read)
+        .AddHandle(maxMinLodLevelBuffer, ResourceUsageType::Read)
+        .AddHandle(candidateNodeBuffer, ResourceUsageType::Write)
+        .AddHandle(queueBuffer, ResourceUsageType::Write)
+        .AddHandle(resourceBitVector, ResourceUsageType::Write);
 }
 
-void VirtualGeometryManager::HierarchyTraversal(CommandBuffer *cmd, GPUBuffer *gpuSceneBuffer)
+void VirtualGeometryManager::HierarchyTraversal(CommandBuffer *cmd,
+                                                ResourceHandle gpuSceneBuffer)
 
 {
-    device->BeginEvent(cmd, "Hierarchy Traversal");
+    RenderGraph *rg = GetRenderGraph();
+    rg->StartComputePass(hierarchyTraversalPipeline, hierarchyTraversalLayout, 13,
+                         [](CommandBuffer *cmd) {
+                             device->BeginEvent(cmd, "Hierarchy Traversal");
 
-    cmd->StartBindingCompute(hierarchyTraversalPipeline, &hierarchyTraversalLayout)
-        .Bind(&queueBuffer)
-        .Bind(gpuSceneBuffer)
-        .Bind(&clasGlobalsBuffer)
-        .Bind(&workItemQueueBuffer, 0, MAX_CANDIDATE_NODES * sizeof(Vec4u))
-        .Bind(&workItemQueueBuffer, MAX_CANDIDATE_NODES * sizeof(Vec4u),
-              MAX_CANDIDATE_CLUSTERS * sizeof(Vec4u))
-        .Bind(&instancesBuffer)
-        .Bind(&hierarchyNodeBuffer)
-        .Bind(&visibleClustersBuffer)
-        .Bind(&clusterPageDataBuffer)
-        .Bind(&blasDataBuffer)
-        .Bind(&streamingRequestsBuffer)
-        .Bind(&instanceTransformsBuffer)
-        .Bind(&partitionInfosBuffer)
-        .End();
+                             cmd->Dispatch(1440, 1, 1);
+                             cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                          VK_ACCESS_2_SHADER_WRITE_BIT,
+                                          VK_ACCESS_2_SHADER_READ_BIT |
+                                              VK_ACCESS_2_TRANSFER_READ_BIT);
+                             cmd->FlushBarriers();
 
-    cmd->Dispatch(1440, 1, 1);
-    cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                 VK_ACCESS_2_SHADER_WRITE_BIT,
-                 VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_TRANSFER_READ_BIT);
-    cmd->FlushBarriers();
-
-    device->EndEvent(cmd);
+                             device->EndEvent(cmd);
+                         })
+        .AddHandle(queueBuffer, ResourceUsageType::RW)
+        .AddHandle(gpuSceneBuffer, ResourceUsageType::Read)
+        .AddHandle(clasGlobalsBuffer, ResourceUsageType::RW)
+        .AddHandle(candidateNodeBuffer, ResourceUsageType::RW)
+        .AddHandle(candidateClusterBuffer, ResourceUsageType::RW)
+        .AddHandle(instancesBufferHandle, ResourceUsageType::Read)
+        .AddHandle(hierarchyNodeBufferHandle, ResourceUsageType::Read)
+        .AddHandle(visibleClustersBuffer, ResourceUsageType::Write)
+        .AddHandle(clusterPageDataBufferHandle, ResourceUsageType::Read)
+        .AddHandle(blasDataBuffer, ResourceUsageType::RW)
+        .AddHandle(streamingRequestsBuffer, ResourceUsageType::Write)
+        .AddHandle(instanceTransformsBufferHandle, ResourceUsageType::Read)
+        .AddHandle(partitionInfosBufferHandle, ResourceUsageType::Read);
 }
 
 void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd)
 {
-    {
-        device->BeginEvent(cmd, "Get BLAS Address Offset");
-        // Calculate where clas addresses should be written for each blas
+    RenderGraph *rg = GetRenderGraph();
 
-        cmd->StartBindingCompute(getBlasAddressOffsetPipeline, &getBlasAddressOffsetLayout)
-            .Bind(&blasDataBuffer)
-            .Bind(&clasGlobalsBuffer)
-            .End();
+    rg->StartIndirectComputePass(
+          "Get BLAS Address Offset", getBlasAddressOffsetPipeline, getBlasAddressOffsetLayout,
+          2, clasGlobalsBuffer, sizeof(u32) * GLOBALS_BLAS_INDIRECT_X,
+          [](CommandBuffer *cmd) {
+              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+              cmd->FlushBarriers();
+          })
+        .AddHandle(blasDataBuffer, ResourceUsageType::RW)
+        .AddHandle(clasGlobalsBuffer, ResourceUsageType::RW);
 
-        cmd->DispatchIndirect(&clasGlobalsBuffer, sizeof(u32) * GLOBALS_BLAS_INDIRECT_X);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_SHADER_READ_BIT);
-        cmd->FlushBarriers();
-        device->EndEvent(cmd);
-    }
+    rg->StartIndirectComputePass(
+          "Fill BLAS Address Array", fillBlasAddressArrayPipeline, fillBlasAddressArrayLayout,
+          6, clasGlobalsBuffer, sizeof(u32) * GLOBALS_CLAS_INDIRECT_X,
+          [](CommandBuffer *cmd) {
+              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_2_SHADER_WRITE_BIT,
+                           VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
+              cmd->FlushBarriers();
+          })
+        .AddHandle(clasGlobalsBuffer, ResourceUsageType::Read)
+        .AddHandle(visibleClustersBuffer, ResourceUsageType::Read)
+        .AddHandle(blasDataBuffer, ResourceUsageType::RW)
+        .AddHandle(clusterAccelAddressesHandle, ResourceUsageType::Read)
+        .AddHandle(blasClasAddressBuffer, ResourceUsageType::Write)
+        .AddHandle(clasPageInfoBufferHandle, ResourceUsageType::Read);
 
-    {
-        // Write the clas addresses to a new buffer
-        device->BeginEvent(cmd, "Fill BLAS Address Array");
-        cmd->StartBindingCompute(fillBlasAddressArrayPipeline, &fillBlasAddressArrayLayout)
-            .Bind(&clasGlobalsBuffer)
-            .Bind(&visibleClustersBuffer)
-            .Bind(&blasDataBuffer)
-            .Bind(&clusterAccelAddresses)
-            .Bind(&blasClasAddressBuffer)
-            .Bind(&clasPageInfoBuffer)
-            .End();
+    rg->StartComputePass(
+          fillFinestClusterBLASInfoPipeline, fillFinestClusterBLASInfoLayout, 5,
+          [fillFinestClusterBLASInfoLayout = this->fillFinestClusterBLASInfoLayout,
+           &fillFinestClusterBLASPush      = this->fillFinestClusterBottomLevelInfoPush,
+           blasClasAddressBuffer           = this->blasClasAddressBuffer,
+           clasGlobalsHandle               = this->clasGlobalsBuffer](CommandBuffer *cmd) {
+              u32 offset, indirectOffset;
+              GPUBuffer *buffer = GetRenderGraph()->GetBuffer(blasClasAddressBuffer, offset);
+              GPUBuffer *clasGlobalsBuffer =
+                  GetRenderGraph()->GetBuffer(clasGlobalsHandle, indirectOffset);
+              indirectOffset += sizeof(u32) * GLOBALS_BLAS_INDIRECT_X;
 
-        cmd->DispatchIndirect(&clasGlobalsBuffer, sizeof(u32) * GLOBALS_CLAS_INDIRECT_X);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
-        cmd->FlushBarriers();
-        device->EndEvent(cmd);
-    }
+              u64 blasClasAddressBufferAddress = device->GetDeviceAddress(buffer) + offset;
 
-    u64 blasClasAddressBufferAddress = device->GetDeviceAddress(blasClasAddressBuffer.buffer);
+              AddressPushConstant pc;
+              pc.addressLowBits  = blasClasAddressBufferAddress & (~0u);
+              pc.addressHighBits = blasClasAddressBufferAddress >> 32u;
+
+              device->BeginEvent(cmd, "Fill Finest Cluster BLAS");
+
+              cmd->PushConstants(&fillFinestClusterBLASPush, &pc,
+                                 fillFinestClusterBLASInfoLayout.pipelineLayout);
+              cmd->DispatchIndirect(clasGlobalsBuffer, indirectOffset);
+
+              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+              cmd->FlushBarriers();
+              device->EndEvent(cmd);
+          })
+        .AddHandle(blasDataBuffer, ResourceUsageType::RW)
+        .AddHandle(buildClusterBottomLevelInfoBuffer, ResourceUsageType::Write)
+        .AddHandle(clasGlobalsBuffer, ResourceUsageType::RW)
+        .AddHandle(instancesBufferHandle, ResourceUsageType::Read)
+        .AddHandle(resourceBufferHandle, ResourceUsageType::Write);
+
+    rg->StartIndirectComputePass(
+          "Fill Cluster BLAS Info", fillClusterBLASInfoPipeline, fillClusterBLASInfoLayout, 4,
+          clasGlobalsBuffer, sizeof(u32) * GLOBALS_BLAS_INDIRECT_X,
+          [](CommandBuffer *cmd) {
+              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                           VK_ACCESS_2_SHADER_WRITE_BIT,
+                           VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                               VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+              cmd->FlushBarriers();
+          })
+        .AddHandle(blasDataBuffer, ResourceUsageType::RW)
+        .AddHandle(clasGlobalsBuffer, ResourceUsageType::Read)
+        .AddHandle(instancesBufferHandle, ResourceUsageType::Read)
+        .AddHandle(resourceBufferHandle, ResourceUsageType::Read);
+
+    rg->StartPass(
+          4,
+          [maxTotalClusterCount = this->maxTotalClusterCount,
+           maxClusterCountPerAccelerationStructure =
+               this->maxClusterCountPerAccelerationStructure,
+           maxInstances                      = this->maxInstances,
+           buildClusterBottomLevelInfoHandle = this->buildClusterBottomLevelInfoBuffer,
+           blasScratchBuffer = this->blasScratchBuffer, blasAccelSizes = this->blasAccelSizes,
+           clasGlobalsBuffer = this->clasGlobalsBuffer](CommandBuffer *cmd) {
+              RenderGraph *rg = GetRenderGraph();
+              u32 infoOffset, infoSize, scratchOffset, srcInfosCountOffset;
+              GPUBuffer *buildClusterBottomLevelInfoBuffer =
+                  rg->GetBuffer(buildClusterBottomLevelInfoHandle, infoOffset, infoSize);
+              u64 srcInfosArray =
+                  device->GetDeviceAddress(buildClusterBottomLevelInfoBuffer) + infoOffset;
+
+              GPUBuffer *scratchBuffer = rg->GetBuffer(blasScratchBuffer, scratchOffset);
+              u64 scratchBufferAddress =
+                  device->GetDeviceAddress(scratchBuffer) + scratchOffset;
+
+              u32 blasAccelSizeOffset;
+              GPUBuffer *blasAccelSizesBuffer =
+                  rg->GetBuffer(blasAccelSizes, blasAccelSizeOffset);
+              u64 dstSizesAddress =
+                  device->GetDeviceAddress(blasAccelSizesBuffer) + blasAccelSizeOffset;
+              u32 dstSizesSize = sizeof(u32) * maxInstances;
+
+              GPUBuffer *srcInfosCount = rg->GetBuffer(clasGlobalsBuffer, srcInfosCountOffset);
+              u64 srcInfosCountAddress = device->GetDeviceAddress(srcInfosCount) +
+                                         srcInfosCountOffset +
+                                         sizeof(u32) * GLOBALS_BLAS_FINAL_COUNT_INDEX;
+
+              device->BeginEvent(cmd, "Compute BLAS Sizes");
+              cmd->ComputeBLASSizes(srcInfosArray, infoSize, scratchBufferAddress,
+                                    dstSizesAddress, dstSizesSize, srcInfosCountAddress,
+                                    maxTotalClusterCount,
+                                    maxClusterCountPerAccelerationStructure, maxInstances);
+              cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                           VK_ACCESS_2_SHADER_READ_BIT);
+              cmd->FlushBarriers();
+              device->EndEvent(cmd);
+          })
+        .AddHandle(buildClusterBottomLevelInfoBuffer, ResourceUsageType::Read)
+        .AddHandle(blasScratchBuffer, ResourceUsageType::RW)
+        .AddHandle(clasGlobalsBuffer, ResourceUsageType::Read)
+        .AddHandle(blasAccelSizes, ResourceUsageType::Write);
+
+    u64 blasBufferAddress = device->GetDeviceAddress(clasBlasImplicitBuffer.buffer);
+
     AddressPushConstant pc;
-    pc.addressLowBits  = blasClasAddressBufferAddress & (~0u);
-    pc.addressHighBits = blasClasAddressBufferAddress >> 32u;
+    pc.addressLowBits  = blasBufferAddress & (~0u);
+    pc.addressHighBits = blasBufferAddress >> 32u;
 
-    // Fill finest blas first
-    {
-        device->BeginEvent(cmd, "Fill Finest Cluster BLAS");
-
-        cmd->StartBindingCompute(fillFinestClusterBLASInfoPipeline,
-                                 &fillFinestClusterBLASInfoLayout)
-            .Bind(&blasDataBuffer)
-            .Bind(&buildClusterBottomLevelInfoBuffer)
-            .Bind(&clasGlobalsBuffer)
-            .Bind(&instancesBuffer)
-            .Bind(&resourceBuffer)
-            .PushConstants(&fillFinestClusterBottomLevelInfoPush, &pc)
-            .End();
-
-        cmd->DispatchIndirect(&clasGlobalsBuffer, sizeof(u32) * GLOBALS_BLAS_INDIRECT_X);
-
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_SHADER_READ_BIT);
-        cmd->FlushBarriers();
-        device->EndEvent(cmd);
-    }
-
-    {
-        // Fill out the BUILD_CLUSTERS_BOTTOM_LEVEL_INFO descriptors
-        device->BeginEvent(cmd, "Fill Cluster BLAS Info");
-
-        cmd->StartBindingCompute(fillClusterBLASInfoPipeline, &fillClusterBLASInfoLayout)
-            .Bind(&blasDataBuffer)
-            .Bind(&clasGlobalsBuffer)
-            .Bind(&instancesBuffer)
-            .Bind(&resourceBuffer)
-            .PushConstants(&fillClusterBottomLevelInfoPush, &pc)
-            .End();
-
-        cmd->DispatchIndirect(&clasGlobalsBuffer, sizeof(u32) * GLOBALS_BLAS_INDIRECT_X);
-
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                     VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
-                         VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
-        cmd->FlushBarriers();
-        device->EndEvent(cmd);
-    }
-
-    {
-        u64 blasBufferAddress = device->GetDeviceAddress(clasBlasImplicitBuffer.buffer);
-
-        device->BeginEvent(cmd, "Compute BLAS Addresses");
-        AddressPushConstant pc;
-        pc.addressLowBits  = blasBufferAddress & (~0u);
-        pc.addressHighBits = blasBufferAddress >> 32u;
-
-        // Compute BLAS sizes
-        cmd->ComputeBLASSizes(
-            &buildClusterBottomLevelInfoBuffer, &accelScratchBuffer, &blasAccelSizes,
-            &clasGlobalsBuffer, sizeof(u32) * GLOBALS_BLAS_FINAL_COUNT_INDEX,
-            maxTotalClusterCount, maxClusterCountPerAccelerationStructure, maxInstances);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                     VK_ACCESS_2_SHADER_READ_BIT);
-        cmd->FlushBarriers();
-
-        // Compute BLAS addresses
-        cmd->StartBindingCompute(computeBlasAddressesPipeline, &computeBlasAddressesLayout)
-            .Bind(&blasAccelSizes)
-            .Bind(&blasAccelAddresses)
-            .Bind(&clasGlobalsBuffer)
-            .Bind(&blasDataBuffer)
-            .PushConstants(&computeBlasAddressesPush, &pc)
-            .End();
-
-        cmd->DispatchIndirect(&clasGlobalsBuffer, sizeof(u32) * GLOBALS_BLAS_INDIRECT_X);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                     VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
-        cmd->FlushBarriers();
-        device->EndEvent(cmd);
-    }
+    rg->StartIndirectComputePass(
+          computeBlasAddressesPipeline, computeBlasAddressesLayout, 4, clasGlobalsBuffer,
+          sizeof(u32) * GLOBALS_BLAS_INDIRECT_X,
+          [](CommandBuffer *cmd) {
+              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                           VK_ACCESS_2_SHADER_WRITE_BIT,
+                           VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+              cmd->FlushBarriers();
+              device->EndEvent(cmd);
+          },
+          &computeBlasAddressesPush, &pc)
+        .AddHandle(blasAccelSizes, ResourceUsageType::Read)
+        .AddHandle(blasAccelAddresses, ResourceUsageType::Write)
+        .AddHandle(clasGlobalsBuffer, ResourceUsageType::RW)
+        .AddHandle(blasDataBuffer, ResourceUsageType::Read);
 
     // if (device->frameCount > 1000)
     // {
     //     GPUBuffer readback0 = device->CreateBuffer(
-    //         VK_BUFFER_USAGE_TRANSFER_DST_BIT, blasAccelSizes.size, MemoryUsage::GPU_TO_CPU);
+    //         VK_BUFFER_USAGE_TRANSFER_DST_BIT, blasAccelSizes.size,
+    //         MemoryUsage::GPU_TO_CPU);
     //     //
     //     //     // GPUBuffer readback2 =
     //     //     //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -2611,11 +2848,13 @@ void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd)
     //                  VK_ACCESS_2_TRANSFER_READ_BIT);
     //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
     //     VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-    //                  VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+    //                  VK_ACCESS_2_SHADER_WRITE_BIT,
+    //                  VK_ACCESS_2_TRANSFER_READ_BIT);
     //     // cmd->Barrier(&depthBuffer, VK_IMAGE_LAYOUT_GENERAL,
     //     //              VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
     //     //              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-    //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+    //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+    //     VK_ACCESS_2_SHADER_WRITE_BIT,
     //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
     //     //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
     //     //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
@@ -2638,22 +2877,62 @@ void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd)
     //     int stop = 5;
     // }
 
-    {
-        // Build the BLASes
-        device->BeginEvent(cmd, "Build BLAS");
+    rg->StartPass(
+          6,
+          [&blasImplicit      = this->clasBlasImplicitBuffer,
+           blasAccelAddresses = this->blasAccelAddresses,
+           blasAccelSizes = this->blasAccelSizes, blasScratchBuffer = this->blasScratchBuffer,
+           info = this->buildClusterBottomLevelInfoBuffer, maxInstances = this->maxInstances,
+           maxClusterCountPerAccelerationStructure =
+               this->maxClusterCountPerAccelerationStructure,
+           maxTotalClusterCount = this->maxTotalClusterCount,
+           clasGlobalsBuffer    = this->clasGlobalsBuffer](CommandBuffer *cmd) {
+              device->BeginEvent(cmd, "Build BLAS");
 
-        cmd->BuildClusterBLAS(
-            CLASOpMode::ExplicitDestinations, &clasBlasImplicitBuffer, &accelScratchBuffer,
-            &buildClusterBottomLevelInfoBuffer, &blasAccelAddresses, &blasAccelSizes,
-            &clasGlobalsBuffer, sizeof(u32) * GLOBALS_BLAS_FINAL_COUNT_INDEX,
-            maxClusterCountPerAccelerationStructure, maxTotalClusterCount, maxInstances);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                     VK_ACCESS_2_SHADER_READ_BIT);
-        cmd->FlushBarriers();
-        device->EndEvent(cmd);
-    }
+              RenderGraph *rg = GetRenderGraph();
+              u32 infoOffset, infoSize, scratchOffset, srcInfosCountOffset;
+              GPUBuffer *infoBuffer = rg->GetBuffer(info, infoOffset, infoSize);
+              u64 infoAddress       = device->GetDeviceAddress(infoBuffer) + infoOffset;
+
+              GPUBuffer *scratchBuffer = rg->GetBuffer(blasScratchBuffer, scratchOffset);
+              u64 scratchBufferAddress =
+                  device->GetDeviceAddress(scratchBuffer) + scratchOffset;
+
+              u32 addressOffset, sizesOffset;
+              u64 dstSizesAddress =
+                  device->GetDeviceAddress(rg->GetBuffer(blasAccelSizes, sizesOffset)) +
+                  sizesOffset;
+              u32 dstSizesSize = sizeof(u32) * maxInstances;
+              u64 dstAddressesAddress =
+                  device->GetDeviceAddress(rg->GetBuffer(blasAccelAddresses, addressOffset)) +
+                  addressOffset;
+              u32 dstAddressesSize = sizeof(u64) * maxInstances;
+
+              GPUBuffer *srcInfosCount = rg->GetBuffer(clasGlobalsBuffer, srcInfosCountOffset);
+              u64 srcInfosCountAddress = device->GetDeviceAddress(srcInfosCount) +
+                                         srcInfosCountOffset +
+                                         sizeof(u32) * GLOBALS_CLAS_COUNT_INDEX;
+
+              u64 dstImplicitData = device->GetDeviceAddress(&blasImplicit);
+
+              cmd->BuildClusterBLAS(
+                  CLASOpMode::ExplicitDestinations, dstImplicitData, scratchBufferAddress,
+                  infoAddress, infoSize, dstAddressesAddress, dstAddressesSize,
+                  dstSizesAddress, dstSizesSize, srcInfosCountAddress,
+                  maxClusterCountPerAccelerationStructure, maxTotalClusterCount, maxInstances);
+              cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                           VK_ACCESS_2_SHADER_READ_BIT);
+              cmd->FlushBarriers();
+              device->EndEvent(cmd);
+          })
+        .AddHandle(clasBlasImplicitHandle, ResourceUsageType::Write)
+        .AddHandle(blasAccelAddresses, ResourceUsageType::Read)
+        .AddHandle(blasAccelSizes, ResourceUsageType::Read)
+        .AddHandle(blasScratchBuffer, ResourceUsageType::RW)
+        .AddHandle(buildClusterBottomLevelInfoBuffer, ResourceUsageType::Read)
+        .AddHandle(clasGlobalsBuffer, ResourceUsageType::Read);
 }
 
 void VirtualGeometryManager::AllocateInstances(StaticArray<GPUInstance> &inInstances)
@@ -2702,38 +2981,27 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd)
     //              VK_ACCESS_2_SHADER_WRITE_BIT,
     //              VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
     // cmd->FlushBarriers();
+    RenderGraph *rg = GetRenderGraph();
 
-    // Update/write PTLAS instances
-    {
-        device->BeginEvent(cmd, "Update PTLAS Instances");
-        u64 writeAddress  = device->GetDeviceAddress(ptlasWriteInfosBuffer.buffer);
-        u64 updateAddress = device->GetDeviceAddress(ptlasUpdateInfosBuffer.buffer);
-
-        PtlasPushConstant pc;
-        pc.writeAddress  = writeAddress;
-        pc.updateAddress = updateAddress;
-
-        cmd->StartBindingCompute(ptlasWriteInstancesPipeline, &ptlasWriteInstancesLayout)
-            .Bind(&clasGlobalsBuffer)
-            .Bind(&ptlasWriteInfosBuffer)
-            .Bind(&ptlasUpdateInfosBuffer)
-            .Bind(&blasAccelAddresses)
-            .Bind(&blasDataBuffer)
-            .Bind(&instancesBuffer)
-            .Bind(&resourceAABBBuffer)
-            .Bind(&voxelAddressTable)
-            .Bind(&instanceTransformsBuffer)
-            .Bind(&partitionInfosBuffer)
-            .End();
-
-        cmd->DispatchIndirect(&clasGlobalsBuffer, sizeof(u32) * GLOBALS_BLAS_INDIRECT_X);
-
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
-        cmd->FlushBarriers();
-        device->EndEvent(cmd);
-    }
+    rg->StartIndirectComputePass(
+          "Update PTLAS Instances", ptlasWriteInstancesPipeline, ptlasWriteInstancesLayout, 9,
+          clasGlobalsBuffer, sizeof(u32) * GLOBALS_BLAS_INDIRECT_X,
+          [](CommandBuffer *cmd) {
+              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_2_SHADER_WRITE_BIT,
+                           VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
+              cmd->FlushBarriers();
+          })
+        .AddHandle(clasGlobalsBuffer, ResourceUsageType::RW)
+        .AddHandle(ptlasWriteInfosBuffer, ResourceUsageType::Write)
+        .AddHandle(ptlasUpdateInfosBuffer, ResourceUsageType::Write)
+        .AddHandle(blasAccelAddresses, ResourceUsageType::Read)
+        .AddHandle(blasDataBuffer, ResourceUsageType::Read)
+        .AddHandle(instancesBufferHandle, ResourceUsageType::RW)
+        .AddHandle(resourceAABBBufferHandle, ResourceUsageType::Read)
+        .AddHandle(instanceTransformsBufferHandle, ResourceUsageType::Read)
+        .AddHandle(partitionInfosBufferHandle, ResourceUsageType::Read);
 
     // Reset free list counts to 0 if they're negative
     // {
@@ -2749,54 +3017,89 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd)
     //     cmd->FlushBarriers();
     // }
 
-    // Update unused instances
-    {
-        device->BeginEvent(cmd, "PTLAS Update Unused Instances");
-        cmd->StartBindingCompute(ptlasUpdateUnusedInstancesPipeline,
-                                 &ptlasUpdateUnusedInstancesLayout)
-            .Bind(&instancesBuffer)
-            .Bind(&clasGlobalsBuffer)
-            .Bind(&ptlasUpdateInfosBuffer)
-            .Bind(&ptlasWriteInfosBuffer)
-            .End();
-        cmd->Dispatch(maxInstances / 64, 1, 1);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_SHADER_READ_BIT);
-        cmd->FlushBarriers();
-        device->EndEvent(cmd);
-    }
+    rg->StartComputePass(
+          ptlasUpdateUnusedInstancesPipeline, ptlasUpdateUnusedInstancesLayout, 4,
+          [maxInstances = this->maxInstances](CommandBuffer *cmd) {
+              device->BeginEvent(cmd, "PTLAS Update Unused Instances");
+              cmd->Dispatch(maxInstances / 64, 1, 1);
+              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+              cmd->FlushBarriers();
+              device->EndEvent(cmd);
+          })
+        .AddHandle(instancesBufferHandle, ResourceUsageType::Read)
+        .AddHandle(clasGlobalsBuffer, ResourceUsageType::Write)
+        .AddHandle(ptlasWriteInfosBuffer, ResourceUsageType::Write);
 
     // Update command infos
-    {
-        PtlasPushConstant pc;
-        pc.writeAddress  = device->GetDeviceAddress(&ptlasWriteInfosBuffer);
-        pc.updateAddress = device->GetDeviceAddress(&ptlasUpdateInfosBuffer);
+    rg->StartComputePass(
+          ptlasWriteCommandInfosPipeline, ptlasWriteCommandInfosLayout, 2,
+          [ptlasWriteInfosBuffer  = this->ptlasWriteInfosBuffer,
+           ptlasUpdateInfosBuffer = this->ptlasUpdateInfosBuffer,
+           &push                  = this->ptlasWriteCommandInfosPush,
+           &layout                = this->ptlasWriteCommandInfosLayout](CommandBuffer *cmd) {
+              RenderGraph *rg = GetRenderGraph();
+              u32 writeOffset, updateOffset;
+              PtlasPushConstant pc;
+              pc.writeAddress =
+                  device->GetDeviceAddress(rg->GetBuffer(ptlasWriteInfosBuffer, writeOffset)) +
+                  writeOffset;
+              pc.updateAddress = device->GetDeviceAddress(
+                                     rg->GetBuffer(ptlasUpdateInfosBuffer, updateOffset)) +
+                                 updateOffset;
 
-        device->BeginEvent(cmd, "Write PTLAS Command Infos");
-        cmd->StartBindingCompute(ptlasWriteCommandInfosPipeline, &ptlasWriteCommandInfosLayout)
-            .Bind(&clasGlobalsBuffer)
-            .Bind(&ptlasIndirectCommandBuffer)
-            .PushConstants(&ptlasWriteCommandInfosPush, &pc)
-            .End();
-        cmd->Dispatch(1, 1, 1);
-        device->EndEvent(cmd);
-    }
+              device->BeginEvent(cmd, "Write PTLAS Command Infos");
+              cmd->PushConstants(&push, &pc, layout.pipelineLayout);
+              cmd->Dispatch(1, 1, 1);
+              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                           VK_ACCESS_2_SHADER_WRITE_BIT,
+                           VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                               VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+              cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                           VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                           VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                           VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+              cmd->FlushBarriers();
+              device->EndEvent(cmd);
+          })
+        .AddHandle(clasGlobalsBuffer, ResourceUsageType::RW)
+        .AddHandle(ptlasIndirectCommandBuffer, ResourceUsageType::Write);
 
-    cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                 VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                 VK_ACCESS_2_SHADER_WRITE_BIT,
-                 VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
-                     VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
-    cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                 VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                 VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                 VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
-    cmd->FlushBarriers();
+    rg->StartPass(
+          6,
+          [&tlasAccelBuffer  = this->tlasAccelBuffer,
+           tlasScratchHandle = this->tlasScratchHandle,
+           ptlasIndirect     = this->ptlasIndirectCommandBuffer,
+           clasGlobalsBuffer = this->clasGlobalsBuffer,
+           maxPartitions     = this->maxPartitions](CommandBuffer *cmd) {
+              RenderGraph *rg = GetRenderGraph();
+              u64 accel       = device->GetDeviceAddress(&tlasAccelBuffer);
+              u32 scratchOffset, indirectOffset;
+              u64 scratch =
+                  device->GetDeviceAddress(rg->GetBuffer(tlasScratchHandle, scratchOffset)) +
+                  scratchOffset;
+              u64 indirect =
+                  device->GetDeviceAddress(rg->GetBuffer(ptlasIndirect, indirectOffset)) +
+                  indirectOffset;
 
-    cmd->BuildPTLAS(&tlasAccelBuffer, &accelScratchBuffer, &ptlasIndirectCommandBuffer,
-                    &clasGlobalsBuffer, sizeof(u32) * GLOBALS_PTLAS_OP_TYPE_COUNT_INDEX,
-                    (1u << 21), 1024, maxPartitions, 0);
+              u32 srcInfosOffset;
+              GPUBuffer *srcInfosBuffer = rg->GetBuffer(clasGlobalsBuffer, srcInfosOffset);
+              u64 srcInfosCount = device->GetDeviceAddress(srcInfosBuffer) + srcInfosOffset +
+                                  sizeof(u32) * GLOBALS_PTLAS_OP_TYPE_COUNT_INDEX;
+
+              device->BeginEvent(cmd, "Build PTLAS");
+              cmd->BuildPTLAS(accel, scratch, indirect, srcInfosCount, (1u << 21), 1024,
+                              maxPartitions, 0);
+              device->EndEvent(cmd);
+          })
+        .AddHandle(tlasAccelHandle, ResourceUsageType::Write)
+        .AddHandle(tlasScratchHandle, ResourceUsageType::RW)
+        .AddHandle(ptlasIndirectCommandBuffer, ResourceUsageType::Write)
+        .AddHandle(ptlasWriteInfosBuffer, ResourceUsageType::Read)
+        .AddHandle(ptlasUpdateInfosBuffer, ResourceUsageType::Read)
+        .AddHandle(clasGlobalsBuffer, ResourceUsageType::Read);
 }
 
 struct GetHierarchyNode
@@ -3209,6 +3512,7 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
         }
     }
 
+    RenderGraph *rg = GetRenderGraph();
     if (accelBuildInfos.Length())
     {
         StaticArray<AccelerationStructureSizes> sizes =
@@ -3279,6 +3583,8 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
         mergedPartitionDeviceAddresses = device->CreateBuffer(
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             sizeof(u64) * finalNumPartitions);
+        mergedPartitionDeviceAddressesHandle =
+            rg->RegisterExternalResource(&mergedPartitionDeviceAddresses);
         cmd->SubmitBuffer(&mergedPartitionDeviceAddresses, accelDeviceAddresses.data,
                           sizeof(u64) * finalNumPartitions);
     }
@@ -3286,40 +3592,42 @@ void VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
     partitionInfosBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         sizeof(PartitionInfo) * (partitionInfos.Length()));
-    visiblePartitionsBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                                   sizeof(u32) * finalNumPartitions);
-    evictedPartitionsBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                                   sizeof(Vec2u) * finalNumPartitions);
+    partitionInfosBufferHandle = rg->RegisterExternalResource(&partitionInfosBuffer);
+    visiblePartitionsBuffer    = rg->CreateBufferResource(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                                          sizeof(u32) * finalNumPartitions);
+    evictedPartitionsBuffer    = rg->CreateBufferResource(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                                          sizeof(Vec2u) * finalNumPartitions);
 
     u32 tlasScratchSize, tlasAccelSize;
-    // device->GetPTLASBuildSizes(maxInstances, maxInstances / maxPartitions, maxPartitions, 0,
+    // device->GetPTLASBuildSizes(maxInstances, maxInstances / maxPartitions,
+    // maxPartitions, 0,
     //                            tlasScratchSize, tlasAccelSize);
     device->GetPTLASBuildSizes(maxInstances, 1024, maxPartitions, 0, tlasScratchSize,
                                tlasAccelSize);
-    accelScratchBufferSize = Max(accelScratchBufferSize, tlasScratchSize);
-
-    accelScratchBuffer = device->CreateBuffer(
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
-            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-        accelScratchBufferSize);
 
     tlasAccelBuffer =
         device->CreateBuffer(VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
                                  VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                              tlasAccelSize);
+    tlasAccelHandle   = rg->RegisterExternalResource(&tlasAccelBuffer);
+    tlasScratchHandle = rg->CreateBufferResource(
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        tlasScratchSize);
 
-    partitionCountsBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                     VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                                 sizeof(u32) * finalNumPartitions);
-    partitionReadbackBuffer =
-        device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                             sizeof(u32) * finalNumPartitions, MemoryUsage::GPU_TO_CPU);
+    // partitionCountsBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+    //                                                  VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+    //                                              sizeof(u32) * finalNumPartitions);
+    // partitionReadbackBuffer =
+    //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+    //                          sizeof(u32) * finalNumPartitions, MemoryUsage::GPU_TO_CPU);
 
     u32 transformSize        = sizeof(instanceTransforms[0]) * instanceTransforms.Length();
     instanceTransformsBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, transformSize);
+    instanceTransformsBufferHandle = rg->RegisterExternalResource(&instanceTransformsBuffer);
     cmd->SubmitBuffer(&instanceTransformsBuffer, instanceTransforms.data, transformSize);
 
     cmd->SubmitBuffer(&partitionInfosBuffer, partitionInfos.data,

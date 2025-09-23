@@ -3244,7 +3244,7 @@ void CommandBuffer::CLASIndirect(CLASOpInput opInput, CLASOpMode opMode, CLASOpT
     commandsInfo.dstSizesArray.size          = dstSizesSize;
     commandsInfo.dstSizesArray.stride        = sizeof(u32);
 
-    commandsInfo.srcInfosArray.deviceAddress = device->GetDeviceAddress(srcInfosArray->buffer);
+    commandsInfo.srcInfosArray.deviceAddress = srcInfosArray;
     commandsInfo.srcInfosArray.size          = srcInfosArraySize;
     commandsInfo.srcInfosArray.stride        = srcInfosArrayStride;
 
@@ -3306,6 +3306,23 @@ void CommandBuffer::ComputeBLASSizes(GPUBuffer *srcInfosArray, GPUBuffer *scratc
                  dstSizes, srcInfosArray, srcInfosCount, srcInfosOffset);
 }
 
+void CommandBuffer::ComputeBLASSizes(u64 srcInfosArray, u32 srcInfosArraySize,
+                                     u64 scratchBuffer, u64 dstSizes, u32 dstSizesSize,
+                                     u64 srcInfosCount, u32 maxTotalClusterCount,
+                                     u32 maxClusterCountPerAccelerationStructure,
+                                     u32 maxAccelerationStructureCount)
+{
+    CLASOpInput opInput;
+    opInput.clusterBottomLevel.maxTotalClusterCount = maxTotalClusterCount;
+    opInput.clusterBottomLevel.maxClusterCountPerAccelerationStructure =
+        maxClusterCountPerAccelerationStructure;
+
+    opInput.maxAccelerationStructureCount = maxAccelerationStructureCount;
+
+    CLASIndirect(opInput, CLASOpMode::ComputeSizes, CLASOpType::BLAS, 0, scratchBuffer, 0, 0,
+                 dstSizes, dstSizesSize, srcInfosArray, srcInfosArraySize, srcInfosCount);
+}
+
 void CommandBuffer::ComputeCLASTemplateSizes(GPUBuffer *srcInfosArray,
                                              GPUBuffer *scratchBuffer, GPUBuffer *dstSizes,
                                              GPUBuffer *srcInfosCount, u32 srcInfosOffset,
@@ -3343,6 +3360,25 @@ void CommandBuffer::BuildCLAS(CLASOpMode opMode, GPUBuffer *dstImplicitData,
                  dstClasOffset);
 }
 
+void CommandBuffer::BuildCLAS(CLASOpMode opMode, u64 dstImplicitData, u64 scratchBuffer,
+                              u64 srcInfosArray, u32 srcInfosArraySize, u64 dstAddressesArray,
+                              u32 dstAddressesSize, u64 dstSizes, u32 dstSizesSize,
+                              u64 srcInfosCount, u32 maxNumTriangles, u32 maxNumVertices,
+                              u32 maxNumClusters)
+{
+    CLASOpInput opInput;
+    opInput.triangleClusters.maxNumTriangles     = maxNumTriangles;
+    opInput.triangleClusters.maxNumVertices      = maxNumVertices;
+    opInput.triangleClusters.maxClusterTriangles = MAX_CLUSTER_TRIANGLES;
+    opInput.triangleClusters.maxClusterVertices  = MAX_CLUSTER_TRIANGLE_VERTICES;
+
+    opInput.maxAccelerationStructureCount = maxNumClusters;
+
+    CLASIndirect(opInput, opMode, CLASOpType::CLAS, dstImplicitData, scratchBuffer,
+                 dstAddressesArray, dstAddressesSize, dstSizes, dstSizesSize, srcInfosArray,
+                 srcInfosArraySize, srcInfosCount);
+}
+
 void CommandBuffer::BuildClusterBLAS(CLASOpMode opMode, GPUBuffer *implicitBuffer,
                                      GPUBuffer *scratchBuffer, GPUBuffer *bottomLevelInfo,
                                      GPUBuffer *dstAddresses, GPUBuffer *dstSizes,
@@ -3359,6 +3395,25 @@ void CommandBuffer::BuildClusterBLAS(CLASOpMode opMode, GPUBuffer *implicitBuffe
 
     CLASIndirect(opInput, opMode, CLASOpType::BLAS, implicitBuffer, scratchBuffer,
                  dstAddresses, dstSizes, bottomLevelInfo, srcInfosCount, srcInfosOffset, 0);
+}
+
+void CommandBuffer::BuildClusterBLAS(CLASOpMode opMode, u64 dstImplicitData, u64 scratchBuffer,
+                                     u64 srcInfosArray, u32 srcInfosArraySize,
+                                     u64 dstAddressesArray, u32 dstAddressesSize, u64 dstSizes,
+                                     u32 dstSizesSize, u64 srcInfosCount,
+                                     u32 maxClusterCountPerAccelerationStructure,
+                                     u32 maxTotalClusterCount,
+                                     u32 maxAccelerationStructureCount)
+{
+    CLASOpInput opInput;
+    opInput.clusterBottomLevel.maxClusterCountPerAccelerationStructure =
+        maxClusterCountPerAccelerationStructure;
+    opInput.clusterBottomLevel.maxTotalClusterCount = maxTotalClusterCount;
+    opInput.maxAccelerationStructureCount           = maxAccelerationStructureCount;
+
+    CLASIndirect(opInput, opMode, CLASOpType::BLAS, dstImplicitData, scratchBuffer,
+                 dstAddressesArray, dstAddressesSize, dstSizes, dstSizesSize, srcInfosArray,
+                 srcInfosArraySize, srcInfosCount);
 }
 
 void CommandBuffer::MoveCLAS(CLASOpMode opMode, GPUBuffer *dstImplicitData,
@@ -3380,6 +3435,27 @@ void CommandBuffer::MoveCLAS(CLASOpMode opMode, GPUBuffer *dstImplicitData,
     CLASIndirect(opInput, opMode, CLASOpType::Move | CLASOpType::CLAS, dstImplicitData,
                  scratchBuffer, dstAddresses, dstSizes, srcInfosArray, srcInfosCount,
                  srcInfosOffset, dstClasOffset);
+}
+
+void CommandBuffer::MoveCLAS(CLASOpMode opMode, u64 dstImplicitData, u64 scratchBuffer,
+                             u64 srcInfosArray, u32 srcInfosArraySize, u64 dstAddressesArray,
+                             u32 dstAddressesSize, u32 dstSizes, u32 dstSizesSize,
+                             u64 srcInfosCount, int maxNumClusters, u64 maxMovedBytes,
+                             bool noMoveOverlap)
+{
+    Assert((opMode == CLASOpMode::ImplicitDestinations && dstImplicitData) ||
+           (opMode == CLASOpMode::ExplicitDestinations && !dstImplicitData));
+
+    CLASOpInput opInput;
+    opInput.moveObjects.maxNumClusters = maxNumClusters;
+    opInput.moveObjects.maxMovedBytes  = maxMovedBytes;
+    opInput.moveObjects.noMoveOverlap  = noMoveOverlap;
+
+    opInput.maxAccelerationStructureCount = maxNumClusters;
+
+    CLASIndirect(opInput, opMode, CLASOpType::Move | CLASOpType::CLAS, dstImplicitData,
+                 scratchBuffer, dstAddressesArray, dstAddressesSize, dstSizes, dstSizesSize,
+                 srcInfosArray, srcInfosArraySize, srcInfosCount);
 }
 
 void CommandBuffer::BuildCLASTemplates(CLASOpMode opMode, GPUBuffer *dstImplicitData,
@@ -3452,6 +3528,34 @@ void CommandBuffer::BuildPTLAS(GPUBuffer *ptlasBuffer, GPUBuffer *scratchBuffer,
     info.scratchData                  = device->GetDeviceAddress(scratchBuffer->buffer);
     info.srcInfos                     = device->GetDeviceAddress(srcInfos->buffer);
     info.srcInfosCount = device->GetDeviceAddress(srcInfosCount->buffer) + srcInfosOffset;
+
+    vkCmdBuildPartitionedAccelerationStructuresNV(buffer, &info);
+}
+
+void CommandBuffer::BuildPTLAS(u64 ptlasBuffer, u64 scratchBuffer, u64 srcInfosBuffer,
+                               u64 srcInfosCount, u32 instanceCount,
+                               u32 maxInstancesPerPartition, u32 partitionCount,
+                               u32 maxInstanceInGlobalPartitionCount)
+{
+
+    VkPartitionedAccelerationStructureInstancesInputNV inputInfo = {
+        VK_STRUCTURE_TYPE_PARTITIONED_ACCELERATION_STRUCTURE_INSTANCES_INPUT_NV};
+
+    inputInfo.flags         = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+    inputInfo.instanceCount = instanceCount;
+    inputInfo.maxInstancePerPartitionCount      = maxInstancesPerPartition;
+    inputInfo.partitionCount                    = partitionCount;
+    inputInfo.maxInstanceInGlobalPartitionCount = maxInstanceInGlobalPartitionCount;
+
+    VkBuildPartitionedAccelerationStructureInfoNV info = {
+        VK_STRUCTURE_TYPE_BUILD_PARTITIONED_ACCELERATION_STRUCTURE_INFO_NV};
+
+    info.input                        = inputInfo;
+    info.srcAccelerationStructureData = device->frameCount == 0 ? 0 : ptlasBuffer;
+    info.dstAccelerationStructureData = ptlasBuffer;
+    info.scratchData                  = scratchBuffer;
+    info.srcInfos                     = srcInfosBuffer;
+    info.srcInfosCount                = srcInfosCount;
 
     vkCmdBuildPartitionedAccelerationStructuresNV(buffer, &info);
 }
@@ -4002,9 +4106,9 @@ GPUAccelerationStructure CommandBuffer::CompactAS(QueryPool &pool,
 //     }
 // }
 
-void CommandBuffer::ClearBuffer(GPUBuffer *b, u32 val)
+void CommandBuffer::ClearBuffer(GPUBuffer *b, u32 val, u32 dstOffset, u32 dstSize)
 {
-    vkCmdFillBuffer(buffer, b->buffer, 0, VK_WHOLE_SIZE, val);
+    vkCmdFillBuffer(buffer, b->buffer, dstOffset, dstSize, val);
     b->lastStage  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
     b->lastAccess = VK_ACCESS_2_TRANSFER_WRITE_BIT;
 }

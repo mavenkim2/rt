@@ -11,9 +11,9 @@ StructuredBuffer<uint64_t> blasAddresses : register(t3);
 StructuredBuffer<BLASData> blasDatas : register(t4);
 RWStructuredBuffer<GPUInstance> gpuInstances : register(u5);
 StructuredBuffer<AABB> aabbs : register(t6);
-StructuredBuffer<VoxelAddressTableEntry> voxelAddressTable : register(t7);
-StructuredBuffer<GPUTransform> instanceTransforms : register(t8);
-StructuredBuffer<PartitionInfo> partitionInfos : register(t9);
+//StructuredBuffer<VoxelAddressTableEntry> voxelAddressTable : register(t7);
+StructuredBuffer<GPUTransform> instanceTransforms : register(t7);
+StructuredBuffer<PartitionInfo> partitionInfos : register(t8);
 
 #include "ptlas_write_instances.hlsli"
 
