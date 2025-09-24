@@ -1104,22 +1104,22 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                       RenderGraph *rg = GetRenderGraph();
                       u32 offset, size;
                       GPUBuffer *buffer = rg->GetBuffer(candidateClusters, offset, size);
-                      cmd->ClearBuffer(buffer, ~0u, offset, size);
+                      cmd->ClearBuffer(buffer, ~0u);
 
                       buffer = rg->GetBuffer(candidateNodes, offset, size);
-                      cmd->ClearBuffer(buffer, ~0u, offset, size);
+                      cmd->ClearBuffer(buffer, ~0u);
 
                       buffer = rg->GetBuffer(queue, offset, size);
-                      cmd->ClearBuffer(buffer, 0, offset, size);
+                      cmd->ClearBuffer(buffer, 0);
 
                       buffer = rg->GetBuffer(clasGlobals, offset, size);
-                      cmd->ClearBuffer(buffer, 0, offset, size);
+                      cmd->ClearBuffer(buffer, 0);
 
                       buffer = rg->GetBuffer(resourceBitVector, offset, size);
-                      cmd->ClearBuffer(buffer, 0, offset, size);
+                      cmd->ClearBuffer(buffer, 0);
 
                       buffer = rg->GetBuffer(maxMinLodLevelBuffer, offset, size);
-                      cmd->ClearBuffer(buffer, 0, offset, size);
+                      cmd->ClearBuffer(buffer, 0);
 
                       cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -1234,22 +1234,22 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                           RenderGraph *rg = GetRenderGraph();
                           u32 offset, size;
                           GPUBuffer *buffer = rg->GetBuffer(candidateClusters, offset, size);
-                          cmd->ClearBuffer(buffer, ~0u, offset, size);
+                          cmd->ClearBuffer(buffer, ~0u);
 
                           buffer = rg->GetBuffer(candidateNodes, offset, size);
-                          cmd->ClearBuffer(buffer, ~0u, offset, size);
+                          cmd->ClearBuffer(buffer, ~0u);
 
                           buffer = rg->GetBuffer(queue, offset, size);
-                          cmd->ClearBuffer(buffer, 0, offset, size);
+                          cmd->ClearBuffer(buffer, 0);
 
                           buffer = rg->GetBuffer(clasGlobals, offset, size);
-                          cmd->ClearBuffer(buffer, 0, offset, size);
+                          cmd->ClearBuffer(buffer, 0);
 
                           buffer = rg->GetBuffer(resourceBitVector, offset, size);
-                          cmd->ClearBuffer(buffer, 0, offset, size);
+                          cmd->ClearBuffer(buffer, 0);
 
                           buffer = rg->GetBuffer(maxMinLodLevelBuffer, offset, size);
-                          cmd->ClearBuffer(buffer, 0, offset, size);
+                          cmd->ClearBuffer(buffer, 0);
 
                           cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -1392,94 +1392,109 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         u64 ptlasAddress =
             device->GetDeviceAddress(virtualGeometryManager.tlasAccelBuffer.buffer);
 
+        // TODO: not adding the handle of all of the barriers. maybe will need to if
+        // automatic synchronization is done in the future
         rg->StartPass(
-            5, [&layout, &ptlasAddress, &rts = rts, &pushConstant, &pc, bindPoint, targetWidth,
-                targetHeight, &scene = sceneTransferBuffers[currentBuffer].buffer,
-                &debug = shaderDebugBuffers[currentBuffer].buffer, &materialBuffer,
-                &faceDataBuffer, &virtualTextureManager, &virtualGeometryManager,
-                imageHandle = image, imageOutHandle = imageOut,
-                depthBufferHandle = depthBuffer, normalRoughnessHandle = normalRoughness,
-                diffuseAlbedoHandle = diffuseAlbedo, specularAlbedoHandle = specularAlbedo,
-                specularHitDistanceHandle = specularHitDistance](CommandBuffer *cmd) {
-                RenderGraph *rg               = GetRenderGraph();
-                GPUImage *image               = rg->GetImage(imageHandle);
-                GPUImage *imageOut            = rg->GetImage(imageOutHandle);
-                GPUImage *depthBuffer         = rg->GetImage(depthBufferHandle);
-                GPUImage *normalRoughness     = rg->GetImage(normalRoughnessHandle);
-                GPUImage *diffuseAlbedo       = rg->GetImage(diffuseAlbedoHandle);
-                GPUImage *specularAlbedo      = rg->GetImage(specularAlbedoHandle);
-                GPUImage *specularHitDistance = rg->GetImage(specularHitDistanceHandle);
+              7,
+              [&layout, &ptlasAddress, &rts = rts, &pushConstant, &pc, bindPoint, targetWidth,
+               targetHeight, &scene = sceneTransferBuffers[currentBuffer].buffer,
+               &debug = shaderDebugBuffers[currentBuffer].buffer, &materialBuffer,
+               &faceDataBuffer, &virtualTextureManager, &virtualGeometryManager,
+               imageHandle = image, imageOutHandle = imageOut, depthBufferHandle = depthBuffer,
+               normalRoughnessHandle = normalRoughness, diffuseAlbedoHandle = diffuseAlbedo,
+               specularAlbedoHandle      = specularAlbedo,
+               specularHitDistanceHandle = specularHitDistance](CommandBuffer *cmd) {
+                  RenderGraph *rg               = GetRenderGraph();
+                  GPUImage *image               = rg->GetImage(imageHandle);
+                  GPUImage *imageOut            = rg->GetImage(imageOutHandle);
+                  GPUImage *depthBuffer         = rg->GetImage(depthBufferHandle);
+                  GPUImage *normalRoughness     = rg->GetImage(normalRoughnessHandle);
+                  GPUImage *diffuseAlbedo       = rg->GetImage(diffuseAlbedoHandle);
+                  GPUImage *specularAlbedo      = rg->GetImage(specularAlbedoHandle);
+                  GPUImage *specularHitDistance = rg->GetImage(specularHitDistanceHandle);
 
-                cmd->Barrier(image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                             VK_PIPELINE_STAGE_2_NONE,
-                             VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_NONE,
-                             VK_ACCESS_2_NONE);
-                cmd->Barrier(imageOut, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                             VK_PIPELINE_STAGE_2_NONE,
-                             VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_NONE,
-                             VK_ACCESS_2_NONE);
-                cmd->Barrier(depthBuffer, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                             VK_PIPELINE_STAGE_2_NONE,
-                             VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_NONE,
-                             VK_ACCESS_2_NONE);
-                cmd->Barrier(normalRoughness, VK_IMAGE_LAYOUT_UNDEFINED,
-                             VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_NONE,
-                             VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_NONE,
-                             VK_ACCESS_2_NONE);
-                cmd->Barrier(diffuseAlbedo, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                             VK_PIPELINE_STAGE_2_NONE,
-                             VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_NONE,
-                             VK_ACCESS_2_NONE);
-                cmd->Barrier(specularAlbedo, VK_IMAGE_LAYOUT_UNDEFINED,
-                             VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_NONE,
-                             VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_NONE,
-                             VK_ACCESS_2_NONE);
-                cmd->Barrier(specularHitDistance, VK_IMAGE_LAYOUT_UNDEFINED,
-                             VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_NONE,
-                             VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_NONE,
-                             VK_ACCESS_2_NONE);
-                cmd->FlushBarriers();
+                  cmd->Barrier(image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                               VK_PIPELINE_STAGE_2_NONE,
+                               VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                               VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_WRITE_BIT);
+                  cmd->Barrier(imageOut, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                               VK_PIPELINE_STAGE_2_NONE,
+                               VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                               VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_WRITE_BIT);
+                  cmd->Barrier(depthBuffer, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                               VK_PIPELINE_STAGE_2_NONE,
+                               VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                               VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_WRITE_BIT);
+                  cmd->Barrier(normalRoughness, VK_IMAGE_LAYOUT_UNDEFINED,
+                               VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_NONE,
+                               VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                               VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_WRITE_BIT);
+                  cmd->Barrier(diffuseAlbedo, VK_IMAGE_LAYOUT_UNDEFINED,
+                               VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_NONE,
+                               VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                               VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_WRITE_BIT);
+                  cmd->Barrier(specularAlbedo, VK_IMAGE_LAYOUT_UNDEFINED,
+                               VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_NONE,
+                               VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                               VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_WRITE_BIT);
+                  cmd->Barrier(specularHitDistance, VK_IMAGE_LAYOUT_UNDEFINED,
+                               VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_NONE,
+                               VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                               VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_WRITE_BIT);
+                  cmd->FlushBarriers();
 
-                cmd->BindPipeline(bindPoint, rts.pipeline);
+                  cmd->BindPipeline(bindPoint, rts.pipeline);
 
-                cmd->StartBinding(bindPoint, rts.pipeline, &layout)
-                    // .Bind(&tlas.as)
-                    .Bind(&ptlasAddress)
-                    .Bind(image)
-                    .Bind(&scene)
-                    .Bind(&materialBuffer)
-                    .Bind(&virtualTextureManager.pageTable)
-                    .Bind(&virtualTextureManager.gpuPhysicalPool)
-                    .Bind(&debug)
-                    .Bind(&virtualGeometryManager.clusterPageDataBuffer)
-                    .Bind(&faceDataBuffer)
-                    .Bind(&virtualGeometryManager.instancesBuffer)
-                    .Bind(&virtualGeometryManager.resourceTruncatedEllipsoidsBuffer)
-                    .Bind(&virtualGeometryManager.instanceTransformsBuffer)
-                    .Bind(&virtualGeometryManager.partitionInfosBuffer)
-                    // .Bind(&virtualGeometryManager.clasGlobalsBuffer)
-                    .Bind(depthBuffer)
-                    .Bind(normalRoughness)
-                    .Bind(diffuseAlbedo)
-                    .Bind(specularAlbedo)
-                    .Bind(specularHitDistance)
-                    // .Bind(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
-                    .PushConstants(&pushConstant, &pc)
-                    .End();
+                  cmd->StartBinding(bindPoint, rts.pipeline, &layout)
+                      // .Bind(&tlas.as)
+                      .Bind(&ptlasAddress)
+                      .Bind(image)
+                      .Bind(&scene)
+                      .Bind(&materialBuffer)
+                      .Bind(&virtualTextureManager.pageTable)
+                      .Bind(&virtualTextureManager.gpuPhysicalPool)
+                      .Bind(&debug)
+                      .Bind(&virtualGeometryManager.clusterPageDataBuffer)
+                      .Bind(&faceDataBuffer)
+                      .Bind(&virtualGeometryManager.instancesBuffer)
+                      .Bind(&virtualGeometryManager.resourceTruncatedEllipsoidsBuffer)
+                      .Bind(&virtualGeometryManager.instanceTransformsBuffer)
+                      .Bind(&virtualGeometryManager.partitionInfosBuffer)
+                      // .Bind(&virtualGeometryManager.clasGlobalsBuffer)
+                      .Bind(depthBuffer)
+                      .Bind(normalRoughness)
+                      .Bind(diffuseAlbedo)
+                      .Bind(specularAlbedo)
+                      .Bind(specularHitDistance)
+                      // .Bind(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
+                      .PushConstants(&pushConstant, &pc)
+                      .End();
 
-                int beginIndex = TIMED_GPU_RANGE_BEGIN(cmd, "ray trace");
-                // cmd->Dispatch(dispatchDimX, dispatchDimY, 1);
-                cmd->TraceRays(&rts, targetWidth, targetHeight, 1);
-                TIMED_RANGE_END(beginIndex);
-            });
+                  int beginIndex = TIMED_GPU_RANGE_BEGIN(cmd, "ray trace");
+                  // cmd->Dispatch(dispatchDimX, dispatchDimY, 1);
+                  cmd->TraceRays(&rts, targetWidth, targetHeight, 1);
+                  TIMED_RANGE_END(beginIndex);
+              })
+            .AddHandle(image, ResourceUsageType::Write)
+            .AddHandle(imageOut, ResourceUsageType::Write)
+            .AddHandle(depthBuffer, ResourceUsageType::Write)
+            .AddHandle(normalRoughness, ResourceUsageType::Write)
+            .AddHandle(diffuseAlbedo, ResourceUsageType::Write)
+            .AddHandle(specularAlbedo, ResourceUsageType::Write)
+            .AddHandle(specularHitDistance, ResourceUsageType::Write);
 
         rg->StartComputePass(
               mvecPipeline, mvecLayout, 3,
-              [depthBufferHandle = depthBuffer, targetWidth,
-               targetHeight](CommandBuffer *cmd) {
-                  RenderGraph *rg       = GetRenderGraph();
-                  GPUImage *depthBuffer = rg->GetImage(depthBufferHandle);
+              [depthBufferHandle = depthBuffer, motionVectorHandle = motionVectorBuffer,
+               targetWidth, targetHeight](CommandBuffer *cmd) {
+                  RenderGraph *rg              = GetRenderGraph();
+                  GPUImage *motionVectorBuffer = rg->GetImage(motionVectorHandle);
+                  GPUImage *depthBuffer        = rg->GetImage(depthBufferHandle);
                   device->BeginEvent(cmd, "Motion Vectors");
+                  cmd->Barrier(motionVectorBuffer, VK_IMAGE_LAYOUT_UNDEFINED,
+                               VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_NONE,
+                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_NONE,
+                               VK_ACCESS_2_SHADER_WRITE_BIT);
                   cmd->Barrier(depthBuffer, VK_IMAGE_LAYOUT_GENERAL,
                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,

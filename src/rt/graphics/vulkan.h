@@ -903,8 +903,8 @@ struct CommandBuffer
                                          u32 maxInstances);
     GPUAccelerationStructurePayload BuildCustomBLAS(GPUBuffer *aabbsBuffer, u32 numAabbs);
     void BuildCustomBLAS(StaticArray<AccelBuildInfo> &blasBuildInfos);
-    void ClearBuffer(GPUBuffer *b, u32 val = 0, u32 dstOffset = 0,
-                     u32 dstSize = VK_WHOLE_SIZE);
+    void ClearBuffer(GPUBuffer *b, u32 val = 0, uint64_t dstOffset = 0,
+                     uint64_t dstSize = VK_WHOLE_SIZE);
     void ClearImage(GPUImage *image, u32 value, u32 baseMip = 0,
                     u32 numMips = VK_REMAINING_MIP_LEVELS, u32 baseLayer = 0,
                     u32 numLayers = VK_REMAINING_ARRAY_LAYERS);
@@ -1127,8 +1127,7 @@ struct Vulkan
                            MemoryUsage usage = MemoryUsage::GPU_ONLY);
     GPUImage CreateImage(ImageDesc desc, int numSubresources = -1, int ownedQueue = -1);
     GPUBuffer CreateAliasedBuffer(VkBufferUsageFlags flags, size_t totalSize);
-    GPUImage CreateAliasedImage(ImageDesc desc, int numSubresources = -1,
-                                int ownedQueues = -1);
+    GPUImage CreateAliasedImage(ImageDesc desc);
     VmaAllocation AllocateMemory(MemoryRequirements &r);
     void FreeMemory(VmaAllocation alloc);
     void BindBufferMemory(VmaAllocation alloc, VkBuffer buffer, uint64_t offset = 0);

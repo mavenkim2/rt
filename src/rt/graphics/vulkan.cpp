@@ -1717,7 +1717,7 @@ VmaAllocation Vulkan::AllocateMemory(MemoryRequirements &r)
     req.alignment      = r.alignment;
 
     VmaAllocationCreateInfo info = {};
-    info.usage                   = VMA_MEMORY_USAGE_AUTO;
+    info.preferredFlags          = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 
     VmaAllocation alloc;
     VK_CHECK(vmaAllocateMemory(allocator, &req, &info, &alloc, 0));
@@ -1774,7 +1774,7 @@ GPUBuffer Vulkan::CreateAliasedBuffer(VkBufferUsageFlags flags, size_t totalSize
     return buffer;
 }
 
-GPUImage Vulkan::CreateAliasedImage(ImageDesc desc, int numSubresources, int ownedQueues)
+GPUImage Vulkan::CreateAliasedImage(ImageDesc desc)
 {
     GPUImage image  = {};
     image.desc      = desc;
@@ -1818,32 +1818,15 @@ GPUImage Vulkan::CreateAliasedImage(ImageDesc desc, int numSubresources, int own
     u32 *imageQueueFamilies   = PushArrayNoZero(scratch.temp.arena, u32, families.Length());
     u32 imageQueueFamilyCount = 0;
 
-    if (ownedQueues == -1 && families.Length() > 1)
+    if (families.Length() > 1)
     {
         imageInfo.sharingMode           = VK_SHARING_MODE_CONCURRENT;
-        imageInfo.queueFamilyIndexCount = (u32)families.Length();
-        imageInfo.pQueueFamilyIndices   = families.data;
-    }
-    else if (ownedQueues == -1 && families.Length() == 1)
-    {
-        imageInfo.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
-        imageInfo.queueFamilyIndexCount = (u32)families.Length();
+        imageInfo.queueFamilyIndexCount = families.Length();
         imageInfo.pQueueFamilyIndices   = families.data;
     }
     else
     {
         imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        for (u32 queueType = (u32)QueueType_Graphics; queueType < (u32)QueueType_Count;
-             queueType++)
-        {
-            if ((ownedQueues & (1u << (u32)queueType)) != 0)
-            {
-                u32 family = GetQueueFamily((QueueType)queueType);
-                imageQueueFamilies[imageQueueFamilyCount++] = family;
-            }
-        }
-        imageInfo.queueFamilyIndexCount = imageQueueFamilyCount;
-        imageInfo.pQueueFamilyIndices   = imageQueueFamilies;
     }
 
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -1867,11 +1850,12 @@ GPUImage Vulkan::CreateAliasedImage(ImageDesc desc, int numSubresources, int own
     memReq.bits      = req.memoryTypeBits;
     memReq.size      = req.size;
 
-    image.req       = memReq;
-    numSubresources = numSubresources == -1 ? desc.numMips : numSubresources;
-    if (numSubresources)
-        image.subresources = StaticArray<GPUImage::Subresource>(arena, numSubresources);
-    CreateSubresource(&image);
+    image.req = memReq;
+
+    // numSubresources = numSubresources == -1 ? desc.numMips : numSubresources;
+    // if (numSubresources)
+    //     image.subresources = StaticArray<GPUImage::Subresource>(arena, numSubresources);
+    // CreateSubresource(&image);
 
     image.lastPipeline = VK_PIPELINE_STAGE_2_NONE;
     image.lastLayout   = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -2078,7 +2062,6 @@ void Vulkan::DestroyImage(GPUImage *image)
 
 void Vulkan::DestroyImageHandles(GPUImage *image)
 {
-    vmaDestroyImage(allocator, image->image, image->allocation);
     if (image->imageView) vkDestroyImageView(device, image->imageView, 0);
     for (GPUImage::Subresource &s : image->subresources)
     {
@@ -2188,6 +2171,7 @@ u64 Vulkan::GetMinAlignment(VkBufferUsageFlags flags)
         minAlignment = Max(minAlignment, 256ull);
     }
     Assert(minAlignment != 0);
+
     return minAlignment;
 }
 
@@ -4300,7 +4284,7 @@ GPUAccelerationStructure CommandBuffer::CompactAS(QueryPool &pool,
 //     }
 // }
 
-void CommandBuffer::ClearBuffer(GPUBuffer *b, u32 val, u32 dstOffset, u32 dstSize)
+void CommandBuffer::ClearBuffer(GPUBuffer *b, u32 val, uint64_t dstOffset, uint64_t dstSize)
 {
     vkCmdFillBuffer(buffer, b->buffer, dstOffset, dstSize, val);
     b->lastStage  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;

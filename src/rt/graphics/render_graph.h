@@ -56,6 +56,7 @@ struct RenderGraphResource
             GPUBuffer buffer;
         };
     };
+    u32 alignment;
     u32 size;
 
     // Frame temp
@@ -74,7 +75,8 @@ struct ResidentResource
 {
     u32 lastMemReqBits;
     u32 memReqBits;
-    VmaAllocation alloc = {};
+    VmaAllocation alloc;
+    bool isAlloc;
 
     // VkBuffer buffer;
     // VkBufferUsageFlags2 bufferUsage;
@@ -126,7 +128,7 @@ struct RenderGraph
                                                               ResourceFlags::Buffer);
     ResourceHandle CreateImageResource(string name, ImageDesc desc,
                                        ResourceFlags flags = ResourceFlags::Transient |
-                                                             ResourceFlags::Buffer);
+                                                             ResourceFlags::Image);
     void UpdateBufferResource(ResourceHandle handle, VkBufferUsageFlags2 usageFlags, u32 size);
     ResourceHandle RegisterExternalResource(string name, GPUBuffer *buffer);
     ResourceHandle RegisterExternalResource(GPUImage *image);
