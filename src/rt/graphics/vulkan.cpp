@@ -1709,6 +1709,176 @@ GPUBuffer Vulkan::CreateBuffer(VkBufferUsageFlags flags, size_t totalSize, Memor
     return buffer;
 }
 
+VmaAllocation Vulkan::AllocateMemory(MemoryRequirements &r)
+{
+    VkMemoryRequirements req;
+    req.size           = r.size;
+    req.memoryTypeBits = r.bits;
+    req.alignment      = r.alignment;
+
+    VmaAllocationCreateInfo info = {};
+    info.usage                   = VMA_MEMORY_USAGE_AUTO;
+
+    VmaAllocation alloc;
+    VK_CHECK(vmaAllocateMemory(allocator, &req, &info, &alloc, 0));
+    return alloc;
+}
+
+void Vulkan::FreeMemory(VmaAllocation alloc) { vmaFreeMemory(allocator, alloc); }
+
+void Vulkan::BindBufferMemory(VmaAllocation alloc, VkBuffer buffer, uint64_t offset)
+{
+    vmaBindBufferMemory2(allocator, alloc, offset, buffer, 0);
+}
+void Vulkan::BindImageMemory(VmaAllocation alloc, VkImage image, uint64_t offset)
+{
+    vmaBindImageMemory2(allocator, alloc, offset, image, 0);
+}
+
+bool Vulkan::IsAllocated(VmaAllocation alloc)
+{
+    bool result = alloc->GetMemory();
+    return result;
+}
+
+GPUBuffer Vulkan::CreateAliasedBuffer(VkBufferUsageFlags flags, size_t totalSize)
+{
+    GPUBuffer buffer = {};
+    buffer.size      = totalSize;
+
+    VkBufferCreateInfo createInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    createInfo.size               = totalSize;
+    createInfo.usage |=
+        flags | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+
+    if (families.Length() > 1)
+    {
+        createInfo.sharingMode           = VK_SHARING_MODE_CONCURRENT;
+        createInfo.queueFamilyIndexCount = families.Length();
+        createInfo.pQueueFamilyIndices   = families.data;
+    }
+    else
+    {
+        createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    }
+
+    VK_CHECK(vkCreateBuffer(device, &createInfo, 0, &buffer.buffer));
+
+    VkMemoryRequirements r;
+    vkGetBufferMemoryRequirements(device, buffer.buffer, &r);
+
+    buffer.req.size      = r.size;
+    buffer.req.alignment = r.alignment;
+    buffer.req.bits      = r.memoryTypeBits;
+
+    return buffer;
+}
+
+GPUImage Vulkan::CreateAliasedImage(ImageDesc desc, int numSubresources, int ownedQueues)
+{
+    GPUImage image  = {};
+    image.desc      = desc;
+    image.aspect    = VK_IMAGE_ASPECT_COLOR_BIT;
+    image.imageView = VK_NULL_HANDLE;
+
+    VkImageCreateInfo imageInfo = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    switch (desc.imageType)
+    {
+        case ImageType::Type1D:
+        case ImageType::Array1D:
+        {
+            imageInfo.imageType = VK_IMAGE_TYPE_1D;
+        }
+        break;
+        case ImageType::Type2D:
+        case ImageType::Array2D:
+        {
+            imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        }
+        break;
+        case ImageType::Cubemap:
+        {
+            imageInfo.imageType = VK_IMAGE_TYPE_3D;
+        }
+        break;
+        default: Assert(0);
+    }
+    imageInfo.extent.width  = desc.width;
+    imageInfo.extent.height = desc.height;
+    imageInfo.extent.depth  = desc.depth;
+    imageInfo.mipLevels     = desc.numMips;
+    imageInfo.arrayLayers   = desc.numLayers;
+    imageInfo.format        = desc.format;
+    imageInfo.tiling        = desc.tiling;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage         = desc.imageUsage;
+    imageInfo.samples       = VK_SAMPLE_COUNT_1_BIT;
+
+    ScratchArena scratch;
+    u32 *imageQueueFamilies   = PushArrayNoZero(scratch.temp.arena, u32, families.Length());
+    u32 imageQueueFamilyCount = 0;
+
+    if (ownedQueues == -1 && families.Length() > 1)
+    {
+        imageInfo.sharingMode           = VK_SHARING_MODE_CONCURRENT;
+        imageInfo.queueFamilyIndexCount = (u32)families.Length();
+        imageInfo.pQueueFamilyIndices   = families.data;
+    }
+    else if (ownedQueues == -1 && families.Length() == 1)
+    {
+        imageInfo.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
+        imageInfo.queueFamilyIndexCount = (u32)families.Length();
+        imageInfo.pQueueFamilyIndices   = families.data;
+    }
+    else
+    {
+        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        for (u32 queueType = (u32)QueueType_Graphics; queueType < (u32)QueueType_Count;
+             queueType++)
+        {
+            if ((ownedQueues & (1u << (u32)queueType)) != 0)
+            {
+                u32 family = GetQueueFamily((QueueType)queueType);
+                imageQueueFamilies[imageQueueFamilyCount++] = family;
+            }
+        }
+        imageInfo.queueFamilyIndexCount = imageQueueFamilyCount;
+        imageInfo.pQueueFamilyIndices   = imageQueueFamilies;
+    }
+
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.flags   = VK_IMAGE_CREATE_ALIAS_BIT;
+
+    VkImageFormatProperties imageFormatProperties;
+
+    VkResult result = vkGetPhysicalDeviceImageFormatProperties(
+        physicalDevice, imageInfo.format, imageInfo.imageType, imageInfo.tiling,
+        imageInfo.usage, imageInfo.flags, &imageFormatProperties);
+
+    ErrorExit(result == VK_SUCCESS, "Image format properties error: %u\n", result);
+
+    VK_CHECK(vkCreateImage(device, &imageInfo, 0, &image.image));
+
+    VkMemoryRequirements req;
+    vkGetImageMemoryRequirements(device, image.image, &req);
+
+    MemoryRequirements memReq;
+    memReq.alignment = req.alignment;
+    memReq.bits      = req.memoryTypeBits;
+    memReq.size      = req.size;
+
+    image.req       = memReq;
+    numSubresources = numSubresources == -1 ? desc.numMips : numSubresources;
+    if (numSubresources)
+        image.subresources = StaticArray<GPUImage::Subresource>(arena, numSubresources);
+    CreateSubresource(&image);
+
+    image.lastPipeline = VK_PIPELINE_STAGE_2_NONE;
+    image.lastLayout   = VK_IMAGE_LAYOUT_UNDEFINED;
+    image.lastAccess   = VK_ACCESS_2_NONE;
+    return image;
+}
+
 GPUImage Vulkan::CreateImage(ImageDesc desc, int numSubresources, int ownedQueues)
 {
     GPUImage image  = {};
@@ -1894,9 +2064,27 @@ void Vulkan::DestroyBuffer(GPUBuffer *buffer)
     vmaDestroyBuffer(allocator, buffer->buffer, buffer->allocation);
 }
 
+void Vulkan::DestroyBuffer(VkBuffer buffer) { vkDestroyBuffer(device, buffer, 0); }
+
 void Vulkan::DestroyImage(GPUImage *image)
 {
+    if (image->imageView) vkDestroyImageView(device, image->imageView, 0);
+    for (GPUImage::Subresource &s : image->subresources)
+    {
+        vkDestroyImageView(device, s.imageView, 0);
+    }
     vmaDestroyImage(allocator, image->image, image->allocation);
+}
+
+void Vulkan::DestroyImageHandles(GPUImage *image)
+{
+    vmaDestroyImage(allocator, image->image, image->allocation);
+    if (image->imageView) vkDestroyImageView(device, image->imageView, 0);
+    for (GPUImage::Subresource &s : image->subresources)
+    {
+        vkDestroyImageView(device, s.imageView, 0);
+    }
+    vkDestroyImage(device, image->image, 0);
 }
 
 void Vulkan::DestroyAccelerationStructure(GPUAccelerationStructure *as)
@@ -4231,7 +4419,8 @@ DLSSTargets Vulkan::InitializeDLSSTargets(GPUImage *inColor, GPUImage *inDiffuse
     DLSSTargets targets;
     targets.diffuseAlbedo              = {sl::ResourceType::eTex2d, inDiffuseAlbedo->image,
                                           inDiffuseAlbedo->allocation->GetMemory(),
-                                          inDiffuseAlbedo->imageView, VK_IMAGE_LAYOUT_GENERAL};
+                                          inDiffuseAlbedo->imageView,
+                                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     targets.diffuseAlbedo.width        = inDiffuseAlbedo->desc.width;
     targets.diffuseAlbedo.height       = inDiffuseAlbedo->desc.height;
     targets.diffuseAlbedo.nativeFormat = inDiffuseAlbedo->desc.format;
@@ -4242,7 +4431,8 @@ DLSSTargets Vulkan::InitializeDLSSTargets(GPUImage *inColor, GPUImage *inDiffuse
 
     targets.specularAlbedo              = {sl::ResourceType::eTex2d, inSpecularAlbedo->image,
                                            inSpecularAlbedo->allocation->GetMemory(),
-                                           inSpecularAlbedo->imageView, VK_IMAGE_LAYOUT_GENERAL};
+                                           inSpecularAlbedo->imageView,
+                                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     targets.specularAlbedo.width        = inSpecularAlbedo->desc.width;
     targets.specularAlbedo.height       = inSpecularAlbedo->desc.height;
     targets.specularAlbedo.nativeFormat = inSpecularAlbedo->desc.format;
@@ -4253,7 +4443,8 @@ DLSSTargets Vulkan::InitializeDLSSTargets(GPUImage *inColor, GPUImage *inDiffuse
 
     targets.normalRoughness              = {sl::ResourceType::eTex2d, inNormalRoughness->image,
                                             inNormalRoughness->allocation->GetMemory(),
-                                            inNormalRoughness->imageView, VK_IMAGE_LAYOUT_GENERAL};
+                                            inNormalRoughness->imageView,
+                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     targets.normalRoughness.width        = inNormalRoughness->desc.width;
     targets.normalRoughness.height       = inNormalRoughness->desc.height;
     targets.normalRoughness.nativeFormat = inNormalRoughness->desc.format;
@@ -4264,7 +4455,7 @@ DLSSTargets Vulkan::InitializeDLSSTargets(GPUImage *inColor, GPUImage *inDiffuse
 
     targets.colorIn              = {sl::ResourceType::eTex2d, inColor->image,
                                     inColor->allocation->GetMemory(), inColor->imageView,
-                                    VK_IMAGE_LAYOUT_GENERAL};
+                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     targets.colorIn.width        = inColor->desc.width;
     targets.colorIn.height       = inColor->desc.height;
     targets.colorIn.nativeFormat = inColor->desc.format;
@@ -4273,7 +4464,7 @@ DLSSTargets Vulkan::InitializeDLSSTargets(GPUImage *inColor, GPUImage *inDiffuse
     targets.colorIn.usage        = inColor->desc.imageUsage;
     targets.colorIn.flags        = 0;
     targets.mvec = {sl::ResourceType::eTex2d, inMvec->image, inMvec->allocation->GetMemory(),
-                    inMvec->imageView, VK_IMAGE_LAYOUT_GENERAL};
+                    inMvec->imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     targets.mvec.width        = inMvec->desc.width;
     targets.mvec.height       = inMvec->desc.height;
     targets.mvec.nativeFormat = inMvec->desc.format;
@@ -4295,7 +4486,8 @@ DLSSTargets Vulkan::InitializeDLSSTargets(GPUImage *inColor, GPUImage *inDiffuse
 
     targets.specularHitDistance = {sl::ResourceType::eTex2d, inSpecularHitDistance->image,
                                    inSpecularHitDistance->allocation->GetMemory(),
-                                   inSpecularHitDistance->imageView, VK_IMAGE_LAYOUT_GENERAL};
+                                   inSpecularHitDistance->imageView,
+                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     targets.specularHitDistance.width        = inSpecularHitDistance->desc.width;
     targets.specularHitDistance.height       = inSpecularHitDistance->desc.height;
     targets.specularHitDistance.nativeFormat = inSpecularHitDistance->desc.format;

@@ -26,9 +26,8 @@ ResourceHandle RenderGraph::CreateBufferResource(string name, VkBufferUsageFlags
 {
     RenderGraphResource resource = {};
     resource.name                = PushStr8Copy(arena, name);
-    resource.bufferSize          = size;
+    resource.size                = size;
     resource.bufferUsageFlags    = usageFlags;
-    resource.alignment           = device->GetMinAlignment(usageFlags);
     resource.flags               = flags;
 
     ResourceHandle handle;
@@ -41,19 +40,33 @@ ResourceHandle RenderGraph::CreateBufferResource(string name, VkBufferUsageFlags
 void RenderGraph::UpdateBufferResource(ResourceHandle handle, VkBufferUsageFlags2 usageFlags,
                                        u32 size)
 {
-    resources[handle.index].bufferSize       = size;
+    resources[handle.index].size             = size;
     resources[handle.index].bufferUsageFlags = usageFlags;
+}
+
+ResourceHandle RenderGraph::CreateImageResource(string name, ImageDesc desc,
+                                                ResourceFlags flags)
+{
+    RenderGraphResource resource = {};
+    resource.name                = PushStr8Copy(arena, name);
+    resource.imageDesc           = desc;
+    resource.flags               = flags;
+
+    ResourceHandle handle;
+    handle.index = resources.Length();
+
+    resources.Push(resource);
+    return handle;
 }
 
 ResourceHandle RenderGraph::RegisterExternalResource(string name, GPUBuffer *buffer)
 {
     RenderGraphResource resource = {};
     resource.name                = PushStr8Copy(arena, name);
-    resource.bufferSize          = buffer->size;
+    resource.size                = buffer->size;
     resource.bufferUsageFlags    = 0;
-    resource.alignment           = 0;
-    resource.flags               = ResourceFlags::External;
-    resource.bufferHandle        = buffer->buffer;
+    resource.flags               = ResourceFlags::External | ResourceFlags::Buffer;
+    resource.buffer              = *buffer;
 
     ResourceHandle handle;
     handle.index = resources.Length();
@@ -65,8 +78,7 @@ ResourceHandle RenderGraph::RegisterExternalResource(string name, GPUBuffer *buf
 ResourceHandle RenderGraph::RegisterExternalResource(GPUImage *image)
 {
     RenderGraphResource resource = {};
-    resource.alignment           = 0;
-    resource.flags               = ResourceFlags::External;
+    resource.flags               = ResourceFlags::External | ResourceFlags::Image;
 
     ResourceHandle handle;
     handle.index = resources.Length();
@@ -140,10 +152,8 @@ Pass &RenderGraph::StartIndirectComputePass(string name, VkPipeline pipeline,
         cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
                                 pass.layout->pipelineLayout);
         device->BeginEvent(cmd, str);
-        RenderGraphResource &resource      = resources[indirectBuffer.index];
-        ResidentResource &residentResource = residentResources[resource.residentResourceIndex];
-        cmd->DispatchIndirect(&residentResource.gpuBuffer,
-                              resource.aliasOffset + indirectBufferOffset);
+        RenderGraphResource &resource = resources[indirectBuffer.index];
+        cmd->DispatchIndirect(&resource.buffer, indirectBufferOffset);
 
         func(cmd);
         device->EndEvent(cmd);
@@ -176,17 +186,13 @@ void RenderGraph::BindResources(Pass &pass, DescriptorSet &ds)
     for (ResourceHandle &handle : pass.resourceHandles)
     {
         RenderGraphResource &resource = resources[handle.index];
-        if (resource.flags == ResourceFlags::Transient)
+        if (IsBuffer(resource))
         {
-            ResidentResource &residentResource =
-                residentResources[resource.residentResourceIndex];
-            ds.Bind(&residentResource.gpuBuffer, resource.aliasOffset, resource.bufferSize);
+            ds.Bind(&resource.buffer);
         }
-        else if (resource.flags == ResourceFlags::External)
+        else if (IsImage(resource))
         {
-            GPUBuffer temp = {};
-            temp.buffer    = resource.bufferHandle;
-            ds.Bind(&temp);
+            ds.Bind(&resource.image);
         }
     }
 }
@@ -194,30 +200,68 @@ void RenderGraph::BindResources(Pass &pass, DescriptorSet &ds)
 GPUBuffer *RenderGraph::GetBuffer(ResourceHandle handle, u32 &offset, u32 &size)
 {
     RenderGraphResource &resource = resources[handle.index];
-    offset                        = resource.aliasOffset;
-    size                          = resource.bufferSize;
-    Assert(EnumHasAnyFlags(resource.flags, ResourceFlags::Transient));
-    return &residentResources[resource.residentResourceIndex].gpuBuffer;
+    offset                        = 0; // resource.aliasOffset;
+    size                          = resource.size;
+    Assert(EnumHasAllFlags(resource.flags, ResourceFlags::Transient | ResourceFlags::Buffer));
+    return &resource.buffer;
 }
 
 GPUBuffer *RenderGraph::GetBuffer(ResourceHandle handle, u32 &offset)
 {
     RenderGraphResource &resource = resources[handle.index];
-    offset                        = resource.aliasOffset;
-    Assert(EnumHasAnyFlags(resource.flags, ResourceFlags::Transient));
-    return &residentResources[resource.residentResourceIndex].gpuBuffer;
+    offset                        = 0; // resource.aliasOffset;
+    Assert(EnumHasAllFlags(resource.flags, ResourceFlags::Transient | ResourceFlags::Buffer));
+    return &resource.buffer;
 }
 
 GPUBuffer *RenderGraph::GetBuffer(ResourceHandle handle)
 {
     RenderGraphResource &resource = resources[handle.index];
-    Assert(EnumHasAnyFlags(resource.flags, ResourceFlags::Transient));
-    return &residentResources[resource.residentResourceIndex].gpuBuffer;
+    Assert(EnumHasAllFlags(resource.flags, ResourceFlags::Transient | ResourceFlags::Buffer));
+    return &resource.buffer;
+}
+
+GPUImage *RenderGraph::GetImage(ResourceHandle handle)
+{
+    RenderGraphResource &resource = resources[handle.index];
+    Assert(EnumHasAllFlags(resource.flags, ResourceFlags::Transient | ResourceFlags::Image));
+    return &resource.image;
 }
 
 void RenderGraph::Compile()
 {
     ScratchArena scratch;
+
+    for (RenderGraphResource &resource : resources)
+    {
+        if (EnumHasAllFlags(resource.flags, ResourceFlags::Image | ResourceFlags::Transient))
+        {
+            // TODO: don't do this every frame
+            if (resource.image.image)
+            {
+                device->DestroyImageHandles(&resource.image);
+            }
+            resource.image = device->CreateAliasedImage(resource.imageDesc);
+            resource.size  = resource.image.req.size;
+            // ResidentResource &resident = residentResources[resource.residentResourceIndex];
+            //
+            // resident.req.alignment = Max(resource.alignment, resident.req.alignment);
+            // resident.req.bits &= resource.image.req.bits;
+        }
+        else if (EnumHasAllFlags(resource.flags,
+                                 ResourceFlags::Buffer | ResourceFlags::Transient))
+        {
+            // TODO: don't do this every frame
+            if (resource.buffer.buffer)
+            {
+                device->DestroyBuffer(&resource.buffer);
+            }
+            resource.buffer =
+                device->CreateAliasedBuffer(resource.bufferUsageFlags, resource.size);
+            resource.size = resource.buffer.req.size;
+        }
+    }
+
     struct Handle
     {
         u32 sortKey;
@@ -233,15 +277,15 @@ void RenderGraph::Compile()
         RenderGraphResource &resource = resources[resourceIndex];
         if (EnumHasAnyFlags(resource.flags, ResourceFlags::External))
         {
-            externalSize += resource.bufferSize;
+            externalSize += resource.size;
         }
         if (resource.lifeTime.passStart == ~0u ||
             !EnumHasAnyFlags(resource.flags, ResourceFlags::Transient))
             continue;
 
-        unAliasedSize += resource.bufferSize;
+        unAliasedSize += resource.size;
         Handle handle;
-        handle.sortKey       = resource.bufferSize;
+        handle.sortKey       = resource.size;
         handle.resourceIndex = resourceIndex;
         handles.Push(handle);
     }
@@ -285,6 +329,23 @@ void RenderGraph::Compile()
         Handle &handle                = handles[handleIndex];
         RenderGraphResource &resource = resources[handle.resourceIndex];
 
+        u32 bits      = 0;
+        u32 alignment = 0;
+        if (IsBuffer(resource))
+        {
+            bits      = resource.buffer.req.bits;
+            alignment = resource.buffer.req.alignment;
+        }
+        else if (IsImage(resource))
+        {
+            bits      = resource.image.req.bits;
+            alignment = resource.image.req.alignment;
+        }
+        else
+        {
+            Assert(0);
+        }
+
         bool aliased = false;
         for (int residentHandleIndex = 0; residentHandleIndex < residentResources.Length();
              residentHandleIndex++)
@@ -294,16 +355,19 @@ void RenderGraph::Compile()
                     ? residentHandleIndex
                     : residentHandles[residentHandleIndex].resourceIndex;
             ResidentResource &residentResource = residentResources[residentResourceIndex];
-            if (residentResource.bufferSize < resource.bufferSize) continue;
+
+            if (residentResource.bufferSize < resource.size ||
+                ((residentResource.memReqBits & bits) == 0))
+                continue;
+
             std::vector<std::pair<u32, u32>> ranges;
             for (int resourceIndex = residentResource.start; resourceIndex != -1;)
             {
                 RenderGraphResource &otherResource = resources[resourceIndex];
                 if (Overlap(resource.lifeTime, otherResource.lifeTime) == 0)
                 {
-                    ranges.push_back(
-                        std::pair(otherResource.offset,
-                                  otherResource.aliasOffset + otherResource.bufferSize));
+                    ranges.push_back(std::pair(
+                        otherResource.offset, otherResource.aliasOffset + otherResource.size));
                 }
 
                 resourceIndex = otherResource.aliasNext;
@@ -338,10 +402,10 @@ void RenderGraph::Compile()
                     u32 begin = freeRanges[freeRangeIndex - 1].y;
                     u32 end   = freeRanges[freeRangeIndex].x;
 
-                    u32 alignedOffset = AlignPow2(begin, resource.alignment);
-                    if (alignedOffset + resource.bufferSize <= end)
+                    u32 alignedOffset = AlignPow2(begin, alignment);
+                    if (alignedOffset + resource.size <= end)
                     {
-                        u32 fit = end - begin - resource.bufferSize;
+                        u32 fit = end - begin - resource.size;
                         if (fit < bestFit)
                         {
                             offset      = begin;
@@ -352,18 +416,15 @@ void RenderGraph::Compile()
                 }
                 if (bestFit != ~0u)
                 {
-                    if ((residentResource.bufferUsage & resource.bufferUsageFlags) !=
-                        resource.bufferUsageFlags)
-                    {
-                        residentResource.dirty = true;
-                        residentResource.bufferUsage |= resource.bufferUsageFlags;
-                    }
                     resource.offset                = offset;
                     resource.aliasOffset           = aliasOffset;
                     resource.aliasNext             = residentResource.start;
                     resource.residentResourceIndex = residentResourceIndex;
                     residentResource.start         = handle.resourceIndex;
-                    aliased                        = true;
+                    residentResource.memReqBits &= bits;
+                    residentResource.maxAlignment =
+                        Max(residentResource.maxAlignment, alignment);
+                    aliased = true;
                     break;
                 }
             }
@@ -371,10 +432,20 @@ void RenderGraph::Compile()
         if (!aliased)
         {
             ResidentResource residentResource = {};
-            residentResource.bufferUsage      = resource.bufferUsageFlags;
-            residentResource.bufferSize       = resource.bufferSize;
-            residentResource.start            = handle.resourceIndex;
-            residentResource.dirty            = true;
+            if (IsBuffer(resource))
+            {
+                residentResource.memReqBits   = resource.buffer.req.bits;
+                residentResource.bufferSize   = resource.buffer.req.size;
+                residentResource.maxAlignment = resource.buffer.req.alignment;
+            }
+            else if (IsImage(resource))
+            {
+                residentResource.memReqBits   = resource.image.req.bits;
+                residentResource.bufferSize   = resource.image.req.size;
+                residentResource.maxAlignment = resource.image.req.alignment;
+            }
+            residentResource.start = handle.resourceIndex;
+            residentResource.dirty = true;
 
             residentResources.Push(residentResource);
 
@@ -383,25 +454,68 @@ void RenderGraph::Compile()
             resource.aliasNext             = -1;
         }
     }
+
     u32 totalSize = 0;
     for (ResidentResource &resource : residentResources)
     {
+        if ((resource.memReqBits & resource.lastMemReqBits) == 0)
+        {
+            resource.dirty = true;
+        }
+
         if (resource.dirty)
         {
-            if (resource.gpuBuffer.size)
+            if (device->IsAllocated(resource.alloc))
             {
-                device->DestroyBuffer(&resource.gpuBuffer);
+                device->FreeMemory(resource.alloc);
             }
-            resource.gpuBuffer =
-                device->CreateBuffer(resource.bufferUsage, resource.bufferSize);
+            MemoryRequirements req;
+            req.bits      = resource.memReqBits;
+            req.alignment = resource.maxAlignment;
+            req.size      = resource.bufferSize;
+
+            resource.alloc = device->AllocateMemory(req);
+            // resource.buffer =
+            //     device->CreateAliasedBuffer(resource.bufferUsage, resource.bufferSize);
+            // device->BindBufferMemory(resource.alloc, resource.buffer);
             resource.dirty = false;
+
+            for (int index = resource.start; index != -1;)
+            {
+                RenderGraphResource &r = resources[index];
+                if (IsImage(r))
+                {
+                    device->BindImageMemory(resource.alloc, r.image.image, r.aliasOffset);
+                }
+                else if (IsBuffer(r))
+                {
+                    device->BindBufferMemory(resource.alloc, r.buffer.buffer, r.aliasOffset);
+                }
+                index = r.aliasNext;
+            }
         }
-        totalSize += resource.gpuBuffer.size;
+        totalSize += resource.bufferSize;
     }
     Print("Transient Resource Size: %u\n", totalSize);
     Print("Unaliased Size: %u\n", unAliasedSize);
     Print("External Resource Size: %u\n", externalSize);
 }
+
+// void RenderGraph::AddAliasBarriers()
+// {
+//     for (Pass &pass : passes)
+//     {
+//         ScratchArena scratch;
+//         StaticArray<(scrartch.temp.arena, pass.resourceHandles.Length());
+//         for (ResourceHandle handle : pass.resourceHandles)
+//         {
+//             RenderGraphResource &resource = resources[handle.index];
+//             if (EnumHasAnyFlags(resource.flags, ResourceFlags::Image))
+//             {
+//             }
+//         }
+//     }
+// }
 
 void RenderGraph::Execute(CommandBuffer *cmd)
 {
@@ -428,7 +542,9 @@ void RenderGraph::BeginFrame()
     }
     for (ResidentResource &resource : residentResources)
     {
-        resource.start = -1;
+        resource.lastMemReqBits = resource.memReqBits;
+        resource.memReqBits     = ~0u;
+        resource.start          = -1;
     }
 }
 void RenderGraph::EndFrame()

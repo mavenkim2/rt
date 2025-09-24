@@ -27,6 +27,8 @@ enum class ResourceFlags
 {
     Transient = (1u << 0u),
     External  = (1u << 1u),
+    Buffer    = (1u << 2u),
+    Image     = (1u << 3u),
 };
 ENUM_CLASS_FLAGS(ResourceFlags)
 
@@ -43,23 +45,24 @@ struct RenderGraphResource
     string name;
     union
     {
-        ImageDesc imageDesc;
         struct
         {
-            u32 bufferSize;
+            ImageDesc imageDesc;
+            GPUImage image;
+        };
+        struct
+        {
             VkBufferUsageFlags2 bufferUsageFlags;
-
-            // External handle
-            VkBuffer bufferHandle;
+            GPUBuffer buffer;
         };
     };
+    u32 size;
 
     // Frame temp
     ResourceLifeTimeRange lifeTime;
     u32 latestWritePass;
 
     ResourceFlags flags;
-    u32 alignment;
 
     int residentResourceIndex;
     int offset;
@@ -69,9 +72,14 @@ struct RenderGraphResource
 
 struct ResidentResource
 {
-    VkBufferUsageFlags2 bufferUsage;
+    u32 lastMemReqBits;
+    u32 memReqBits;
+    VmaAllocation alloc = {};
+
+    // VkBuffer buffer;
+    // VkBufferUsageFlags2 bufferUsage;
     u32 bufferSize;
-    GPUBuffer gpuBuffer;
+    u32 maxAlignment;
     int start;
     bool dirty;
 };
@@ -85,6 +93,8 @@ struct Pass
     // Compute
     VkPipeline pipeline;
     DescriptorSetLayout *layout;
+
+    // Image aliasing
 
     Pass &AddHandle(ResourceHandle handle, ResourceUsageType type);
 };
@@ -103,8 +113,20 @@ struct RenderGraph
     RenderGraph();
     void BeginFrame();
     void EndFrame();
+    inline bool IsBuffer(const RenderGraphResource &resource)
+    {
+        return EnumHasAnyFlags(resource.flags, ResourceFlags::Buffer);
+    };
+    inline bool IsImage(const RenderGraphResource &resource)
+    {
+        return EnumHasAnyFlags(resource.flags, ResourceFlags::Image);
+    };
     ResourceHandle CreateBufferResource(string name, VkBufferUsageFlags2 usageFlags, u32 size,
-                                        ResourceFlags flags = ResourceFlags::Transient);
+                                        ResourceFlags flags = ResourceFlags::Transient |
+                                                              ResourceFlags::Buffer);
+    ResourceHandle CreateImageResource(string name, ImageDesc desc,
+                                       ResourceFlags flags = ResourceFlags::Transient |
+                                                             ResourceFlags::Buffer);
     void UpdateBufferResource(ResourceHandle handle, VkBufferUsageFlags2 usageFlags, u32 size);
     ResourceHandle RegisterExternalResource(string name, GPUBuffer *buffer);
     ResourceHandle RegisterExternalResource(GPUImage *image);
@@ -129,6 +151,7 @@ struct RenderGraph
     GPUBuffer *GetBuffer(ResourceHandle handle, u32 &offset, u32 &size);
     GPUBuffer *GetBuffer(ResourceHandle handle, u32 &offset);
     GPUBuffer *GetBuffer(ResourceHandle handle);
+    GPUImage *GetImage(ResourceHandle handle);
 
     template <typename T>
     Pass &StartComputePass(VkPipeline pipeline, DescriptorSetLayout &layout, u32 numResources,
@@ -180,10 +203,7 @@ struct RenderGraph
             cmd->PushConstants(pc, p, pass.layout->pipelineLayout);
 
             RenderGraphResource &resource = resources[indirectBuffer.index];
-            ResidentResource &residentResource =
-                residentResources[resource.residentResourceIndex];
-            cmd->DispatchIndirect(&residentResource.gpuBuffer,
-                                  resource.aliasOffset + indirectBufferOffset);
+            cmd->DispatchIndirect(&resource.buffer, indirectBufferOffset);
 
             func(cmd);
         };

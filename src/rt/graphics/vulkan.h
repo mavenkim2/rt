@@ -36,6 +36,13 @@ struct GPUBuffer;
 
 static const int numActiveFrames = 1;
 
+struct MemoryRequirements
+{
+    uint64_t size;
+    uint64_t alignment;
+    uint32_t bits;
+};
+
 struct BuildRangeInfo
 {
     uint32_t primitiveCount;
@@ -347,6 +354,7 @@ struct GPUBuffer
     VkBuffer buffer;
     void *mappedPtr;
     VmaAllocation allocation;
+    MemoryRequirements req;
     size_t size;
     VkPipelineStageFlags2 lastStage;
     VkAccessFlags2 lastAccess;
@@ -492,6 +500,8 @@ struct GPUImage
     VkImageLayout lastLayout;
     VkAccessFlags2 lastAccess;
     VkImageAspectFlags aspect;
+
+    MemoryRequirements req;
 
     struct Subresource
     {
@@ -680,36 +690,41 @@ struct ResourceBinding
     CommandBuffer *cmd;
     DescriptorSet ds;
 
-    ResourceBinding &Bind(int index, GPUImage *image, int subresource = -1)
+    inline ResourceBinding &Bind(int index, GPUImage *image, int subresource = -1)
     {
         ds.Bind(index, image, subresource);
         return *this;
     }
-    ResourceBinding &Bind(int index, GPUBuffer *buffer, u64 offset = 0,
-                          u64 size = VK_WHOLE_SIZE)
+    inline ResourceBinding &Bind(int index, GPUBuffer *buffer, u64 offset = 0,
+                                 u64 size = VK_WHOLE_SIZE)
     {
         ds.Bind(index, buffer, offset, size);
         return *this;
     }
-    ResourceBinding &Bind(int index, VkAccelerationStructureKHR *accel)
+    inline ResourceBinding &Bind(int index, VkAccelerationStructureKHR *accel)
     {
         ds.Bind(index, accel);
         return *this;
     }
 
-    ResourceBinding &Bind(GPUBuffer *buffer, u64 offset = 0, u64 size = VK_WHOLE_SIZE)
+    inline ResourceBinding &Bind(GPUBuffer *buffer, u64 offset = 0, u64 size = VK_WHOLE_SIZE)
     {
         ds.Bind(buffer, offset, size);
         return *this;
     }
-    ResourceBinding &Bind(GPUImage *img)
+    inline ResourceBinding &Bind(GPUImage *img)
     {
         ds.Bind(img);
         return *this;
     }
-    ResourceBinding &Bind(VkAccelerationStructureKHR *accel)
+    inline ResourceBinding &Bind(VkAccelerationStructureKHR *accel)
     {
         ds.Bind(accel);
+        return *this;
+    }
+    inline ResourceBinding &Bind(u64 *ptlasAddress)
+    {
+        ds.Bind(ptlasAddress);
         return *this;
     }
     ResourceBinding &PushConstants(PushConstant *push, void *ptr);
@@ -888,7 +903,8 @@ struct CommandBuffer
                                          u32 maxInstances);
     GPUAccelerationStructurePayload BuildCustomBLAS(GPUBuffer *aabbsBuffer, u32 numAabbs);
     void BuildCustomBLAS(StaticArray<AccelBuildInfo> &blasBuildInfos);
-    void ClearBuffer(GPUBuffer *b, u32 val = 0, u32 dstOffset = 0, u32 dstSize = VK_WHOLE_SIZE);
+    void ClearBuffer(GPUBuffer *b, u32 val = 0, u32 dstOffset = 0,
+                     u32 dstSize = VK_WHOLE_SIZE);
     void ClearImage(GPUImage *image, u32 value, u32 baseMip = 0,
                     u32 numMips = VK_REMAINING_MIP_LEVELS, u32 baseLayer = 0,
                     u32 numLayers = VK_REMAINING_ARRAY_LAYERS);
@@ -1110,11 +1126,21 @@ struct Vulkan
     GPUBuffer CreateBuffer(VkBufferUsageFlags flags, size_t totalSize,
                            MemoryUsage usage = MemoryUsage::GPU_ONLY);
     GPUImage CreateImage(ImageDesc desc, int numSubresources = -1, int ownedQueue = -1);
+    GPUBuffer CreateAliasedBuffer(VkBufferUsageFlags flags, size_t totalSize);
+    GPUImage CreateAliasedImage(ImageDesc desc, int numSubresources = -1,
+                                int ownedQueues = -1);
+    VmaAllocation AllocateMemory(MemoryRequirements &r);
+    void FreeMemory(VmaAllocation alloc);
+    void BindBufferMemory(VmaAllocation alloc, VkBuffer buffer, uint64_t offset = 0);
+    void BindImageMemory(VmaAllocation alloc, VkImage image, uint64_t offset = 0);
+    bool IsAllocated(VmaAllocation alloc);
     int CreateSubresource(GPUImage *image, u32 baseMip = 0,
                           u32 numMips = VK_REMAINING_MIP_LEVELS, u32 baseLayer = 0,
                           u32 numLayers = VK_REMAINING_ARRAY_LAYERS);
     u32 GetImageSize(GPUImage *image);
     void DestroyBuffer(GPUBuffer *buffer);
+    void DestroyBuffer(VkBuffer buffer);
+    void DestroyImageHandles(GPUImage *image);
     void DestroyImage(GPUImage *image);
     void DestroyAccelerationStructure(GPUAccelerationStructure *as);
     void DestroyAccelerationStructure(VkAccelerationStructureKHR as);
