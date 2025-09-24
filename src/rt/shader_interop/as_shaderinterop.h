@@ -28,7 +28,7 @@ namespace rt
 #define NUM_CLUSTER_HEADER_FLOAT4S 6
 
 #define MAX_CANDIDATE_NODES    (1u << 22u)
-#define MAX_CANDIDATE_CLUSTERS (1u << 24)
+#define MAX_CANDIDATE_CLUSTERS (1u << 23)
 #define MAX_VISIBLE_CLUSTERS   (1u << 22)
 
 #define MAX_CLUSTERS_PER_BLAS 8192

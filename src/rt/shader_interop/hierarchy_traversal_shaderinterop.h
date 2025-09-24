@@ -22,10 +22,8 @@ struct Queue
 
 struct CandidateNode
 {
-    uint instanceID;
     uint nodeOffset;
     uint blasIndex;
-    uint flags;
 };
 
 struct VisibleCluster

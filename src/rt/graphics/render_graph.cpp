@@ -1,6 +1,7 @@
 #include "../radix_sort.h"
 #include "vulkan.h"
 #include "render_graph.h"
+#include <algorithm>
 namespace rt
 {
 RenderGraph *renderGraph_;
@@ -13,10 +14,18 @@ void ResourceLifeTimeRange::Extend(u32 pass, QueueType queue)
     passEnd[queue] = Max(pass, passEnd[queue]);
 }
 
-ResourceHandle RenderGraph::CreateBufferResource(VkBufferUsageFlags2 usageFlags, u32 size,
-                                                 ResourceFlags flags)
+RenderGraph::RenderGraph()
+{
+    arena             = ArenaAlloc();
+    resources         = StaticArray<RenderGraphResource>(arena, 1000);
+    residentResources = StaticArray<ResidentResource>(arena, 1000);
+    passes            = StaticArray<Pass>(arena, 1000);
+}
+ResourceHandle RenderGraph::CreateBufferResource(string name, VkBufferUsageFlags2 usageFlags,
+                                                 u32 size, ResourceFlags flags)
 {
     RenderGraphResource resource = {};
+    resource.name                = PushStr8Copy(arena, name);
     resource.bufferSize          = size;
     resource.bufferUsageFlags    = usageFlags;
     resource.alignment           = device->GetMinAlignment(usageFlags);
@@ -36,9 +45,10 @@ void RenderGraph::UpdateBufferResource(ResourceHandle handle, VkBufferUsageFlags
     resources[handle.index].bufferUsageFlags = usageFlags;
 }
 
-ResourceHandle RenderGraph::RegisterExternalResource(GPUBuffer *buffer)
+ResourceHandle RenderGraph::RegisterExternalResource(string name, GPUBuffer *buffer)
 {
     RenderGraphResource resource = {};
+    resource.name                = PushStr8Copy(arena, name);
     resource.bufferSize          = buffer->size;
     resource.bufferUsageFlags    = 0;
     resource.alignment           = 0;
@@ -72,8 +82,10 @@ int RenderGraph::Overlap(const ResourceLifeTimeRange &lhs,
     bool after  = true;
     for (u32 i = 0; i <= QueueType_Graphics; i++)
     {
-        before &= dependencies[i][rhs.passStart] >= dependencies[i][lhs.passEnd[i]];
-        after &= dependencies[i][lhs.passStart] >= dependencies[i][rhs.passEnd[i]];
+        // before &= dependencies[i][rhs.passStart] >= dependencies[i][lhs.passEnd[i]];
+        // after &= dependencies[i][lhs.passStart] >= dependencies[i][rhs.passEnd[i]];
+        before &= rhs.passStart > lhs.passEnd[i];
+        after &= lhs.passStart > rhs.passEnd[i];
     }
     return before ? -1 : (after ? 1 : 0);
 }
@@ -92,8 +104,9 @@ Pass &RenderGraph::StartComputePass(VkPipeline pipeline, DescriptorSetLayout &la
                                     u32 numResources, PassFunction &&func)
 {
     u32 passIndex       = passes.Length();
-    auto AddComputePass = [passIndex, this, func](CommandBuffer *cmd) {
-        Pass &pass       = passes[passIndex];
+    auto AddComputePass = [passIndex, this, func, pipeline](CommandBuffer *cmd) {
+        Pass &pass = passes[passIndex];
+        cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
         DescriptorSet ds = pass.layout->CreateDescriptorSet();
         BindResources(pass, ds);
         cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
@@ -118,9 +131,10 @@ Pass &RenderGraph::StartIndirectComputePass(string name, VkPipeline pipeline,
 {
     string str          = PushStr8Copy(arena, name);
     u32 passIndex       = passes.Length();
-    auto AddComputePass = [str, passIndex, this, func, indirectBuffer,
-                           indirectBufferOffset](CommandBuffer *cmd) {
-        Pass &pass       = passes[passIndex];
+    auto AddComputePass = [str, passIndex, this, func, indirectBuffer, indirectBufferOffset,
+                           pipeline](CommandBuffer *cmd) {
+        Pass &pass = passes[passIndex];
+        cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
         DescriptorSet ds = pass.layout->CreateDescriptorSet();
         BindResources(pass, ds);
         cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
@@ -148,6 +162,12 @@ Pass &Pass::AddHandle(ResourceHandle handle, ResourceUsageType type)
 {
     resourceHandles.Push(handle);
     resourceUsageTypes.Push(type);
+
+    RenderGraph *rg = GetRenderGraph();
+    u32 passIndex   = this - rg->passes.data;
+
+    rg->resources[handle.index].lifeTime.Extend(passIndex, QueueType_Graphics);
+
     return *this;
 }
 
@@ -205,11 +225,21 @@ void RenderGraph::Compile()
     };
 
     StaticArray<Handle> handles(scratch.temp.arena, resources.Length());
+
+    u32 unAliasedSize = 0;
+    u32 externalSize  = 0;
     for (u32 resourceIndex = 0; resourceIndex < resources.Length(); resourceIndex++)
     {
         RenderGraphResource &resource = resources[resourceIndex];
-        if (resource.lifeTime.passStart == ~0u) continue;
+        if (EnumHasAnyFlags(resource.flags, ResourceFlags::External))
+        {
+            externalSize += resource.bufferSize;
+        }
+        if (resource.lifeTime.passStart == ~0u ||
+            !EnumHasAnyFlags(resource.flags, ResourceFlags::Transient))
+            continue;
 
+        unAliasedSize += resource.bufferSize;
         Handle handle;
         handle.sortKey       = resource.bufferSize;
         handle.resourceIndex = resourceIndex;
@@ -217,10 +247,23 @@ void RenderGraph::Compile()
     }
     SortHandles<Handle, false>(handles.data, handles.Length());
 
+    StaticArray<Handle> residentHandles(scratch.temp.arena, residentResources.Length());
+    for (u32 residentResourceIndex = 0; residentResourceIndex < residentResources.Length();
+         residentResourceIndex++)
+    {
+        ResidentResource &resource = residentResources[residentResourceIndex];
+        Handle handle;
+        handle.sortKey       = resource.bufferSize;
+        handle.resourceIndex = residentResourceIndex;
+        residentHandles.Push(handle);
+    }
+    SortHandles<Handle, false>(residentHandles.data, residentHandles.Length());
+
     // TODO: async queues
     for (u32 passIndex = 0; passIndex < passes.Length(); passIndex++)
     {
-        Pass &pass         = passes[passIndex];
+        Pass &pass = passes[passIndex];
+        Assert(pass.resourceHandles.Length() == pass.resourceHandles.capacity);
         u32 passDependency = 0;
         for (u32 handleIndex = 0; handleIndex < pass.resourceHandles.Length(); handleIndex++)
         {
@@ -237,73 +280,71 @@ void RenderGraph::Compile()
         }
     }
 
-    // Graph<u32> passGraph;
-    // passGraph.InitializeStatic(scratch.temp.arena, passes.Length(),
-    //                            [&](u32 index, u32 *offsets, u32 *data) {
-    //                                Pass &pass = passes[index];
-    //                                for (ResourceHandle &handle : pass.resourceHandles)
-    //                                {
-    //                                    RenderGraphResource &resource =
-    //                                    resources[handle.index];
-    //                                }
-    //                            });
-
     for (int handleIndex = 0; handleIndex < handles.Length(); handleIndex++)
     {
         Handle &handle                = handles[handleIndex];
         RenderGraphResource &resource = resources[handle.resourceIndex];
 
-        if (!EnumHasAnyFlags(resource.flags, ResourceFlags::Transient)) continue;
-
         bool aliased = false;
-        for (int residentResourceIndex = 0; residentResourceIndex < residentResources.Length();
-             residentResourceIndex++)
+        for (int residentHandleIndex = 0; residentHandleIndex < residentResources.Length();
+             residentHandleIndex++)
         {
+            int residentResourceIndex =
+                residentHandleIndex >= residentHandles.Length()
+                    ? residentHandleIndex
+                    : residentHandles[residentHandleIndex].resourceIndex;
             ResidentResource &residentResource = residentResources[residentResourceIndex];
-            Array<Vec2u> ranges(scratch.temp.arena, 4);
+            if (residentResource.bufferSize < resource.bufferSize) continue;
+            std::vector<std::pair<u32, u32>> ranges;
             for (int resourceIndex = residentResource.start; resourceIndex != -1;)
             {
                 RenderGraphResource &otherResource = resources[resourceIndex];
                 if (Overlap(resource.lifeTime, otherResource.lifeTime) == 0)
                 {
-                    ranges.Push(Vec2u(otherResource.aliasOffset,
-                                      otherResource.aliasOffset + otherResource.bufferSize));
+                    ranges.push_back(
+                        std::pair(otherResource.offset,
+                                  otherResource.aliasOffset + otherResource.bufferSize));
                 }
 
                 resourceIndex = otherResource.aliasNext;
             }
 
-            // TODO: need to sort the ranges?
-            if (ranges.Length())
+            std::sort(ranges.begin(), ranges.end());
+            ranges.push_back(
+                std::pair(residentResource.bufferSize, residentResource.bufferSize));
+            if (ranges.size())
             {
                 // Find best fit
-                StaticArray<Vec2u> freeRanges(scratch.temp.arena, ranges.Length());
+                StaticArray<Vec2u> freeRanges(scratch.temp.arena, ranges.size() + 1);
                 freeRanges.Push(Vec2u(0));
-                for (Vec2u &range : ranges)
+                for (auto &range : ranges)
                 {
                     Vec2u &freeRange = freeRanges.Last();
-                    if (freeRange.y >= range.x)
+                    if (freeRange[1] >= range.first)
                     {
-                        freeRange.y = Max(freeRange.y, range.y);
+                        freeRange[1] = Max(freeRange[1], range.second);
                     }
                     else
                     {
-                        freeRanges.Push(range);
+                        freeRanges.Push(Vec2u(range.first, range.second));
                     }
                 }
                 u32 bestFit     = ~0u;
                 u32 aliasOffset = 0;
-                for (u32 freeRangeIndex = 0; freeRangeIndex < freeRanges.Length();
+                u32 offset      = 0;
+                for (u32 freeRangeIndex = 1; freeRangeIndex < freeRanges.Length();
                      freeRangeIndex++)
                 {
-                    Vec2u &freeRange  = freeRanges[freeRangeIndex];
-                    u32 alignedOffset = AlignPow2(freeRange.x, resource.alignment);
-                    u32 end           = freeRange.y;
+                    u32 begin = freeRanges[freeRangeIndex - 1].y;
+                    u32 end   = freeRanges[freeRangeIndex].x;
+
+                    u32 alignedOffset = AlignPow2(begin, resource.alignment);
                     if (alignedOffset + resource.bufferSize <= end)
                     {
-                        u32 fit = freeRange.y - freeRange.x - resource.bufferSize;
+                        u32 fit = end - begin - resource.bufferSize;
                         if (fit < bestFit)
                         {
+                            offset      = begin;
                             aliasOffset = alignedOffset;
                             bestFit     = fit;
                         }
@@ -311,7 +352,13 @@ void RenderGraph::Compile()
                 }
                 if (bestFit != ~0u)
                 {
-                    residentResource.bufferUsage |= resource.bufferUsageFlags;
+                    if ((residentResource.bufferUsage & resource.bufferUsageFlags) !=
+                        resource.bufferUsageFlags)
+                    {
+                        residentResource.dirty = true;
+                        residentResource.bufferUsage |= resource.bufferUsageFlags;
+                    }
+                    resource.offset                = offset;
                     resource.aliasOffset           = aliasOffset;
                     resource.aliasNext             = residentResource.start;
                     resource.residentResourceIndex = residentResourceIndex;
@@ -323,10 +370,11 @@ void RenderGraph::Compile()
         }
         if (!aliased)
         {
-            ResidentResource residentResource;
-            residentResource.bufferUsage = resource.bufferUsageFlags;
-            residentResource.bufferSize  = resource.bufferSize;
-            residentResource.start       = handle.resourceIndex;
+            ResidentResource residentResource = {};
+            residentResource.bufferUsage      = resource.bufferUsageFlags;
+            residentResource.bufferSize       = resource.bufferSize;
+            residentResource.start            = handle.resourceIndex;
+            residentResource.dirty            = true;
 
             residentResources.Push(residentResource);
 
@@ -338,14 +386,21 @@ void RenderGraph::Compile()
     u32 totalSize = 0;
     for (ResidentResource &resource : residentResources)
     {
-        if (resource.gpuBuffer.size == 0)
+        if (resource.dirty)
         {
+            if (resource.gpuBuffer.size)
+            {
+                device->DestroyBuffer(&resource.gpuBuffer);
+            }
             resource.gpuBuffer =
                 device->CreateBuffer(resource.bufferUsage, resource.bufferSize);
+            resource.dirty = false;
         }
         totalSize += resource.gpuBuffer.size;
     }
     Print("Transient Resource Size: %u\n", totalSize);
+    Print("Unaliased Size: %u\n", unAliasedSize);
+    Print("External Resource Size: %u\n", externalSize);
 }
 
 void RenderGraph::Execute(CommandBuffer *cmd)
@@ -356,7 +411,26 @@ void RenderGraph::Execute(CommandBuffer *cmd)
     }
 }
 
-void RenderGraph::BeginFrame() { watermark = ArenaPos(arena); }
+void RenderGraph::BeginFrame()
+{
+    watermark = ArenaPos(arena);
+
+    for (RenderGraphResource &resource : resources)
+    {
+        resource.aliasNext          = -1;
+        resource.lifeTime.passStart = ~0u;
+
+        for (u32 i = 0; i < QueueType_Count; i++)
+        {
+            resource.lifeTime.passEnd[i] = 0;
+        }
+        resource.latestWritePass = 0;
+    }
+    for (ResidentResource &resource : residentResources)
+    {
+        resource.start = -1;
+    }
+}
 void RenderGraph::EndFrame()
 {
     ArenaPopTo(arena, watermark);

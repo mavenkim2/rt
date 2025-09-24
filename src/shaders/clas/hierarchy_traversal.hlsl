@@ -9,7 +9,7 @@
 #define MAX_NODES_PER_BATCH 16
 #define PACKED_NODE_SIZE 12
 
-typedef uint4 WorkItem;
+typedef uint2 WorkItem;
 
 // 8 bit bounding box planes
 struct InstanceHierarchyNode 
@@ -59,20 +59,20 @@ struct ClusterCull
     void ProcessNode(WorkItem workItem, uint childIndex)
     {
         CandidateNode candidateNode;
-        candidateNode.instanceID = workItem.x;
-        candidateNode.nodeOffset = workItem.y;
-        candidateNode.blasIndex = workItem.z;
-        candidateNode.flags = workItem.w;
+        candidateNode.nodeOffset = workItem.x & ((1u << 16u) - 1u);
+        candidateNode.blasIndex = workItem.y;
+        uint flags = workItem.x >> 16u;
 
-        GPUInstance instance = gpuInstances[candidateNode.instanceID];
+        uint instanceID = blasDatas[candidateNode.blasIndex].instanceID;
+        GPUInstance instance = gpuInstances[instanceID];
         uint nodeOffset = instance.globalRootNodeOffset + candidateNode.nodeOffset;
         PackedHierarchyNode node = hierarchyNodes[nodeOffset];
 
         bool isValid = node.childRef[childIndex] != ~0u;
         bool isLeaf = node.leafInfo[childIndex] != ~0u;
         bool isVisible = false;
-        bool highestDetail = candidateNode.flags & CANDIDATE_NODE_FLAG_HIGHEST_DETAIL;
-        bool streamingOnly = candidateNode.flags & CANDIDATE_NODE_FLAG_STREAMING_ONLY;
+        bool highestDetail = flags & CANDIDATE_NODE_FLAG_HIGHEST_DETAIL;
+        bool streamingOnly = flags & CANDIDATE_NODE_FLAG_STREAMING_ONLY;
 
         float2 edgeScales = float2(0, 0);
         float minScale = 0.f;
@@ -136,10 +136,8 @@ struct ClusterCull
         if (isNodeValid)
         {
             WorkItem childCandidateNode;
-            childCandidateNode.x = candidateNode.instanceID;
-            childCandidateNode.y = node.childRef[childIndex];
-            childCandidateNode.z = candidateNode.blasIndex;
-            childCandidateNode.w = candidateNode.flags;
+            childCandidateNode.x = (flags << 16u) | node.childRef[childIndex];
+            childCandidateNode.y = candidateNode.blasIndex;
 
             nodeQueue[nodeWriteOffset] = childCandidateNode;
         }
@@ -162,16 +160,14 @@ struct ClusterCull
 
                 uint gpuPageIndex = node.childRef[childIndex];
 
-                const int maxClusters = 1 << 24;
+                const int maxClusters = 1 << 23;
                 int clampedNumClusters = min((int)numClusters, maxClusters - (int)leafWriteOffset);
 
                 for (int i = 0; i < clampedNumClusters; i++)
                 {
                     WorkItem candidateCluster;
-                    candidateCluster.x = (gpuPageIndex << MAX_CLUSTERS_PER_PAGE_BITS) | (pageClusterIndex + i);
-                    candidateCluster.y = candidateNode.instanceID;
-                    candidateCluster.z = candidateNode.blasIndex;
-                    candidateCluster.w = candidateNode.flags;
+                    candidateCluster.x = (flags << (MAX_CLUSTERS_PER_PAGE_BITS + 12)) | (gpuPageIndex << MAX_CLUSTERS_PER_PAGE_BITS) | (pageClusterIndex + i);
+                    candidateCluster.y = candidateNode.blasIndex;
 
                     leafQueue[leafWriteOffset + i] = candidateCluster;
                 }
@@ -200,13 +196,13 @@ struct ClusterCull
     void ProcessLeaf(WorkItem workItem, uint leafReadOffset)
     {
         // Make sure the candidate cluster fits
-        uint pageIndex = workItem.x >> MAX_CLUSTERS_PER_PAGE_BITS;
-        uint clusterIndex = workItem.x & (MAX_CLUSTERS_PER_PAGE - 1);
-        uint instanceID = workItem.y;
-        uint blasIndex = workItem.z;
-        uint flags = workItem.w;
+        uint pageIndex = BitFieldExtractU32(workItem.x, 12, MAX_CLUSTERS_PER_PAGE_BITS);
+        uint clusterIndex = BitFieldExtractU32(workItem.x, MAX_CLUSTERS_PER_PAGE_BITS, 0);
+        uint blasIndex = workItem.y;
+        uint flags = BitFieldExtractU32(workItem.x, 4, MAX_CLUSTERS_PER_PAGE_BITS + 12);
         bool highestDetail = flags & CANDIDATE_NODE_FLAG_HIGHEST_DETAIL;
 
+        uint instanceID = blasDatas[blasIndex].instanceID;
         GPUInstance instance = gpuInstances[instanceID];
 
         uint baseAddress = GetClusterPageBaseAddress(pageIndex);
@@ -278,7 +274,6 @@ void TraverseHierarchy(uint dtID)
     WorkItem workItem;
     workItem.x = ~0u;
     workItem.y = ~0u;
-    workItem.z = ~0u;
     Traversal traversal;
 
     uint depth = 0;
@@ -309,7 +304,7 @@ void TraverseHierarchy(uint dtID)
             workItem = WaveReadLaneAt(workItem, waveIndex & ~(CHILDREN_PER_HIERARCHY_NODE - 1));
 
             processed = false;
-            bool isValid = (workItem.x != ~0u && workItem.y != ~0u && workItem.z != ~0u) && nodeReadOffset < queue[0].nodeWriteOffset;
+            bool isValid = (workItem.x != ~0u && workItem.y != ~0u);
             
             if (isValid)
             {
@@ -346,10 +341,11 @@ void TraverseHierarchy(uint dtID)
             if ((!noMoreNodes && batchSize == WaveGetLaneCount()) || (noMoreNodes && leafReadOffset < leafWriteOffset))
             {
                 workItem = leafQueue[leafReadOffset];
-                if (workItem.x != ~0u && workItem.y != ~0u && workItem.z != ~0u)
+                if (workItem.x != ~0u && workItem.y != ~0u)
                 {
                     traversal.ProcessLeaf(workItem, leafReadOffset);
                     leafReadOffset = ~0u;
+                    //leafQueue[leafReadOffset] = ~0u;
                 }
             }
 

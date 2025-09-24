@@ -32,10 +32,8 @@ void main(uint3 dtID : SV_DispatchThreadID)
         blasData.addressIndex = GPU_INSTANCE_FLAG_SHARED_INSTANCE;
 
         CandidateNode candidateNode;
-        candidateNode.instanceID = instanceIndex;
-        candidateNode.nodeOffset = 0;
+        candidateNode.nodeOffset = 0u;
         candidateNode.blasIndex = blasIndex;
-        candidateNode.flags = 0;
 
         uint nodeIndex;
         InterlockedAdd(queue[0].nodeWriteOffset, 1, nodeIndex);
@@ -60,10 +58,8 @@ void main(uint3 dtID : SV_DispatchThreadID)
         uint flags = (wasSet & bit) ? CANDIDATE_NODE_FLAG_STREAMING_ONLY : CANDIDATE_NODE_FLAG_HIGHEST_DETAIL;
 
         CandidateNode candidateNode;
-        candidateNode.instanceID = instanceIndex;
-        candidateNode.nodeOffset = 0;
+        candidateNode.nodeOffset = flags << 16u;
         candidateNode.blasIndex = blasIndex;
-        candidateNode.flags = flags;
 
         uint nodeIndex;
         InterlockedAdd(queue[0].nodeWriteOffset, 1, nodeIndex);

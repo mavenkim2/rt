@@ -1993,6 +1993,12 @@ u64 Vulkan::GetMinAlignment(VkBufferUsageFlags flags)
         minAlignment = Max(deviceProperties.properties.limits.minTexelBufferOffsetAlignment,
                            minAlignment);
     }
+    if ((flags & (VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR ||
+                  VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR)) != 0)
+    {
+        // TODO: get from properties?
+        minAlignment = Max(minAlignment, 256ull);
+    }
     Assert(minAlignment != 0);
     return minAlignment;
 }

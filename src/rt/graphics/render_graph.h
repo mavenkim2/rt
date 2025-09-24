@@ -25,8 +25,8 @@ struct ResourceHandle
 
 enum class ResourceFlags
 {
-    Transient,
-    External,
+    Transient = (1u << 0u),
+    External  = (1u << 1u),
 };
 ENUM_CLASS_FLAGS(ResourceFlags)
 
@@ -40,6 +40,7 @@ struct ResourceLifeTimeRange
 
 struct RenderGraphResource
 {
+    string name;
     union
     {
         ImageDesc imageDesc;
@@ -61,6 +62,7 @@ struct RenderGraphResource
     u32 alignment;
 
     int residentResourceIndex;
+    int offset;
     int aliasOffset;
     int aliasNext;
 };
@@ -71,6 +73,7 @@ struct ResidentResource
     u32 bufferSize;
     GPUBuffer gpuBuffer;
     int start;
+    bool dirty;
 };
 
 struct Pass
@@ -90,19 +93,20 @@ struct RenderGraph
 {
     Arena *arena;
     StaticArray<Pass> passes;
-    Array<RenderGraphResource> resources;
+    StaticArray<RenderGraphResource> resources;
 
     u32 watermark;
     // HashIndex residentResourceHash;
     StaticArray<ResidentResource> residentResources;
-    CrossQueueDependencies dependencies;
+    // CrossQueueDependencies dependencies;
 
+    RenderGraph();
     void BeginFrame();
     void EndFrame();
-    ResourceHandle CreateBufferResource(VkBufferUsageFlags2 usageFlags, u32 size,
+    ResourceHandle CreateBufferResource(string name, VkBufferUsageFlags2 usageFlags, u32 size,
                                         ResourceFlags flags = ResourceFlags::Transient);
     void UpdateBufferResource(ResourceHandle handle, VkBufferUsageFlags2 usageFlags, u32 size);
-    ResourceHandle RegisterExternalResource(GPUBuffer *buffer);
+    ResourceHandle RegisterExternalResource(string name, GPUBuffer *buffer);
     ResourceHandle RegisterExternalResource(GPUImage *image);
     int Overlap(const ResourceLifeTimeRange &lhs, const ResourceLifeTimeRange &rhs) const;
     Pass &StartPass(u32 numResources, PassFunction &&func);
@@ -132,9 +136,11 @@ struct RenderGraph
     {
         u32 passIndex = passes.Length();
         Assert(push);
-        T *p                = (T *)PushArrayNoZero(arena, u8, sizeof(T));
-        auto AddComputePass = [pc, p, passIndex, this, func](CommandBuffer *cmd) {
-            Pass &pass       = passes[passIndex];
+        T *p = (T *)PushArrayNoZero(arena, u8, sizeof(T));
+        MemoryCopy(p, push, sizeof(T));
+        auto AddComputePass = [pc, p, passIndex, this, func, pipeline](CommandBuffer *cmd) {
+            Pass &pass = passes[passIndex];
+            cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
             DescriptorSet ds = pass.layout->CreateDescriptorSet();
             BindResources(pass, ds);
             cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
@@ -161,10 +167,12 @@ struct RenderGraph
     {
         u32 passIndex = passes.Length();
         Assert(push);
-        T *p                = (T *)PushArrayNoZero(arena, u8, sizeof(T));
+        T *p = (T *)PushArrayNoZero(arena, u8, sizeof(T));
+        MemoryCopy(p, push, sizeof(T));
         auto AddComputePass = [pc, p, passIndex, this, func, indirectBuffer,
-                               indirectBufferOffset](CommandBuffer *cmd) {
-            Pass &pass       = passes[passIndex];
+                               indirectBufferOffset, pipeline](CommandBuffer *cmd) {
+            Pass &pass = passes[passIndex];
+            cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
             DescriptorSet ds = pass.layout->CreateDescriptorSet();
             BindResources(pass, ds);
             cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
@@ -195,6 +203,7 @@ struct RenderGraph
 
 extern RenderGraph *renderGraph_;
 inline RenderGraph *GetRenderGraph() { return renderGraph_; }
+inline void SetRenderGraph(RenderGraph *g) { renderGraph_ = g; };
 
 } // namespace rt
 

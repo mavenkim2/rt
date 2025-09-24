@@ -11,9 +11,9 @@ StructuredBuffer<uint64_t> blasAddresses : register(t3);
 StructuredBuffer<BLASData> blasDatas : register(t4);
 RWStructuredBuffer<GPUInstance> gpuInstances : register(u5);
 StructuredBuffer<AABB> aabbs : register(t6);
-//StructuredBuffer<VoxelAddressTableEntry> voxelAddressTable : register(t7);
 StructuredBuffer<GPUTransform> instanceTransforms : register(t7);
 StructuredBuffer<PartitionInfo> partitionInfos : register(t8);
+StructuredBuffer<uint64_t> mergedPartitionDeviceAddresses : register(t9);
 
 #include "ptlas_write_instances.hlsli"
 
@@ -32,7 +32,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
     //}
 
     uint64_t address = 0;
-    uint tableOffset = 0;
+    float3x4 worldFromObject;
 #if 0
     // TODO: this needs to remove the bottom n bits, where n is the number of voxel-free levels
     if (bitMask & ~3)
@@ -57,12 +57,25 @@ void main(uint3 dtID : SV_DispatchThreadID)
     }
 #endif
 
-    address = blasAddresses[blasData.addressIndex];
+    PartitionInfo info = partitionInfos[instance.partitionIndex];
+    bool update = true;
+    uint flags = 0x10u;
+    AABB aabb;
+
+    if (instance.flags & GPU_INSTANCE_FLAG_MERGED)
+    {
+        address = mergedPartitionDeviceAddresses[instance.partitionIndex];
+        float3x4 worldFromObject = float3x4(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0);
+        update = false;
+        flags = 0u;
+    }
+    else 
+    {
+        address = blasAddresses[blasData.addressIndex];
+        worldFromObject = ConvertGPUMatrix(instanceTransforms[instance.transformIndex], info.base, info.scale);
+        aabb = aabbs[instance.resourceID];
+    }
     if (address == 0) return;
 
-    AABB aabb = aabbs[instance.resourceID];
-
-    PartitionInfo info = partitionInfos[instance.partitionIndex];
-    float3x4 worldFromObject = ConvertGPUMatrix(instanceTransforms[instance.transformIndex], info.base, info.scale);
-    WritePTLASDescriptors(worldFromObject, address, blasData.instanceID, blasData.instanceID, aabb, true, 0x10u);
+    WritePTLASDescriptors(worldFromObject, address, blasData.instanceID, blasData.instanceID, aabb, update, flags);
 }

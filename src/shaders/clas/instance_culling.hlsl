@@ -13,18 +13,14 @@ RWStructuredBuffer<GPUInstance> gpuInstances : register(u1);
 RWStructuredBuffer<uint> globals : register(u2);
 StructuredBuffer<AABB> aabbs : register(t3);
 
-RWStructuredBuffer<PTLAS_WRITE_INSTANCE_INFO> ptlasInstanceWriteInfos : register(u4);
-RWStructuredBuffer<PTLAS_UPDATE_INSTANCE_INFO> ptlasInstanceUpdateInfos : register(u5);
-StructuredBuffer<uint64_t> mergedPartitionDeviceAddresses : register(t6);
-StructuredBuffer<GPUTransform> instanceTransforms : register(t7);
-StructuredBuffer<PartitionInfo> partitionInfos : register(t8);
-RWStructuredBuffer<StreamingRequest> requests : register(u9);
-StructuredBuffer<Resource> resources : register(t10);
+StructuredBuffer<GPUTransform> instanceTransforms : register(t4);
+StructuredBuffer<PartitionInfo> partitionInfos : register(t5);
+RWStructuredBuffer<StreamingRequest> requests : register(u6);
+StructuredBuffer<Resource> resources : register(t7);
 
-StructuredBuffer<ResourceSharingInfo> resourceSharingInfos : register(t11);
-RWStructuredBuffer<uint> maxMinLodLevel : register(u12);
-
-#include "ptlas_write_instances.hlsli"
+StructuredBuffer<ResourceSharingInfo> resourceSharingInfos : register(t8);
+RWStructuredBuffer<uint> maxMinLodLevel : register(u9);
+RWStructuredBuffer<BLASData> blasDatas : register(u10);
 
 [[vk::push_constant]] InstanceCullingPushConstant pc;
 
@@ -45,6 +41,16 @@ void main(uint3 dtID : SV_DispatchThreadID)
     // Proxy
     if (instance.flags & GPU_INSTANCE_FLAG_MERGED)
     {
+        BLASData blasData = (BLASData)0;
+        blasData.instanceID = instanceIndex;
+        uint blasIndex;
+        InterlockedAdd(globals[GLOBALS_BLAS_COUNT_INDEX], 1, blasIndex);
+        blasDatas[blasIndex] = blasData;
+        return;
+    }
+
+#if 0
+    {
         if (pc.oneBlasAddress != 0)
         {
             AABB aabb;
@@ -55,7 +61,6 @@ void main(uint3 dtID : SV_DispatchThreadID)
             return;
         }
     }
-#if 0
     {
         if (pc.oneBlasAddress != 0)
         {
