@@ -203,8 +203,9 @@ void RenderGraph::BindResources(Pass &pass, DescriptorSet &ds)
 GPUBuffer *RenderGraph::GetBuffer(ResourceHandle handle, u32 &offset, u32 &size)
 {
     RenderGraphResource &resource = resources[handle.index];
-    offset                        = 0; // resource.aliasOffset;
-    size                          = resource.size;
+
+    offset = 0;
+    size   = resource.size;
     Assert(EnumHasAllFlags(resource.flags, ResourceFlags::Transient | ResourceFlags::Buffer));
     return &resource.buffer;
 }
@@ -212,7 +213,7 @@ GPUBuffer *RenderGraph::GetBuffer(ResourceHandle handle, u32 &offset, u32 &size)
 GPUBuffer *RenderGraph::GetBuffer(ResourceHandle handle, u32 &offset)
 {
     RenderGraphResource &resource = resources[handle.index];
-    offset                        = 0; // resource.aliasOffset;
+    offset                        = 0;
     Assert(EnumHasAllFlags(resource.flags, ResourceFlags::Transient | ResourceFlags::Buffer));
     return &resource.buffer;
 }
@@ -249,10 +250,6 @@ void RenderGraph::Compile()
             }
             resource.image = device->CreateAliasedImage(resource.imageDesc);
             resource.size  = resource.image.req.size;
-            // ResidentResource &resident = residentResources[resource.residentResourceIndex];
-            //
-            // resident.req.alignment = Max(resource.alignment, resident.req.alignment);
-            // resident.req.bits &= resource.image.req.bits;
         }
         else if (EnumHasAllFlags(resource.flags,
                                  ResourceFlags::Buffer | ResourceFlags::Transient))
@@ -384,7 +381,6 @@ void RenderGraph::Compile()
                 std::pair(residentResource.bufferSize, residentResource.bufferSize));
             if (ranges.size())
             {
-                // Find best fit
                 StaticArray<Vec2u> freeRanges(scratch.temp.arena, ranges.size() + 1);
                 freeRanges.Push(Vec2u(0));
                 for (auto &range : ranges)
@@ -483,10 +479,7 @@ void RenderGraph::Compile()
 
             resource.alloc   = device->AllocateMemory(req);
             resource.isAlloc = true;
-            // resource.buffer =
-            //     device->CreateAliasedBuffer(resource.bufferUsage, resource.bufferSize);
-            // device->BindBufferMemory(resource.alloc, resource.buffer);
-            resource.dirty = false;
+            resource.dirty   = false;
         }
 
         for (int index = resource.start; index != -1;)

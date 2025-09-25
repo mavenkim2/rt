@@ -22,8 +22,6 @@ StructuredBuffer<ResourceSharingInfo> resourceSharingInfos : register(t8);
 RWStructuredBuffer<uint> maxMinLodLevel : register(u9);
 RWStructuredBuffer<BLASData> blasDatas : register(u10);
 
-[[vk::push_constant]] InstanceCullingPushConstant pc;
-
 [numthreads(64, 1, 1)]
 void main(uint3 dtID : SV_DispatchThreadID)
 {

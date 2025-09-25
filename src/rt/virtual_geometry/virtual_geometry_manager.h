@@ -441,7 +441,6 @@ struct VirtualGeometryManager
     u32 numStreamedInstances;
     ResourceHandle instanceUploadBuffer;
     ResourceHandle tempInstanceBuffer;
-    u64 oneBlasBuildAddress;
 
     GPUBuffer instanceFreeListBuffer;
     ResourceHandle instanceFreeListBufferHandle;

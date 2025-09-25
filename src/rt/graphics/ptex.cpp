@@ -1284,10 +1284,14 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
 
         uploadDeviceBuffers =
             FixedArray<GPUBuffer, numPendingSubmissions>(numPendingSubmissions);
-        uploadDeviceBuffers[0] = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                                      maxUploadSize, MemoryUsage::CPU_TO_GPU);
-        uploadDeviceBuffers[1] = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                                      maxUploadSize, MemoryUsage::CPU_TO_GPU);
+
+        // TODO: don't do a worst case allocation of this
+        // uploadDeviceBuffers[0] = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        //                                               maxUploadSize,
+        //                                               MemoryUsage::CPU_TO_GPU);
+        // uploadDeviceBuffers[1] = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        //                                               maxUploadSize,
+        //                                               MemoryUsage::CPU_TO_GPU);
 
         pageTableRequestBuffers =
             FixedArray<TransferBuffer, numPendingSubmissions>(numPendingSubmissions);

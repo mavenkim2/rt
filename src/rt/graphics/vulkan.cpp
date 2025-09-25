@@ -225,14 +225,22 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
         VkValidationFeaturesEXT validationFeatures              = {
             VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT};
 
+        ScratchArena scratch;
         debugUtilsCreateInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+
+        StaticArray<VkValidationFeatureEnableEXT> validationFeaturesEnable(scratch.temp.arena,
+                                                                           2);
         if (validationMode != ValidationMode::Disabled)
         {
-            VkValidationFeatureEnableEXT validationFeaturesEnable =
-                VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT;
-            validationFeatures.enabledValidationFeatureCount = 1;
-            validationFeatures.pEnabledValidationFeatures    = &validationFeaturesEnable;
-            instInfo.pNext                                   = &validationFeatures;
+
+            validationFeaturesEnable.Push(
+                VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT);
+            validationFeaturesEnable.Push(VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT);
+            validationFeatures.enabledValidationFeatureCount =
+                validationFeaturesEnable.Length();
+            validationFeatures.pEnabledValidationFeatures = validationFeaturesEnable.data;
+
+            instInfo.pNext = &validationFeatures;
 
             if (debugUtils)
             {
@@ -1701,6 +1709,13 @@ GPUBuffer Vulkan::CreateBuffer(VkBufferUsageFlags flags, size_t totalSize, Memor
 
     VK_CHECK(vmaCreateBuffer(allocator, &createInfo, &allocCreateInfo, &buffer.buffer,
                              &buffer.allocation, 0));
+
+    VkMemoryRequirements r;
+    vkGetBufferMemoryRequirements(device, buffer.buffer, &r);
+
+    buffer.req.size      = r.size;
+    buffer.req.alignment = r.alignment;
+    buffer.req.bits      = r.memoryTypeBits;
 
     if (usage != MemoryUsage::GPU_ONLY && usage != MemoryUsage::CPU_ONLY)
     {
@@ -4254,35 +4269,6 @@ GPUAccelerationStructure CommandBuffer::CompactAS(QueryPool &pool,
         vkGetAccelerationStructureDeviceAddressKHR(device->device, &accelDeviceAddressInfo);
     return result;
 }
-
-// void CommandBuffer::CopyAccelerationStructures(
-//     StaticArray<CopyAccelerationStructure> &commands)
-// {
-//     for (u32 i = 0; i < commands.Length(); i++)
-//     {
-//         CopyAccelerationStructure &copy = commands[i];
-//
-//         VkCopyAccelerationStructureModeKHR mode;
-//         switch (copy.mode)
-//         {
-//             case AccelerationStructureCopyMode::Copy:
-//                 mode = VK_COPY_ACCELERATION_STRUCTURE_MODE_CLONE_KHR;
-//                 break;
-//             case AccelerationStructureCopyMode::Compact:
-//                 mode = VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR;
-//                 break;
-//             default: Assert(0);
-//         }
-//
-//         VkCopyAccelerationStructureInfoKHR copyInfo = {
-//             VK_STRUCTURE_TYPE_COPY_ACCELERATION_STRUCTURE_INFO_KHR};
-//         copyInfo.src  = copy.src;
-//         copyInfo.dst  = copy.dst;
-//         copyInfo.mode = mode;
-//
-//         vkCmdCopyAccelerationStructureKHR(buffer, &copyInfo);
-//     }
-// }
 
 void CommandBuffer::ClearBuffer(GPUBuffer *b, u32 val, uint64_t dstOffset, uint64_t dstSize)
 {
