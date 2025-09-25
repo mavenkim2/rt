@@ -19,7 +19,7 @@ RWStructuredBuffer<StreamingRequest> requests : register(u6);
 StructuredBuffer<Resource> resources : register(t7);
 
 StructuredBuffer<ResourceSharingInfo> resourceSharingInfos : register(t8);
-RWStructuredBuffer<uint> maxMinLodLevel : register(u9);
+RWStructuredBuffer<uint2> maxMinLodLevel : register(u9);
 RWStructuredBuffer<BLASData> blasDatas : register(u10);
 
 [numthreads(64, 1, 1)]
@@ -89,7 +89,6 @@ void main(uint3 dtID : SV_DispatchThreadID)
 
     // BLAS Sharing
     // https://github.com/nvpro-samples/vk_lod_clusters/blob/main/docs/blas_sharing.md
-    bool testMin = true;
     float scaleX = length2(float3(renderFromObject[0].x, renderFromObject[1].x, renderFromObject[2].x));
     float scaleY = length2(float3(renderFromObject[0].y, renderFromObject[1].y, renderFromObject[2].y));
     float scaleZ = length2(float3(renderFromObject[0].z, renderFromObject[1].z, renderFromObject[2].z));
@@ -101,11 +100,13 @@ void main(uint3 dtID : SV_DispatchThreadID)
 
     uint minLevel = 0;
     uint maxLevel = resource.numLodLevels - 1;
+    bool testMin = true;
     for (uint lodLevel = 0; lodLevel < resource.numLodLevels; lodLevel++)
     {
         uint infoIndex = resource.resourceSharingInfoOffset + lodLevel;
         ResourceSharingInfo info = resourceSharingInfos[infoIndex];
         float test;
+
         if (testMin)
         {
             float2 edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, resource.lodBounds, maxScale, test, cull);
@@ -139,8 +140,9 @@ void main(uint3 dtID : SV_DispatchThreadID)
     if (maxLevel <= 3)
     {
         uint packed = (minLevel << 27u) | instanceIndex;
-        InterlockedMax(maxMinLodLevel[instance.resourceID], packed);
+        InterlockedMax(maxMinLodLevel[instance.resourceID].x, packed);
     }
+    InterlockedMin(maxMinLodLevel[instance.resourceID].y, maxLevel);
     gpuInstances[instanceIndex].minLodLevel = minLevel;
     gpuInstances[instanceIndex].maxLodLevel = maxLevel;
 

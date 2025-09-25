@@ -289,7 +289,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                             VK_IMAGE_TILING_OPTIMAL);
 
-    GPUImage gpuEnvMap = transferCmd->SubmitImage(envMap->contents, gpuEnvMapDesc).image;
+    TransferBuffer gpuEnvMapTransfer =
+        transferCmd->SubmitImage(envMap->contents, gpuEnvMapDesc);
+    GPUImage gpuEnvMap = gpuEnvMapTransfer.image;
     ImageDesc depthBufferDesc(ImageType::Type2D, targetWidth, targetHeight, 1, 1, 1,
                               VK_FORMAT_R32_SFLOAT, MemoryUsage::GPU_ONLY,
                               VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -349,6 +351,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     submitSemaphore.signalValue = 1;
     transferCmd->SignalOutsideFrame(submitSemaphore);
+    device->SubmitCommandBuffer(transferCmd);
+    device->Wait(submitSemaphore);
+    device->DestroyBuffer(&gpuEnvMapTransfer.stagingBuffer);
 
     // Create descriptor set layout and pipeline
     VkShaderStageFlags flags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR |
@@ -461,7 +466,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     tileCmd->TransferWriteBarrier(&virtualTextureManager.gpuPhysicalPool);
     tileCmd->UAVBarrier(&virtualTextureManager.pageTable);
     tileCmd->FlushBarriers();
-    virtualTextureManager.ClearTextures(tileCmd);
+    // virtualTextureManager.ClearTextures(tileCmd);
 
     struct TextureTempData
     {
@@ -844,7 +849,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     allCommandBuffer->FlushBarriers();
     device->SubmitCommandBuffer(allCommandBuffer);
 
-    device->SubmitCommandBuffer(transferCmd);
     device->Wait(tlasSemaphore);
     device->DestroyBuffer(&virtualGeometryManager.blasProxyScratchBuffer);
     device->DestroyBuffer(&virtualGeometryManager.mergedInstancesAABBBuffer);
@@ -1070,7 +1074,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         if (device->frameCount == 0)
         {
-            device->Wait(submitSemaphore);
             device->Wait(tileSubmitSemaphore);
             device->Wait(tlasSemaphore);
 

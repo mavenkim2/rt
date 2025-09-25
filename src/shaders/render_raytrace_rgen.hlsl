@@ -207,6 +207,8 @@ void main()
 #endif
                     continue;
                 }
+
+#if 0
 #ifndef TRACE_BRICKS
 #error
                 uint levelTableOffset = query.CandidateInstanceID();
@@ -378,6 +380,7 @@ void main()
                         tHit = nextT;
                     }
                 }
+#endif
 #endif
             }
         }
@@ -569,6 +572,7 @@ void main()
                 hitInfo.ss = tb[0];
                 hitInfo.ts = tb[1];
             }
+#if 0
             else 
             {
 #ifndef TRACE_BRICKS
@@ -627,6 +631,7 @@ void main()
                 hitInfo.ts = tb[1];
 #endif
             }
+#endif
         }
 
         // Get material

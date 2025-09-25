@@ -346,8 +346,8 @@ struct GPUInstance
     uint globalRootNodeOffset;
     uint resourceID;
     uint partitionIndex;
-    uint voxelAddressOffset;
-    uint clusterLookupTableOffset;
+    // uint voxelAddressOffset;
+    // uint clusterLookupTableOffset;
     uint flags;
 
     uint minLodLevel;
@@ -384,8 +384,7 @@ struct Resource
 {
     uint mergedAddressIndex;
     uint sharedAddressIndex;
-    uint clusterLookupTableOffset;
-    uint voxelAddressOffset;
+    uint globalRootNodeOffset;
     uint flags;
 
     float4 lodBounds;

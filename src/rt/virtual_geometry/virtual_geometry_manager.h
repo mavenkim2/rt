@@ -231,7 +231,7 @@ struct VirtualGeometryManager
         u32 numNodes;
 
         Vec4f lodBounds;
-        u32 depth;
+        u32 numLodLevels;
         u32 resourceSharingInfoOffset;
     };
 
@@ -426,6 +426,8 @@ struct VirtualGeometryManager
     // ResourceHandle partitionReadbackBuffer;
     GPUBuffer instanceTransformsBuffer;
     ResourceHandle instanceTransformsBufferHandle;
+    GPUBuffer instanceResourceIDsBuffer;
+    ResourceHandle instanceResourceIDsBufferHandle;
     // ResourceHandle partitionCountsBuffer;
 
     GPUBuffer mergedPartitionDeviceAddresses;

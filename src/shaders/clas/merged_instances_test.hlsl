@@ -41,7 +41,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
     float test;
     float2 edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, 1.f, test, cull);
 
-    if (cull || error * gpuScene.lodScale < edgeScales.x)
+    if (error * gpuScene.lodScale < edgeScales.x)
     {
         if (info.flags & PARTITION_FLAG_INSTANCES_RENDERED)
         {

@@ -6,7 +6,7 @@
 RWStructuredBuffer<uint> globals : register(u0);
 RWStructuredBuffer<BLASData> blasDatas : register(u1);
 StructuredBuffer<GPUInstance> instances : register(t2);
-StructuredBuffer<uint> maxMinLodLevel : register(t3);
+StructuredBuffer<uint2> maxMinLodLevel : register(t3);
 RWStructuredBuffer<CandidateNode> nodeQueue : register(u4);
 RWStructuredBuffer<Queue> queue : register(u5);
 RWStructuredBuffer<uint> resourceBitVector : register(u6);
@@ -25,9 +25,10 @@ void main(uint3 dtID : SV_DispatchThreadID)
     blasData.instanceID = instanceIndex;
     uint blasIndex;
     InterlockedAdd(globals[GLOBALS_BLAS_COUNT_INDEX], 1, blasIndex);
-    uint sharedInstance = maxMinLodLevel[instance.resourceID] & ((1u << 27u) - 1u);
+    uint sharedInstance = maxMinLodLevel[instance.resourceID].x & ((1u << 27u) - 1u);
+    uint minMaxLodLevel = maxMinLodLevel[instance.resourceID].y;
 
-    if (instanceIndex == sharedInstance)
+    if (0)//instanceIndex == sharedInstance)
     {
         blasData.addressIndex = GPU_INSTANCE_FLAG_SHARED_INSTANCE;
 
@@ -41,31 +42,38 @@ void main(uint3 dtID : SV_DispatchThreadID)
 
         nodeQueue[nodeIndex] = candidateNode;
     }
-    // TODO: don't hardcode this
-    else if (instance.minLodLevel >= 3)
+    // TODO: don't hardcode
+    else if (0)//instance.minLodLevel >= 3)//max(3, minMaxLodLevel))
     {
         blasData.addressIndex = GPU_INSTANCE_FLAG_SHARED_INSTANCE;
     }
     // Merge
-    else 
+    else
     {
-        uint wasSet;
-        uint bit = 1u << (instance.resourceID & 31u);
-        InterlockedOr(resourceBitVector[instance.resourceID >> 5u], bit, wasSet);
-
         blasData.addressIndex = GPU_INSTANCE_FLAG_MERGED_INSTANCE;
-        // TODO: for the selected merged instance, probably have to do hierarchy traversal twice
-        uint flags = (wasSet & bit) ? CANDIDATE_NODE_FLAG_STREAMING_ONLY : CANDIDATE_NODE_FLAG_HIGHEST_DETAIL;
 
-        CandidateNode candidateNode;
-        candidateNode.nodeOffset = flags << 16u;
-        candidateNode.blasIndex = blasIndex;
+        //if (instance.minLodLevel < minMaxLodLevel)
+        {
+            uint wasSet;
+            uint bit = 1u << (instance.resourceID & 31u);
+            InterlockedOr(resourceBitVector[instance.resourceID >> 5u], bit, wasSet);
 
-        uint nodeIndex;
-        InterlockedAdd(queue[0].nodeWriteOffset, 1, nodeIndex);
-        InterlockedAdd(queue[0].numNodes, 1);
+            if ((wasSet & bit) == 0)
+            {
+                // TODO: for the selected merged instance, probably have to do hierarchy traversal twice
+                uint flags = (wasSet & bit) ? CANDIDATE_NODE_FLAG_STREAMING_ONLY : CANDIDATE_NODE_FLAG_HIGHEST_DETAIL;
 
-        nodeQueue[nodeIndex] = candidateNode;
+                CandidateNode candidateNode;
+                candidateNode.nodeOffset = flags << 16u;
+                candidateNode.blasIndex = blasIndex;
+
+                uint nodeIndex;
+                InterlockedAdd(queue[0].nodeWriteOffset, 1, nodeIndex);
+                InterlockedAdd(queue[0].numNodes, 1);
+
+                nodeQueue[nodeIndex] = candidateNode;
+            }
+        }
     }
     blasDatas[blasIndex] = blasData;
 }

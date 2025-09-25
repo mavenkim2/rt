@@ -82,7 +82,7 @@ struct StaticArray
 
     __forceinline void Push(T element)
     {
-        Assert(size_ < capacity);
+        ErrorExit(size_ < capacity, "%u %u\n", size_, capacity);
         data[size_] = element;
         size_++;
     }

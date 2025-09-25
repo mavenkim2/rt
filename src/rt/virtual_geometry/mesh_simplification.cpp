@@ -1938,7 +1938,6 @@ struct ClusterGroup
     u32 pageStartIndex;
     u32 numPages;
     u32 partStartIndex;
-    u32 numParts;
 
     bool isLeaf;
     bool hasVoxels;
@@ -2036,7 +2035,10 @@ void PartitionGraph(ArrayView<int> clusterIndices, ArrayView<idx_t> clusterOffse
                                  partitionWeights, NULL, options, &edgesCut, partitionIDs);
     EndMutex(&mutex);
 
-    ErrorExit(result == METIS_OK, "Metis error\n");
+    if (result != METIS_OK)
+    {
+        ErrorExit(result == METIS_OK, "Metis error: %i\n", result);
+    }
 
     u32 numClustersLeft     = 0;
     u32 maxNumAdjacencyLeft = 0;
@@ -2146,6 +2148,14 @@ bool RecursivePartitionGraph(ArrayView<int> clusterIndices, ArrayView<idx_t> clu
     Vec2u newNumAdjacency;
     PartitionRange left, right;
 
+    for (u32 i = 1; i < numClusters; i++)
+    {
+        if (clusterOffsets[i] < clusterOffsets[i - 1])
+        {
+            ErrorExit(0, "%u\n", numClusters);
+        }
+    }
+
     PartitionGraph(clusterIndices, clusterOffsets, clusterData, clusterWeights,
                    newClusterIndices, newClusterOffsets, newClusterData, newClusterWeights,
                    numClusters, left, right, newAdjOffset, numAdjacency, newNumAdjacency,
@@ -2215,7 +2225,7 @@ GraphPartitionResult RecursivePartitionGraph(Arena *arena, idx_t *clusterOffsets
 
     std::atomic<int> numPartitions(0);
 
-    StaticArray<PartitionRange> ranges(arena, maxNumPartitions, maxNumPartitions);
+    StaticArray<PartitionRange> ranges(arena, maxNumPartitions * 2, maxNumPartitions * 2);
 
     bool success = RecursivePartitionGraph(
         ArrayView<int>(clusterIndices), ArrayView<idx_t>(clusterOffsets, (u32)numClusters),
@@ -2729,7 +2739,7 @@ static GraphPartitionResult PartitionTriangles(Arena *arena, Mesh &mesh, u32 max
     AddSpatialLinks(scratch.temp.arena, mesh.numFaces, totalBounds, centers, graphNeighbors,
                     graphWeights);
 
-    idx_t *offsets  = PushArray(scratch.temp.arena, idx_t, total + 1);
+    idx_t *offsets  = PushArray(scratch.temp.arena, idx_t, mesh.numFaces + 1);
     idx_t *offsets1 = &offsets[1];
 
     idx_t totalData = 0;
@@ -2751,6 +2761,14 @@ static GraphPartitionResult PartitionTriangles(Arena *arena, Mesh &mesh, u32 max
             idx_t dataIndex    = offsets1[tri]++;
             data[dataIndex]    = graphNeighbors[tri][idx];
             weights[dataIndex] = graphWeights[tri][idx];
+        }
+    }
+
+    for (u32 i = 1; i < mesh.numFaces; i++)
+    {
+        if (offsets[i] < offsets[i - 1])
+        {
+            ErrorExit(0, "%u\n", mesh.numFaces);
         }
     }
 
@@ -2797,6 +2815,10 @@ static bool GenerateValidTriClusters(Arena *arena, Mesh &mesh, u32 maxNumTriangl
                 for (int hashIndex = vertexHashSet.FirstInHash(hash); hashIndex != -1;
                      hashIndex     = vertexHashSet.NextInHash(hashIndex))
                 {
+                    if (mesh.p[hashIndex] == p && index != hashIndex)
+                    {
+                        mesh.indices[3 * tri + vertexIndex] = hashIndex;
+                    }
                     if (index == hashIndex || mesh.p[hashIndex] == p)
                     {
                         found = true;
@@ -3491,6 +3513,10 @@ PackClustersToPages(Arena *arena, ClusterizationOutput &output, string filename,
                     parts.Push(part);
                     clusterStartIndex = clusterGroupIndex;
                 }
+                else if (clusterGroupIndex == 0)
+                {
+                    group.pageStartIndex++;
+                }
 
                 PageInfo pageInfo;
                 pageInfo.partStartIndex = partStartIndex;
@@ -3521,7 +3547,6 @@ PackClustersToPages(Arena *arena, ClusterizationOutput &output, string filename,
         clusterPageStartIndex = numClustersInPage;
 
         parts.Push(part);
-        group.numParts = parts.Length() - group.numParts;
     }
 
     if (voxelClusterCount)
@@ -6989,4 +7014,4 @@ void ConvolveDisneyDiffuse()
 #endif
 }
 
-} // namespace rt
+}
