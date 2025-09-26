@@ -22,6 +22,7 @@ groupshared Payload payload;
 [numthreads(THREAD_GROUP_SIZE, 1, 1)]
 void main(uint3 dtID : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex)
 {
+#if 0
     if (groupIndex == 0)
     {
         numVisibleClusters = 0;
@@ -54,4 +55,5 @@ void main(uint3 dtID : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex)
 
     GroupMemoryBarrierWithGroupSync();
     DispatchMesh(numClusters, 1, 1, payload);
+#endif
 }

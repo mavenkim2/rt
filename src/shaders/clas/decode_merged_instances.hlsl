@@ -7,23 +7,23 @@ StructuredBuffer<AABB> resourceAABBs : register(t1);
 RWStructuredBuffer<AABB> aabbs : register(u2);
 RWStructuredBuffer<PartitionInfo> partitionInfos: register(u3);
 StructuredBuffer<GPUTruncatedEllipsoid> truncatedEllipsoids : register(t4);
+StructuredBuffer<uint2> partitionsAndOffset : register(t5);
+StructuredBuffer<uint> resourceIDs : register(t6);
 
 [numthreads(32, 1, 1)]
 void main(uint3 groupID : SV_GroupID, uint3 dtID : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex)
 {
-    uint instanceGroupIndex = groupID.x;
+    uint instanceGroupIndex = partitionsAndOffset[groupID.x].x;
+    uint aabbOffset = partitionsAndOffset[groupID.x].y;
     PartitionInfo info = partitionInfos[instanceGroupIndex];
-    uint offset = info.transformOffset;
-    uint end = info.transformOffset + info.transformCount;
 
-    for (uint transformIndex = offset + groupIndex; transformIndex < end; transformIndex += 32)
+    for (uint index = groupIndex; index < info.transformCount; index += 32)
     {
+        uint transformIndex = info.transformOffset + index;
+        uint aabbIndex = aabbOffset + index;
         //GPUInstance instance = gpuInstances[instanceIndex];
 
-        // TODO: world partition offsets
-        // TODO: 
-        //AABB aabb = resourceAABBs[0];
-        GPUTruncatedEllipsoid ellipsoid = truncatedEllipsoids[0];
+        GPUTruncatedEllipsoid ellipsoid = truncatedEllipsoids[resourceIDs[transformIndex]];
         float3 aabbMin = ellipsoid.sphere.xyz - ellipsoid.sphere.w;
         float3 aabbMax = ellipsoid.sphere.xyz + ellipsoid.sphere.w;
 
@@ -60,6 +60,6 @@ void main(uint3 groupID : SV_GroupID, uint3 dtID : SV_DispatchThreadID, uint gro
         transformedAABB.maxX = maxP.x;
         transformedAABB.maxY = maxP.y;
         transformedAABB.maxZ = maxP.z;
-        aabbs[transformIndex] = transformedAABB;
+        aabbs[aabbIndex] = transformedAABB;
     }
 }

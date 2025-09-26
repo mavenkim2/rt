@@ -16,6 +16,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
     if (blasIndex >= globals[GLOBALS_BLAS_COUNT_INDEX]) return;
 
     BLASData blas = blasDatas[blasIndex];
+
     uint flags = blas.addressIndex;
     uint resourceID = gpuInstances[blas.instanceID].resourceID;
     Resource resource = resources[resourceID];

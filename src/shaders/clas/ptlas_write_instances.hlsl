@@ -13,7 +13,6 @@ RWStructuredBuffer<GPUInstance> gpuInstances : register(u5);
 StructuredBuffer<AABB> aabbs : register(t6);
 StructuredBuffer<GPUTransform> instanceTransforms : register(t7);
 StructuredBuffer<PartitionInfo> partitionInfos : register(t8);
-StructuredBuffer<uint64_t> mergedPartitionDeviceAddresses : register(t9);
 
 #include "ptlas_write_instances.hlsli"
 
@@ -64,7 +63,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
 
     if (instance.flags & GPU_INSTANCE_FLAG_MERGED)
     {
-        address = mergedPartitionDeviceAddresses[instance.partitionIndex];
+        address = info.mergedProxyDeviceAddress;
         float3x4 worldFromObject = float3x4(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0);
         update = false;
         flags = 0u;

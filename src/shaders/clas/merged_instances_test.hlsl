@@ -4,18 +4,17 @@
 
 RWStructuredBuffer<PartitionInfo> partitionInfos : register(u0);
 RWStructuredBuffer<uint> globals : register(u1);
-StructuredBuffer<uint64_t> mergedPartitionDeviceAddresses : register(t2);
 
-RWStructuredBuffer<uint> visiblePartitions : register(u3);
-RWStructuredBuffer<uint2> freedPartitions : register(u4);
-RWStructuredBuffer<uint> instanceFreeList : register(u5);
-ConstantBuffer<GPUScene> gpuScene : register(b6);
-Texture2D<float> depthPyramid : register(t7);
+RWStructuredBuffer<uint> visiblePartitions : register(u2);
+RWStructuredBuffer<uint2> freedPartitions : register(u3);
+RWStructuredBuffer<uint> instanceFreeList : register(u4);
+ConstantBuffer<GPUScene> gpuScene : register(b5);
+Texture2D<float> depthPyramid : register(t6);
 
 #define ENABLE_OCCLUSION
 #include "cull.hlsli"
 
-[[vk::push_constant]] NumPushConstant pc;
+[[vk::push_constant]] MergedInstancesPushConstant pc;
 
 [numthreads(32, 1, 1)]
 void main(uint3 dtID : SV_DispatchThreadID)
@@ -32,40 +31,51 @@ void main(uint3 dtID : SV_DispatchThreadID)
 
     uint flags = info.flags;
     bool useProxies = false;
-    if (flags & PARTITION_FLAG_HAS_PROXIES)
-    {
-        float error = info.lodError;
-        float4 lodBounds = info.lodBounds;
+    float3x4 renderFromObject = float3x4(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0);
+    float error = info.lodError;
+    float4 lodBounds = info.lodBounds;
 
-        float3x4 renderFromObject = float3x4(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0);
+    if ((flags & PARTITION_FLAG_HAS_PROXIES))
+    {
         float3 minP = lodBounds.xyz - lodBounds.w;
         float3 maxP = lodBounds.xyz + lodBounds.w;
+
+        float4 aabb;
+        float maxZ;
         bool cull = FrustumCull(gpuScene.clipFromRender, renderFromObject, 
-                minP, maxP, gpuScene.p22, gpuScene.p23);
+                minP, maxP, gpuScene.p22, gpuScene.p23, aabb, maxZ);
 
-        if (!cull)
+        useProxies = cull;
+
+        if (!cull && !pc.firstFrame)
         {
-            float4 clipMinP = mul(gpuScene.clipFromRender, float4(mul(renderFromObject, float4(minP, 1.f)), 1.f));
-            clipMinP /= clipMinP.w;
-            float4 clipMaxP = mul(gpuScene.clipFromRender, float4(mul(renderFromObject, float4(maxP, 1.f)), 1.f));
-            clipMaxP /= clipMaxP.w;
-
-            float maxZ = max(clipMinP.z, clipMaxP.z);
-            float4 aabb = float4(clipMinP.xy, clipMaxP.xy);
-
-            bool occluded = HZBOcclusionTest(aabb, maxZ, int2(gpuScene.width, gpuScene.height));
-
-            if (occluded)
-            {
-                Translate(renderFromObject, -gpuScene.cameraP);
-
-                float test;
-                float2 edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, 1.f, test, cull);
-                useProxies = error * gpuScene.lodScale < edgeScales.x;
-            }
+            float test;
+            bool occluded = HZBOcclusionTest(aabb, maxZ, int2(gpuScene.width, gpuScene.height), test);
+            useProxies = occluded;
+#if 0
+            partitionInfos[partitionIndex].debug0 = test;
+            partitionInfos[partitionIndex].debug1 = maxZ;
+#endif
         }
     }
+#if 0
+    else if ((flags & PARTITION_FLAG_HAS_PROXIES) && pc.firstFrame)
+    {
+        useProxies = true;
+    }
 
+    Translate(renderFromObject, -gpuScene.cameraP);
+
+    if (!useProxies && (flags & PARTITION_FLAG_HAS_PROXIES))
+    {
+        float test;
+        float2 edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, 1.f, test, false);
+        useProxies = error * gpuScene.lodScale < edgeScales.x;
+    }
+#endif
+    //useProxies = false;
+
+    partitionInfos[partitionIndex].test = useProxies;
     if (useProxies)
     {
         if (info.flags & PARTITION_FLAG_INSTANCES_RENDERED)
@@ -75,6 +85,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
             InterlockedAdd(globals[GLOBALS_FREED_PARTITION_COUNT], 1, descriptorIndex);
             freedPartitions[descriptorIndex] = uint2(partitionIndex, GPU_INSTANCE_FLAG_INDIV);
         }
+#if 0
         if ((info.flags & PARTITION_FLAG_PROXY_RENDERED) == 0)
         {
             partitionInfos[partitionIndex].flags |= PARTITION_FLAG_PROXY_RENDERED;
@@ -82,9 +93,11 @@ void main(uint3 dtID : SV_DispatchThreadID)
             InterlockedAdd(globals[GLOBALS_VISIBLE_PARTITION_COUNT], 1, descriptorIndex);
             visiblePartitions[descriptorIndex] = partitionIndex;
         }
+#endif
     }
     else 
     {
+#if 0
         if (info.flags & PARTITION_FLAG_PROXY_RENDERED)
         {
             partitionInfos[partitionIndex].flags &= ~PARTITION_FLAG_PROXY_RENDERED; 
@@ -92,6 +105,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
             InterlockedAdd(globals[GLOBALS_FREED_PARTITION_COUNT], 1, descriptorIndex);
             freedPartitions[descriptorIndex] = uint2(partitionIndex, GPU_INSTANCE_FLAG_MERGED);
         }
+#endif
         if ((info.flags & PARTITION_FLAG_INSTANCES_RENDERED) == 0)
         {
             partitionInfos[partitionIndex].flags |= PARTITION_FLAG_INSTANCES_RENDERED;

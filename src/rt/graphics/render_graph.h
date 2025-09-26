@@ -50,6 +50,7 @@ struct RenderGraphResource
             ImageDesc imageDesc;
             GPUImage image;
             StaticArray<Subresource> subresources;
+            StaticArray<GPUImage::Subresource> deviceSubresources;
         };
         struct
         {

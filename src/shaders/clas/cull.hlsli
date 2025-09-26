@@ -3,7 +3,7 @@
 
 #include "../common.hlsli"
 
-bool FrustumCull(float4x4 clipFromRender, float3x4 renderFromObject, float3 minP, float3 maxP, float p22, float p23)
+bool FrustumCull(float4x4 clipFromRender, float3x4 renderFromObject, float3 minP, float3 maxP, float p22, float p23, out float4 outAabb, out float outMaxZ)
 {
     float4x4 renderFromObject_ = float4x4(
         renderFromObject[0][0], renderFromObject[0][1], renderFromObject[0][2], renderFromObject[0][3], 
@@ -62,10 +62,12 @@ bool FrustumCull(float4x4 clipFromRender, float3x4 renderFromObject, float3 minP
     PROCESS(p4, p5);
     PROCESS(p6, p7);
 
+    float minZ = -maxW * p22 + p23;
+    float maxZ = -minW * p22 + p23;
+
+    outMaxZ = maxZ / minW;
 #if 0
     // NOTE: w = -z in view space. Min(z) = -(Max(-z)) and Max(z) = -(Min(-z))
-    float maxZ = -maxW * p22 + p23;
-    float minZ = -minW * p22 + p23;
 
     // partially = at least partially
     bool test = maxZ > minZ;//minW > 0;//maxZ > minZ;
@@ -77,6 +79,7 @@ bool FrustumCull(float4x4 clipFromRender, float3x4 renderFromObject, float3 minP
     visible = visible && isPartiallyInsideFarPlane && isPartiallyInsideNearPlane;
 #endif
 
+    outAabb = aabb;
 #if 0
     results.aabb = aabb;
     results.minZ = saturate(minZ / minW);
@@ -88,7 +91,7 @@ bool FrustumCull(float4x4 clipFromRender, float3x4 renderFromObject, float3 minP
 }
 
 #ifdef ENABLE_OCCLUSION
-bool HZBOcclusionTest(float4 aabb, float maxZ, int2 screenSize)//, out float4 outUv)
+bool HZBOcclusionTest(float4 aabb, float maxZ, int2 screenSize, out float test)//, out float4 outUv)
 {
     bool occluded = false;
     //if (cullResults.isVisible && !cullResults.crossesNearPlane)
@@ -130,10 +133,11 @@ bool HZBOcclusionTest(float4 aabb, float maxZ, int2 screenSize)//, out float4 ou
             depth.w = depthPyramid.SampleLevel(samplerNearestClamp, uv.xw, lod).r; // (-, +)
 
             depth.yz = (pixels.x == pixels.z) ? 1.f : depth.yz;
-            depth.zw = (pixels.y == pixels.w) ? 1.f : depth.zw;
+            depth.xy = (pixels.y == pixels.w) ? 1.f : depth.xy;
 
             float minDepth = min(min(depth.x, depth.y), min(depth.z, depth.w));
             occluded = maxZ < minDepth;
+            test = minDepth;
         //}
     }
     return occluded;

@@ -434,9 +434,8 @@ struct VirtualGeometryManager
     GPUBuffer instanceResourceIDsBuffer;
     ResourceHandle instanceResourceIDsBufferHandle;
     // ResourceHandle partitionCountsBuffer;
+    GPUBuffer partitionsAndOffset;
 
-    GPUBuffer mergedPartitionDeviceAddresses;
-    ResourceHandle mergedPartitionDeviceAddressesHandle;
     GPUBuffer instancesBuffer;
     ResourceHandle instancesBufferHandle;
     BitVector partitionStreamedIn;

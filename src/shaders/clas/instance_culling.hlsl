@@ -82,9 +82,12 @@ void main(uint3 dtID : SV_DispatchThreadID)
     PartitionInfo info = partitionInfos[instance.partitionIndex];
     float3x4 renderFromObject = ConvertGPUMatrix(instanceTransforms[instance.transformIndex], info.base, info.scale); 
     AABB aabb = aabbs[instance.resourceID];
+
+    float4 temp;
+    float tempfloat;
     bool cull = FrustumCull(gpuScene.clipFromRender, renderFromObject, 
             float3(aabb.minX, aabb.minY, aabb.minZ),
-            float3(aabb.maxX, aabb.maxY, aabb.maxZ), gpuScene.p22, gpuScene.p23);
+            float3(aabb.maxX, aabb.maxY, aabb.maxZ), gpuScene.p22, gpuScene.p23, temp, tempfloat);
     Translate(renderFromObject, -gpuScene.cameraP);
 
     // BLAS Sharing

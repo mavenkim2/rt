@@ -218,6 +218,12 @@ struct GeometryIndexAndFlags
     uint32_t geometryFlags : 3;
 };
 
+struct MergedInstancesPushConstant
+{
+    uint num;
+    uint firstFrame;
+};
+
 struct FillClusterTriangleInfoPushConstant
 {
     uint indexBufferBaseAddressLowBits;
@@ -364,9 +370,15 @@ struct PartitionInfo
     float lodError;
     float3 base;
     float3 scale;
+    uint64_t mergedProxyDeviceAddress;
     uint32_t transformOffset;
     uint32_t transformCount;
     uint32_t flags;
+
+    float debug0;
+
+    float debug1;
+    bool test;
 };
 
 struct GPUClusterFixup

@@ -274,8 +274,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     gpuScene.width            = targetWidth;
     gpuScene.height           = targetHeight;
     gpuScene.fov              = params->fov;
-    gpuScene.p22              = rasterFromCamera[2][2];
-    gpuScene.p23              = rasterFromCamera[3][2];
+    gpuScene.p22              = params->NDCFromCamera[2][2];
+    gpuScene.p23              = params->NDCFromCamera[3][2];
 
     ShaderDebugInfo shaderDebug;
 
@@ -381,7 +381,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     layout.AddBinding(16, DescriptorType::StorageBuffer, flags);
     layout.AddBinding(17, DescriptorType::StorageBuffer, flags);
     layout.AddBinding(18, DescriptorType::StorageBuffer, flags);
-    // layout.AddBinding(19, DescriptorType::StorageBuffer, flags);
+    layout.AddBinding(19, DescriptorType::StorageBuffer, flags);
     // layout.AddBinding(20, DescriptorType::StorageBuffer, flags);
     layout.AddBinding(21, DescriptorType::StorageImage, flags);
     layout.AddBinding(22, DescriptorType::StorageImage, flags);
@@ -1035,6 +1035,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             gpuScene.renderFromCamera = renderFromCamera;
             gpuScene.cameraFromRender = cameraFromRender;
             gpuScene.prevClipFromClip = clipToPrevClip;
+            gpuScene.clipFromPrevClip = prevClipToClip;
             gpuScene.clipFromRender   = clipFromCamera * Mat4(cameraFromRender);
             gpuScene.jitterX          = jitterX;
             gpuScene.jitterY          = jitterY;
@@ -1100,15 +1101,16 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             computeCmd->SubmitTransfer(&shaderDebugBuffers[currentBuffer]);
 
             rg->StartPass(
-                  6,
+                  7,
                   [queue                = virtualGeometryManager.queueBuffer,
                    clasGlobals          = virtualGeometryManager.clasGlobalsBuffer,
                    resourceBitVector    = virtualGeometryManager.resourceBitVector,
                    maxMinLodLevelBuffer = virtualGeometryManager.maxMinLodLevelBuffer,
                    candidateClusters    = virtualGeometryManager.candidateClusterBuffer,
-                   candidateNodes =
-                       virtualGeometryManager.candidateNodeBuffer](CommandBuffer *cmd) {
+                   candidateNodes       = virtualGeometryManager.candidateNodeBuffer,
+                   pyramid = virtualGeometryManager.depthPyramid](CommandBuffer *cmd) {
                       RenderGraph *rg = GetRenderGraph();
+
                       u32 offset, size;
                       GPUBuffer *buffer = rg->GetBuffer(candidateClusters, offset, size);
                       cmd->ClearBuffer(buffer, ~0u);
@@ -1128,10 +1130,17 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                       buffer = rg->GetBuffer(maxMinLodLevelBuffer, offset, size);
                       cmd->ClearBuffer(buffer, 0);
 
+                      GPUImage *image = rg->GetImage(pyramid);
+
                       cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                    VK_ACCESS_2_TRANSFER_WRITE_BIT,
                                    VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
+                      cmd->Barrier(image, VK_IMAGE_LAYOUT_UNDEFINED,
+                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                   VK_PIPELINE_STAGE_2_NONE,
+                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_NONE,
+                                   VK_ACCESS_2_SHADER_READ_BIT);
                       cmd->FlushBarriers();
                   })
                 .AddHandle(virtualGeometryManager.resourceBitVector, ResourceUsageType::Write)
@@ -1142,23 +1151,19 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 .AddHandle(virtualGeometryManager.candidateNodeBuffer,
                            ResourceUsageType::Write)
                 .AddHandle(virtualGeometryManager.candidateClusterBuffer,
-                           ResourceUsageType::Write);
+                           ResourceUsageType::Write)
+                .AddHandle(virtualGeometryManager.depthPyramid, ResourceUsageType::Write);
 
             computeCmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                 VK_ACCESS_2_TRANSFER_WRITE_BIT,
                                 VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
+            computeCmd->Barrier(&depthBuffer, VK_IMAGE_LAYOUT_UNDEFINED,
+                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                VK_PIPELINE_STAGE_2_NONE,
+                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_NONE,
+                                VK_ACCESS_2_SHADER_READ_BIT);
             computeCmd->FlushBarriers();
-
-            if (device->frameCount > 0)
-            {
-                // TODO: support transient lifetimes that cross frame boundaries
-                virtualGeometryManager.ReprojectDepth(
-                    targetWidth, targetHeight, depthBufferHandle,
-                    sceneTransferBufferHandles[currentBuffer]);
-            }
-
-            virtualGeometryManager.UpdateHZB();
 
             virtualGeometryManager.PrepareInstances(
                 computeCmd, sceneTransferBufferHandles[currentBuffer], false);
@@ -1289,6 +1294,26 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         virtualGeometryManager.ProcessRequests(cmd, testCount);
         TIMED_RANGE_END(cpuIndex);
+
+        if (device->frameCount > 0)
+        {
+            // TODO: support transient lifetimes that cross frame boundaries
+            virtualGeometryManager.ReprojectDepth(targetWidth, targetHeight, depthBufferHandle,
+                                                  sceneTransferBufferHandles[currentBuffer]);
+            virtualGeometryManager.UpdateHZB();
+        }
+        else
+        {
+            rg->StartPass(1, [depthPyramid =
+                                  virtualGeometryManager.depthPyramid](CommandBuffer *cmd) {
+                  GPUImage *img = GetRenderGraph()->GetImage(depthPyramid);
+                  cmd->Barrier(
+                      img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_PIPELINE_STAGE_2_NONE, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                      VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_READ_BIT);
+                  cmd->FlushBarriers();
+              }).AddHandle(virtualGeometryManager.depthPyramid, ResourceUsageType::Write);
+        }
 
         // Instance culling
         {
@@ -1437,10 +1462,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                VK_PIPELINE_STAGE_2_NONE,
                                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
                                VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_WRITE_BIT);
-                  cmd->Barrier(&depthBuffer, VK_IMAGE_LAYOUT_UNDEFINED,
-                               VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_NONE,
+                  cmd->Barrier(&depthBuffer, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                               VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                               VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_WRITE_BIT);
+                               VK_ACCESS_2_SHADER_READ_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
                   cmd->Barrier(normalRoughness, VK_IMAGE_LAYOUT_UNDEFINED,
                                VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_NONE,
                                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
@@ -1476,7 +1501,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                       .Bind(&virtualGeometryManager.resourceTruncatedEllipsoidsBuffer)
                       .Bind(&virtualGeometryManager.instanceTransformsBuffer)
                       .Bind(&virtualGeometryManager.partitionInfosBuffer)
-                      // .Bind(&virtualGeometryManager.clasGlobalsBuffer)
+                      .Bind(&virtualGeometryManager.instanceResourceIDsBuffer)
                       .Bind(&depthBuffer)
                       .Bind(normalRoughness)
                       .Bind(diffuseAlbedo)

@@ -67,6 +67,8 @@ void RenderGraph::CreateImageSubresources(ResourceHandle handle,
 {
     RenderGraphResource &resource = resources[handle.index];
     resource.subresources         = StaticArray<Subresource>(arena, subresources.Length());
+    resource.deviceSubresources =
+        StaticArray<GPUImage::Subresource>(arena, subresources.Length());
     Copy(resource.subresources, subresources);
 }
 
@@ -237,7 +239,7 @@ GPUBuffer *RenderGraph::GetBuffer(ResourceHandle handle, u32 &offset)
 GPUBuffer *RenderGraph::GetBuffer(ResourceHandle handle)
 {
     RenderGraphResource &resource = resources[handle.index];
-    Assert(EnumHasAllFlags(resource.flags, ResourceFlags::Transient | ResourceFlags::Buffer));
+    // Assert(EnumHasAllFlags(resource.flags, ResourceFlags::Transient | ResourceFlags::Buffer));
     return &resource.buffer;
 }
 
@@ -264,8 +266,11 @@ void RenderGraph::Compile()
             {
                 device->DestroyImageHandles(&resource.image);
             }
-            resource.image = device->CreateAliasedImage(resource.imageDesc);
-            resource.size  = resource.image.req.size;
+            resource.image              = device->CreateAliasedImage(resource.imageDesc);
+            resource.image.subresources = resource.deviceSubresources;
+            resource.deviceSubresources.Clear();
+
+            resource.size = resource.image.req.size;
         }
         else if (EnumHasAllFlags(resource.flags,
                                  ResourceFlags::Buffer | ResourceFlags::Transient))

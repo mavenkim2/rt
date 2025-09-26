@@ -19,7 +19,7 @@ void main(uint3 dtID: SV_DispatchThreadID)
     float4 clipPos = float4(uv.x * 2.f - 1.f, 1.f - uv.y * 2.f, 1.f, 1.f);
     float4 prevClipPos = mul(thisScene.prevClipFromClip, clipPos);
 
-    prevClipPos.xy /= prevClipPos.w;
+    prevClipPos.xyz /= prevClipPos.w;
 
     // Sample depth
     float2 prevUv = prevClipPos.xy * float2(0.5f, -0.5f) + 0.5f;
@@ -29,7 +29,7 @@ void main(uint3 dtID: SV_DispatchThreadID)
     float depth = lastDepthBuffer.SampleLevel(samplerNearestClamp, prevUv, 0).r;
 
     // Reproject depth to current frame
-    float4 lastClipPos = float4(prevClipPos.xyz, 1.f);
+    float4 lastClipPos = float4(prevClipPos.x, prevClipPos.y, depth, 1.f);
     float4 newClipPos = mul(thisScene.clipFromPrevClip, lastClipPos);
     float newDepth = outside ? 0.f : newClipPos.z / newClipPos.w;
 
