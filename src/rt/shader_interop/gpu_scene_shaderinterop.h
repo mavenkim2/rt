@@ -14,6 +14,7 @@ struct GPUScene
     float4x4 cameraFromRaster;
     float4x4 clipFromRender;
     float4x4 prevClipFromClip;
+    float4x4 clipFromPrevClip;
     float3x4 renderFromCamera;
     float3x4 cameraFromRender;
     float3x4 lightFromRender;
@@ -27,6 +28,7 @@ struct GPUScene
     float focalLength;
 
     float fov;
+    float width;
     float height;
     uint dispatchDimX;
     uint dispatchDimY;

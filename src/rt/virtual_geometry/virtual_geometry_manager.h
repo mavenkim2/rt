@@ -147,8 +147,7 @@ struct VirtualGeometryManager
         maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE * MAX_CLUSTER_TRIANGLE_VERTICES;
     const u32 maxNumClusters = maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE;
 
-    const u32 maxInstances             = 1u << 21;
-    const u32 maxInstancesPerPartition = 128;
+    const u32 maxInstances         = 1u << 21;
     const u32 maxTotalClusterCount = 8 * 1024 * 1024; // MAX_CLUSTERS_PER_BLAS * maxInstances;
     const u32 maxClusterCountPerAccelerationStructure = MAX_CLUSTERS_PER_BLAS;
 
@@ -329,6 +328,12 @@ struct VirtualGeometryManager
     DescriptorSetLayout assignInstancesLayout = {};
     VkPipeline assignInstancesPipeline        = {};
 
+    DescriptorSetLayout generateMipsLayout = {};
+    VkPipeline generateMipsPipeline        = {};
+
+    DescriptorSetLayout reprojectDepthLayout = {};
+    VkPipeline reprojectDepthPipeline        = {};
+
     ResourceHandle evictedPagesBuffer;
     GPUBuffer hierarchyNodeBuffer;
     ResourceHandle hierarchyNodeBufferHandle;
@@ -449,6 +454,9 @@ struct VirtualGeometryManager
     ResourceHandle visiblePartitionsBuffer;
     ResourceHandle evictedPartitionsBuffer;
 
+    ResourceHandle depthPyramid;
+    ImageDesc depthPyramidDesc;
+
     // u32 requestBatchWriteIndex;
     // RingBuffer<StreamingRequestBatch> streamingRequestBatches;
     // StaticArray<StreamingRequest, maxQueueBatches * maxStreamingRequestsPerFrame>
@@ -473,12 +481,16 @@ struct VirtualGeometryManager
     u32 numAllocatedPartitions;
     u32 numInstances;
 
-    VirtualGeometryManager(CommandBuffer *cmd, Arena *arena);
+    VirtualGeometryManager(CommandBuffer *cmd, Arena *arena, u32 targetWidth,
+                           u32 targetHeight);
     void EditRegistration(u32 instanceID, u32 pageIndex, bool add);
     void RecursePageDependencies(StaticArray<VirtualPageHandle> &pages, u32 instanceID,
                                  u32 pageIndex, u32 priority);
     bool VerifyPageDependencies(u32 virtualOffset, u32 startPage, u32 numPages);
     bool CheckDuplicatedFixup(u32 virtualOffset, u32 pageIndex, u32 startPage, u32 numPages);
+    void UpdateHZB();
+    void ReprojectDepth(u32 targetWidth, u32 targetHeight, ResourceHandle depth,
+                        ResourceHandle scene);
     bool ProcessInstanceRequests(CommandBuffer *cmd);
     void ProcessRequests(CommandBuffer *cmd, bool test);
     u32 AddNewMesh(Arena *arena, CommandBuffer *cmd, string filename);

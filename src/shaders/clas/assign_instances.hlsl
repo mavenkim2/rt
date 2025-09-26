@@ -20,6 +20,9 @@ void main(uint3 dtID : SV_DispatchThreadID)
     GPUInstance instance = instances[instanceIndex];
     if (instance.flags & (GPU_INSTANCE_FLAG_FREED | GPU_INSTANCE_FLAG_MERGED)) return;
 
+    //if (instance.resourceID > 8 || instance.resourceID == 2) return;
+    if (instance.resourceID != 0 && instance.resourceID < 11) return;
+
     // Share
     BLASData blasData = (BLASData)0;
     blasData.instanceID = instanceIndex;

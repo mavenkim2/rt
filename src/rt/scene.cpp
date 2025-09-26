@@ -697,6 +697,10 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
     ChunkedLinkedList<ScenePrimitives *, MemoryType_Instance> files(temp.arena, 32);
 
     bool hasMaterials = false;
+    if (scene->filename == "objects/xgBreadFruit_archiveBreadFruitBaked_obj.rtscene")
+    {
+        int stop = 5;
+    }
     for (;;)
     {
         if (Advance(&tokenizer, "RTSCENE_END")) break;

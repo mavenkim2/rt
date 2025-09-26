@@ -49,6 +49,7 @@ struct RenderGraphResource
         {
             ImageDesc imageDesc;
             GPUImage image;
+            StaticArray<Subresource> subresources;
         };
         struct
         {
@@ -91,6 +92,7 @@ struct Pass
     PassFunction func;
     StaticArray<ResourceHandle> resourceHandles;
     StaticArray<ResourceUsageType> resourceUsageTypes;
+    StaticArray<int> subresources;
 
     // Compute
     VkPipeline pipeline;
@@ -98,7 +100,7 @@ struct Pass
 
     // Image aliasing
 
-    Pass &AddHandle(ResourceHandle handle, ResourceUsageType type);
+    Pass &AddHandle(ResourceHandle handle, ResourceUsageType type, int subresource = -1);
 };
 
 struct RenderGraph
@@ -129,9 +131,12 @@ struct RenderGraph
     ResourceHandle CreateImageResource(string name, ImageDesc desc,
                                        ResourceFlags flags = ResourceFlags::Transient |
                                                              ResourceFlags::Image);
+    void CreateImageSubresources(ResourceHandle handle,
+                                 StaticArray<Subresource> &subresources);
+
     void UpdateBufferResource(ResourceHandle handle, VkBufferUsageFlags2 usageFlags, u32 size);
     ResourceHandle RegisterExternalResource(string name, GPUBuffer *buffer);
-    ResourceHandle RegisterExternalResource(GPUImage *image);
+    ResourceHandle RegisterExternalResource(string name, GPUImage *image);
     int Overlap(const ResourceLifeTimeRange &lhs, const ResourceLifeTimeRange &rhs) const;
     Pass &StartPass(u32 numResources, PassFunction &&func);
     Pass &StartComputePass(VkPipeline pipeline, DescriptorSetLayout &layout, u32 numResources,
@@ -179,6 +184,7 @@ struct RenderGraph
         pass.layout             = &layout;
         pass.resourceHandles    = StaticArray<ResourceHandle>(arena, numResources);
         pass.resourceUsageTypes = StaticArray<ResourceUsageType>(arena, numResources);
+        pass.subresources       = StaticArray<int>(arena, numResources);
         pass.func               = AddComputePass;
         passes.Push(pass);
         return passes[passes.Length() - 1];
@@ -214,6 +220,7 @@ struct RenderGraph
         pass.layout             = &layout;
         pass.resourceHandles    = StaticArray<ResourceHandle>(arena, numResources);
         pass.resourceUsageTypes = StaticArray<ResourceUsageType>(arena, numResources);
+        pass.subresources       = StaticArray<int>(arena, numResources);
         pass.func               = AddComputePass;
         passes.Push(pass);
         return passes[passes.Length() - 1];

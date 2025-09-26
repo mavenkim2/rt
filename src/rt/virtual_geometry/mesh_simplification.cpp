@@ -2789,13 +2789,13 @@ static bool GenerateValidTriClusters(Arena *arena, Mesh &mesh, u32 maxNumTriangl
         return false;
     }
 
-    ScratchArena scratch(&arena, 1);
     for (u32 cluster = 0; cluster < result.ranges.Length(); cluster++)
     {
         PartitionRange range = result.ranges[cluster];
         if (range.end - range.begin > MAX_CLUSTER_TRIANGLES) return false;
         u32 clusterNumTriangles = range.end - range.begin;
 
+        ScratchArena scratch(&arena, 1);
         u32 hashSize = NextPowerOfTwo(clusterNumTriangles * 3);
         HashIndex vertexHashSet(scratch.temp.arena, hashSize, hashSize);
 
@@ -4137,11 +4137,6 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
                                            StaticArray<DenseGeometryBuildData> &buildDatas,
                                            bool useVoxels = false, u32 rootClusterMax = 128)
 {
-    // if (OS_FileExists(filename))
-    // {
-    //     Print("%S skipped\n", filename);
-    //     return;
-    // }
 
     const u32 minGroupSize = 8;
     const u32 maxGroupSize = 32;
@@ -4513,6 +4508,7 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
             const int numSpatialLinks = 5;
             u32 numAttributes         = 0;
             u32 vertexDataLen         = sizeof(f32) * (3 + numAttributes);
+            std::atomic<u32> testTotal(0);
 
             ParallelForLoop(0, numClusters, 32, 32, [&](int jobID, int clusterIndex) {
                 Arena *arena = arenas[GetThreadIndex()];
@@ -4586,6 +4582,8 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
                 clusterExternalEdges[clusterIndex] =
                     StaticArray<int>(arena, numNeighbors, numNeighbors);
 
+                testTotal.fetch_add(numNeighbors);
+
                 MemoryCopy(clusterNeighbors[clusterIndex].data, neighbors.data,
                            sizeof(int) * compactedNumNeighbors);
                 MemoryCopy(clusterEdgeWeights[clusterIndex].data, weights,
@@ -4593,6 +4591,8 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
                 MemoryCopy(clusterExternalEdges[clusterIndex].data, externalEdges.data,
                            sizeof(int) * numNeighbors);
             });
+
+            Print("help %u\n", testTotal.load());
 
             // Create edges between spatially close but separated clusters
             struct Handle
@@ -5549,8 +5549,9 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
     output.maxDepth         = depth;
     output.numVoxelClusters = numVoxelClusters.load();
 
-    if (numMeshes == 1)
+    if (clusters.Length() < 100)
     {
+        Print("creating ellipsoid for %S\n", filename);
         Mesh &mesh = meshes[0];
         Vec3f center(0.f);
         for (u32 i = 0; i < mesh.numVertices; i++)
@@ -5655,6 +5656,13 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                     string filename, bool useVoxels, u32 rootClusterMax)
 {
     ScratchArena scratch;
+
+    // if (OS_FileExists(filename))
+    if (Contains(filename, "bread", MatchFlag_CaseInsensitive))
+    {
+        Print("%S skipped\n", filename);
+        return;
+    }
 
     Arena **arenas = GetArenaArray(scratch.temp.arena);
 
@@ -7014,4 +7022,4 @@ void ConvolveDisneyDiffuse()
 #endif
 }
 
-}
+} // namespace rt

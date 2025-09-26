@@ -1,7 +1,6 @@
 #include "../../rt/shader_interop/as_shaderinterop.h"
 #include "../../rt/shader_interop/gpu_scene_shaderinterop.h"
 #include "lod_error_test.hlsli"
-#include "cull.hlsli"
 
 RWStructuredBuffer<PartitionInfo> partitionInfos : register(u0);
 RWStructuredBuffer<uint> globals : register(u1);
@@ -11,6 +10,10 @@ RWStructuredBuffer<uint> visiblePartitions : register(u3);
 RWStructuredBuffer<uint2> freedPartitions : register(u4);
 RWStructuredBuffer<uint> instanceFreeList : register(u5);
 ConstantBuffer<GPUScene> gpuScene : register(b6);
+Texture2D<float> depthPyramid : register(t7);
+
+#define ENABLE_OCCLUSION
+#include "cull.hlsli"
 
 [[vk::push_constant]] NumPushConstant pc;
 
@@ -27,21 +30,43 @@ void main(uint3 dtID : SV_DispatchThreadID)
     if (partitionIndex >= pc.num) return;
     PartitionInfo info = partitionInfos[partitionIndex];
 
-    float error = info.lodError;
-    float4 lodBounds = info.lodBounds;
+    uint flags = info.flags;
+    bool useProxies = false;
+    if (flags & PARTITION_FLAG_HAS_PROXIES)
+    {
+        float error = info.lodError;
+        float4 lodBounds = info.lodBounds;
 
-    float3x4 renderFromObject = float3x4(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0);
-    float3 minP = lodBounds.xyz - lodBounds.w;
-    float3 maxP = lodBounds.xyz + lodBounds.w;
-    bool cull = FrustumCull(gpuScene.clipFromRender, renderFromObject, 
-            minP, maxP, gpuScene.p22, gpuScene.p23);
+        float3x4 renderFromObject = float3x4(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0);
+        float3 minP = lodBounds.xyz - lodBounds.w;
+        float3 maxP = lodBounds.xyz + lodBounds.w;
+        bool cull = FrustumCull(gpuScene.clipFromRender, renderFromObject, 
+                minP, maxP, gpuScene.p22, gpuScene.p23);
 
-    Translate(renderFromObject, -gpuScene.cameraP);
+        if (!cull)
+        {
+            float4 clipMinP = mul(gpuScene.clipFromRender, float4(mul(renderFromObject, float4(minP, 1.f)), 1.f));
+            clipMinP /= clipMinP.w;
+            float4 clipMaxP = mul(gpuScene.clipFromRender, float4(mul(renderFromObject, float4(maxP, 1.f)), 1.f));
+            clipMaxP /= clipMaxP.w;
 
-    float test;
-    float2 edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, 1.f, test, cull);
+            float maxZ = max(clipMinP.z, clipMaxP.z);
+            float4 aabb = float4(clipMinP.xy, clipMaxP.xy);
 
-    if (error * gpuScene.lodScale < edgeScales.x)
+            bool occluded = HZBOcclusionTest(aabb, maxZ, int2(gpuScene.width, gpuScene.height));
+
+            if (occluded)
+            {
+                Translate(renderFromObject, -gpuScene.cameraP);
+
+                float test;
+                float2 edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, 1.f, test, cull);
+                useProxies = error * gpuScene.lodScale < edgeScales.x;
+            }
+        }
+    }
+
+    if (useProxies)
     {
         if (info.flags & PARTITION_FLAG_INSTANCES_RENDERED)
         {

@@ -231,9 +231,8 @@ struct ClusterCull
         bool cull = instance.flags & GPU_INSTANCE_FLAG_CULL;
         float2 edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, maxScale, test, cull);
 
-        //bool isValid = (!highestDetail && ((edgeScales.x > gpuScene.lodScale * lodError * minScale) || (header.flags & CLUSTER_STREAMING_LEAF_FLAG)))
-                        //|| (highestDetail && (header.flags & CLUSTER_STREAMING_LEAF_FLAG));
-        bool isValid = header.depth == 0;
+        bool isValid = (!highestDetail && ((edgeScales.x > gpuScene.lodScale * lodError * minScale) || (header.flags & CLUSTER_STREAMING_LEAF_FLAG)))
+                        || (highestDetail && (header.flags & CLUSTER_STREAMING_LEAF_FLAG));
 
         uint clusterOffset;
         WaveInterlockedAddScalarTest(globals[GLOBALS_VISIBLE_CLUSTER_COUNT_INDEX], isValid && !isVoxel, 1, clusterOffset);

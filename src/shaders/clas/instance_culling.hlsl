@@ -35,7 +35,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
     GPUInstance instance = gpuInstances[instanceIndex];
 
     if (instance.flags & GPU_INSTANCE_FLAG_FREED) return;
-    
+
     // Proxy
     if (instance.flags & GPU_INSTANCE_FLAG_MERGED)
     {

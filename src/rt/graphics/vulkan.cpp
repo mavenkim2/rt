@@ -1417,7 +1417,8 @@ Vulkan::ImageMemoryBarrier(VkImage image, VkImageLayout oldLayout, VkImageLayout
                            VkPipelineStageFlags2 srcStageMask,
                            VkPipelineStageFlags2 dstStageMask, VkAccessFlags2 srcAccessMask,
                            VkAccessFlags2 dstAccessMask, VkImageAspectFlags aspectFlags,
-                           QueueType fromQueue, QueueType toQueue)
+                           QueueType fromQueue, QueueType toQueue, u32 baseMipLevel,
+                           u32 levelCount, u32 baseArrayLayer, u32 layerCount)
 {
     VkImageMemoryBarrier2 barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
     barrier.image                 = image;
@@ -1430,10 +1431,10 @@ Vulkan::ImageMemoryBarrier(VkImage image, VkImageLayout oldLayout, VkImageLayout
     barrier.dstAccessMask = dstAccessMask;
 
     barrier.subresourceRange.aspectMask     = aspectFlags;
-    barrier.subresourceRange.baseMipLevel   = 0;
-    barrier.subresourceRange.levelCount     = VK_REMAINING_MIP_LEVELS;
-    barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount     = VK_REMAINING_ARRAY_LAYERS;
+    barrier.subresourceRange.baseMipLevel   = baseMipLevel;
+    barrier.subresourceRange.levelCount     = levelCount;
+    barrier.subresourceRange.baseArrayLayer = baseArrayLayer;
+    barrier.subresourceRange.layerCount     = layerCount;
     barrier.srcQueueFamilyIndex =
         fromQueue == QueueType_Ignored ? VK_QUEUE_FAMILY_IGNORED : GetQueueFamily(fromQueue);
     barrier.dstQueueFamilyIndex =
@@ -1457,7 +1458,8 @@ void CommandBuffer::Barrier(GPUImage *image, VkImageLayout oldLayout, VkImageLay
                             VkPipelineStageFlags2 srcStageMask,
                             VkPipelineStageFlags2 dstStageMask, VkAccessFlags2 srcAccessMask,
                             VkAccessFlags2 dstAccessMask, QueueType fromQueue,
-                            QueueType toQueue)
+                            QueueType toQueue, u32 baseMipLevel, u32 levelCount,
+                            u32 baseArrayLayer, u32 layerCount)
 {
     VkImageMemoryBarrier2 barrier = device->ImageMemoryBarrier(
         image->image, oldLayout, newLayout, srcStageMask, dstStageMask, srcAccessMask,
@@ -2063,6 +2065,11 @@ void Vulkan::DestroyBuffer(GPUBuffer *buffer)
     vmaDestroyBuffer(allocator, buffer->buffer, buffer->allocation);
 }
 
+void Vulkan::DestroyBufferHandle(GPUBuffer *buffer)
+{
+    vkDestroyBuffer(device, buffer->buffer, 0);
+}
+
 void Vulkan::DestroyBuffer(VkBuffer buffer) { vkDestroyBuffer(device, buffer, 0); }
 
 void Vulkan::DestroyImage(GPUImage *image)
@@ -2577,10 +2584,10 @@ DescriptorSet &DescriptorSet::Bind(GPUBuffer *buffer, u64 offset, u64 size)
     return Bind(index, buffer, offset, size);
 }
 
-DescriptorSet &DescriptorSet::Bind(GPUImage *image)
+DescriptorSet &DescriptorSet::Bind(GPUImage *image, int subresource)
 {
     u32 index = numBinds++;
-    return Bind(index, image);
+    return Bind(index, image, subresource);
 }
 
 DescriptorSet &DescriptorSet::Bind(VkAccelerationStructureKHR *accel)

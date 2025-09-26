@@ -266,12 +266,13 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     gpuScene.renderFromCamera = params->renderFromCamera;
     gpuScene.cameraFromRender = params->cameraFromRender;
     gpuScene.lightFromRender  = params->lightFromRender;
-    gpuScene.lodScale         = 0.5f * params->NDCFromCamera[1][1] * params->height;
+    gpuScene.lodScale         = 0.5f * params->NDCFromCamera[1][1] * targetHeight;
     gpuScene.dxCamera         = params->dxCamera;
     gpuScene.lensRadius       = params->lensRadius;
     gpuScene.dyCamera         = params->dyCamera;
     gpuScene.focalLength      = params->focalLength;
-    gpuScene.height           = params->height;
+    gpuScene.width            = targetWidth;
+    gpuScene.height           = targetHeight;
     gpuScene.fov              = params->fov;
     gpuScene.p22              = rasterFromCamera[2][2];
     gpuScene.p23              = rasterFromCamera[3][2];
@@ -296,8 +297,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                               VK_FORMAT_R32_SFLOAT, MemoryUsage::GPU_ONLY,
                               VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                               VK_IMAGE_TILING_OPTIMAL);
-    ResourceHandle depthBuffer =
-        rg->CreateImageResource("depth buffer image", depthBufferDesc);
+    GPUImage depthBuffer = device->CreateImage(depthBufferDesc);
+    ResourceHandle depthBufferHandle =
+        rg->RegisterExternalResource("depth buffer", &depthBuffer);
+
     ImageDesc targetUavDesc(ImageType::Type2D, targetWidth, targetHeight, 1, 1, 1,
                             VK_FORMAT_R8G8B8A8_UNORM, MemoryUsage::GPU_ONLY,
                             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
@@ -696,7 +699,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     // Virtual geometry initialization
     CommandBuffer *dgfTransferCmd = device->BeginCommandBuffer(QueueType_Compute);
 
-    VirtualGeometryManager virtualGeometryManager(dgfTransferCmd, sceneScratch.temp.arena);
+    VirtualGeometryManager virtualGeometryManager(dgfTransferCmd, sceneScratch.temp.arena,
+                                                  targetWidth, targetHeight);
     StaticArray<AABB> blasSceneBounds(sceneScratch.temp.arena, numBlas);
     StaticArray<string> virtualGeoFilenames(sceneScratch.temp.arena, numBlas);
     HashIndex filenameHash(sceneScratch.temp.arena, NextPowerOfTwo(numBlas),
@@ -1146,6 +1150,16 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                 VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
             computeCmd->FlushBarriers();
 
+            if (device->frameCount > 0)
+            {
+                // TODO: support transient lifetimes that cross frame boundaries
+                virtualGeometryManager.ReprojectDepth(
+                    targetWidth, targetHeight, depthBufferHandle,
+                    sceneTransferBufferHandles[currentBuffer]);
+            }
+
+            virtualGeometryManager.UpdateHZB();
+
             virtualGeometryManager.PrepareInstances(
                 computeCmd, sceneTransferBufferHandles[currentBuffer], false);
 
@@ -1403,14 +1417,13 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                targetHeight, &scene = sceneTransferBuffers[currentBuffer].buffer,
                &debug = shaderDebugBuffers[currentBuffer].buffer, &materialBuffer,
                &faceDataBuffer, &virtualTextureManager, &virtualGeometryManager,
-               imageHandle = image, imageOutHandle = imageOut, depthBufferHandle = depthBuffer,
+               imageHandle = image, imageOutHandle = imageOut, &depthBuffer,
                normalRoughnessHandle = normalRoughness, diffuseAlbedoHandle = diffuseAlbedo,
                specularAlbedoHandle      = specularAlbedo,
                specularHitDistanceHandle = specularHitDistance](CommandBuffer *cmd) {
                   RenderGraph *rg               = GetRenderGraph();
                   GPUImage *image               = rg->GetImage(imageHandle);
                   GPUImage *imageOut            = rg->GetImage(imageOutHandle);
-                  GPUImage *depthBuffer         = rg->GetImage(depthBufferHandle);
                   GPUImage *normalRoughness     = rg->GetImage(normalRoughnessHandle);
                   GPUImage *diffuseAlbedo       = rg->GetImage(diffuseAlbedoHandle);
                   GPUImage *specularAlbedo      = rg->GetImage(specularAlbedoHandle);
@@ -1424,8 +1437,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                VK_PIPELINE_STAGE_2_NONE,
                                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
                                VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_WRITE_BIT);
-                  cmd->Barrier(depthBuffer, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                               VK_PIPELINE_STAGE_2_NONE,
+                  cmd->Barrier(&depthBuffer, VK_IMAGE_LAYOUT_UNDEFINED,
+                               VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_NONE,
                                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
                                VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_WRITE_BIT);
                   cmd->Barrier(normalRoughness, VK_IMAGE_LAYOUT_UNDEFINED,
@@ -1464,7 +1477,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                       .Bind(&virtualGeometryManager.instanceTransformsBuffer)
                       .Bind(&virtualGeometryManager.partitionInfosBuffer)
                       // .Bind(&virtualGeometryManager.clasGlobalsBuffer)
-                      .Bind(depthBuffer)
+                      .Bind(&depthBuffer)
                       .Bind(normalRoughness)
                       .Bind(diffuseAlbedo)
                       .Bind(specularAlbedo)
@@ -1480,7 +1493,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
               })
             .AddHandle(image, ResourceUsageType::Write)
             .AddHandle(imageOut, ResourceUsageType::Write)
-            .AddHandle(depthBuffer, ResourceUsageType::Write)
+            .AddHandle(depthBufferHandle, ResourceUsageType::Write)
             .AddHandle(normalRoughness, ResourceUsageType::Write)
             .AddHandle(diffuseAlbedo, ResourceUsageType::Write)
             .AddHandle(specularAlbedo, ResourceUsageType::Write)
@@ -1488,17 +1501,16 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         rg->StartComputePass(
               mvecPipeline, mvecLayout, 3,
-              [depthBufferHandle = depthBuffer, motionVectorHandle = motionVectorBuffer,
-               targetWidth, targetHeight](CommandBuffer *cmd) {
+              [&depthBuffer, motionVectorHandle = motionVectorBuffer, targetWidth,
+               targetHeight](CommandBuffer *cmd) {
                   RenderGraph *rg              = GetRenderGraph();
                   GPUImage *motionVectorBuffer = rg->GetImage(motionVectorHandle);
-                  GPUImage *depthBuffer        = rg->GetImage(depthBufferHandle);
                   device->BeginEvent(cmd, "Motion Vectors");
                   cmd->Barrier(motionVectorBuffer, VK_IMAGE_LAYOUT_UNDEFINED,
                                VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_NONE,
                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_NONE,
                                VK_ACCESS_2_SHADER_WRITE_BIT);
-                  cmd->Barrier(depthBuffer, VK_IMAGE_LAYOUT_GENERAL,
+                  cmd->Barrier(&depthBuffer, VK_IMAGE_LAYOUT_GENERAL,
                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -1507,7 +1519,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                   cmd->Dispatch((targetWidth + 7) / 8, (targetHeight + 7) / 8, 1);
                   device->EndEvent(cmd);
               })
-            .AddHandle(depthBuffer, ResourceUsageType::Read)
+            .AddHandle(depthBufferHandle, ResourceUsageType::Read)
             .AddHandle(motionVectorBuffer, ResourceUsageType::Write)
             .AddHandle(sceneTransferBufferHandles[currentBuffer], ResourceUsageType::Read);
 
@@ -1525,15 +1537,14 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         rg->StartPass(
               8,
               [&gpuScene, &params, &clipToPrevClip, &prevClipToClip, &camera, outJitterX,
-               outJitterY, imageHandle = image, imageOutHandle = imageOut,
-               depthBufferHandle = depthBuffer, normalRoughnessHandle = normalRoughness,
-               diffuseAlbedoHandle = diffuseAlbedo, specularAlbedoHandle = specularAlbedo,
+               outJitterY, imageHandle = image, imageOutHandle = imageOut, &depthBuffer,
+               normalRoughnessHandle = normalRoughness, diffuseAlbedoHandle = diffuseAlbedo,
+               specularAlbedoHandle      = specularAlbedo,
                specularHitDistanceHandle = specularHitDistance,
                motionVectorsBufferHandle = motionVectorBuffer](CommandBuffer *cmd) {
                   RenderGraph *rg               = GetRenderGraph();
                   GPUImage *image               = rg->GetImage(imageHandle);
                   GPUImage *imageOut            = rg->GetImage(imageOutHandle);
-                  GPUImage *depthBuffer         = rg->GetImage(depthBufferHandle);
                   GPUImage *normalRoughness     = rg->GetImage(normalRoughnessHandle);
                   GPUImage *diffuseAlbedo       = rg->GetImage(diffuseAlbedoHandle);
                   GPUImage *specularAlbedo      = rg->GetImage(specularAlbedoHandle);
@@ -1574,7 +1585,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
                   DLSSTargets targets = device->InitializeDLSSTargets(
                       image, diffuseAlbedo, specularAlbedo, normalRoughness,
-                      motionVectorsBuffer, depthBuffer, specularHitDistance, imageOut);
+                      motionVectorsBuffer, &depthBuffer, specularHitDistance, imageOut);
                   device->BeginEvent(cmd, "DLSS RR");
                   cmd->DLSS(targets, gpuScene.cameraFromRender, gpuScene.renderFromCamera,
                             params->NDCFromCamera, params->cameraFromClip, clipToPrevClip,
@@ -1588,7 +1599,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             .AddHandle(specularAlbedo, ResourceUsageType::Read)
             .AddHandle(normalRoughness, ResourceUsageType::Read)
             .AddHandle(motionVectorBuffer, ResourceUsageType::Read)
-            .AddHandle(depthBuffer, ResourceUsageType::Read)
+            .AddHandle(depthBufferHandle, ResourceUsageType::Read)
             .AddHandle(specularHitDistance, ResourceUsageType::Read)
             .AddHandle(imageOut, ResourceUsageType::Write);
 

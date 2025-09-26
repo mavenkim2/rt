@@ -62,6 +62,14 @@ ResourceHandle RenderGraph::CreateImageResource(string name, ImageDesc desc,
     return handle;
 }
 
+void RenderGraph::CreateImageSubresources(ResourceHandle handle,
+                                          StaticArray<Subresource> &subresources)
+{
+    RenderGraphResource &resource = resources[handle.index];
+    resource.subresources         = StaticArray<Subresource>(arena, subresources.Length());
+    Copy(resource.subresources, subresources);
+}
+
 ResourceHandle RenderGraph::RegisterExternalResource(string name, GPUBuffer *buffer)
 {
     RenderGraphResource resource = {};
@@ -78,10 +86,13 @@ ResourceHandle RenderGraph::RegisterExternalResource(string name, GPUBuffer *buf
     return handle;
 }
 
-ResourceHandle RenderGraph::RegisterExternalResource(GPUImage *image)
+ResourceHandle RenderGraph::RegisterExternalResource(string name, GPUImage *image)
 {
     RenderGraphResource resource = {};
+    resource.name                = PushStr8Copy(arena, name);
     resource.flags               = ResourceFlags::External | ResourceFlags::Image;
+    resource.imageDesc           = image->desc;
+    resource.image               = *image;
 
     ResourceHandle handle;
     handle.index = resources.Length();
@@ -110,6 +121,7 @@ Pass &RenderGraph::StartPass(u32 numResources, PassFunction &&func)
     Pass pass;
     pass.resourceHandles    = StaticArray<ResourceHandle>(arena, numResources);
     pass.resourceUsageTypes = StaticArray<ResourceUsageType>(arena, numResources);
+    pass.subresources       = StaticArray<int>(arena, numResources);
     pass.func               = func;
     passes.Push(pass);
     return passes[passes.Length() - 1];
@@ -134,6 +146,7 @@ Pass &RenderGraph::StartComputePass(VkPipeline pipeline, DescriptorSetLayout &la
     pass.layout             = &layout;
     pass.resourceHandles    = StaticArray<ResourceHandle>(arena, numResources);
     pass.resourceUsageTypes = StaticArray<ResourceUsageType>(arena, numResources);
+    pass.subresources       = StaticArray<int>(arena, numResources);
     pass.func               = AddComputePass;
     passes.Push(pass);
     return passes[passes.Length() - 1];
@@ -166,15 +179,17 @@ Pass &RenderGraph::StartIndirectComputePass(string name, VkPipeline pipeline,
     pass.layout             = &layout;
     pass.resourceHandles    = StaticArray<ResourceHandle>(arena, numResources);
     pass.resourceUsageTypes = StaticArray<ResourceUsageType>(arena, numResources);
+    pass.subresources       = StaticArray<int>(arena, numResources);
     pass.func               = AddComputePass;
     passes.Push(pass);
     return passes[passes.Length() - 1];
 }
 
-Pass &Pass::AddHandle(ResourceHandle handle, ResourceUsageType type)
+Pass &Pass::AddHandle(ResourceHandle handle, ResourceUsageType type, int subresource)
 {
     resourceHandles.Push(handle);
     resourceUsageTypes.Push(type);
+    subresources.Push(subresource);
 
     RenderGraph *rg = GetRenderGraph();
     u32 passIndex   = this - rg->passes.data;
@@ -186,8 +201,9 @@ Pass &Pass::AddHandle(ResourceHandle handle, ResourceUsageType type)
 
 void RenderGraph::BindResources(Pass &pass, DescriptorSet &ds)
 {
-    for (ResourceHandle &handle : pass.resourceHandles)
+    for (int handleIndex = 0; handleIndex < pass.resourceHandles.Length(); handleIndex++)
     {
+        ResourceHandle handle         = pass.resourceHandles[handleIndex];
         RenderGraphResource &resource = resources[handle.index];
         if (IsBuffer(resource))
         {
@@ -195,7 +211,7 @@ void RenderGraph::BindResources(Pass &pass, DescriptorSet &ds)
         }
         else if (IsImage(resource))
         {
-            ds.Bind(&resource.image);
+            ds.Bind(&resource.image, pass.subresources[handleIndex]);
         }
     }
 }
@@ -257,7 +273,7 @@ void RenderGraph::Compile()
             // TODO: don't do this every frame
             if (resource.buffer.buffer)
             {
-                device->DestroyBuffer(&resource.buffer);
+                device->DestroyBufferHandle(&resource.buffer);
             }
             resource.buffer =
                 device->CreateAliasedBuffer(resource.bufferUsageFlags, resource.size);
@@ -489,6 +505,16 @@ void RenderGraph::Compile()
             {
                 device->BindImageMemory(resource.alloc, r.image.image, r.aliasOffset);
                 device->CreateSubresource(&r.image);
+
+                if (r.subresources.Length())
+                {
+                    for (Subresource &subresource : r.subresources)
+                    {
+                        device->CreateSubresource(&r.image, subresource.baseMip,
+                                                  subresource.numMips, subresource.baseLayer,
+                                                  subresource.numLayers);
+                    }
+                }
             }
             else if (IsBuffer(r))
             {

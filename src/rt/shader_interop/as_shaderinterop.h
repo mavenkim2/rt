@@ -356,6 +356,7 @@ struct GPUInstance
 
 #define PARTITION_FLAG_INSTANCES_RENDERED (1u << 0)
 #define PARTITION_FLAG_PROXY_RENDERED     (1u << 1)
+#define PARTITION_FLAG_HAS_PROXIES        (1u << 2)
 
 struct PartitionInfo
 {

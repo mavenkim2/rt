@@ -905,8 +905,7 @@ static string WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState 
                           string directory, string currentFilename)
 {
 
-// #ifdef USE_GPU
-#if 1
+#ifdef USE_GPU
     if (state->shapes.Length())
     {
         Print("%S, num: %i\n", currentFilename, state->shapes.Length());
@@ -979,6 +978,15 @@ static string WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState 
                 hashes[meshIndex] = hash;
             }
         });
+
+        u32 testVert = 0;
+        u32 testInd = 0;
+        for (int meshIndex = 0; meshIndex < meshes.Length(); meshIndex++)
+        {
+            testVert += meshes[meshIndex].numVertices;
+            testInd += meshes[meshIndex].numIndices;
+        }
+        Print("stats for %S pre cull: vert %u ind %u \n", currentFilename, testVert, testInd);
 
         ParallelFor(0, meshes.Length(), 32, 32, [&](int jobID, int start, int count) {
             for (int meshIndex = start; meshIndex < start + count; meshIndex++)
@@ -1161,12 +1169,16 @@ static string WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState 
         u8 *buffer = PushArrayNoZero(tempArena, u8, size);
 
         u32 offset = 0;
+        u32 totalNumVertices = 0;
+        u32 totalNumIndices = 0;
         for (u32 i = 0; i < newNumMeshes; i++)
         {
             Mesh &mesh = meshes[i];
             MemoryCopy(buffer + offset, mesh.p, sizeof(Vec3f) * mesh.numVertices);
             offset += sizeof(Vec3f) * mesh.numVertices;
             MemoryCopy(buffer + offset, mesh.indices, sizeof(u32) * mesh.numIndices);
+            totalNumVertices += mesh.numVertices;
+            totalNumIndices += mesh.numIndices;
             if (mesh.n)
             {
                 MemoryCopy(buffer + offset, mesh.n, sizeof(Vec3f) * mesh.numVertices);
@@ -1178,6 +1190,7 @@ static string WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState 
                 offset += sizeof(Vec2f) * mesh.numVertices;
             }
         }
+        Print("stats for %S: vert %u ind %u \n", currentFilename, totalNumVertices, totalNumIndices);
 
         string str = {buffer, size};
         u64 hash   = MurmurHash64A(str.str, size, 0);

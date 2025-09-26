@@ -489,6 +489,14 @@ struct ImageDesc
     }
 };
 
+struct Subresource
+{
+    u32 baseLayer = 0;
+    u32 numLayers = VK_REMAINING_ARRAY_LAYERS;
+    u32 baseMip   = 0;
+    u32 numMips   = VK_REMAINING_MIP_LEVELS;
+};
+
 struct GPUImage
 {
     VkImage image;
@@ -663,7 +671,7 @@ struct DescriptorSet
     DescriptorSet &Bind(int index, u64 *ptlasAddress);
 
     DescriptorSet &Bind(GPUBuffer *buffer, u64 offset = 0, u64 size = VK_WHOLE_SIZE);
-    DescriptorSet &Bind(GPUImage *img);
+    DescriptorSet &Bind(GPUImage *img, int subresource = -1);
     DescriptorSet &Bind(VkAccelerationStructureKHR *accel);
     DescriptorSet &Bind(u64 *ptlasAddress);
     void Reset();
@@ -712,11 +720,12 @@ struct ResourceBinding
         ds.Bind(buffer, offset, size);
         return *this;
     }
-    inline ResourceBinding &Bind(GPUImage *img)
+    inline ResourceBinding &Bind(GPUImage *img, int subresource = -1)
     {
-        ds.Bind(img);
+        ds.Bind(img, subresource);
         return *this;
     }
+
     inline ResourceBinding &Bind(VkAccelerationStructureKHR *accel)
     {
         ds.Bind(accel);
@@ -790,7 +799,9 @@ struct CommandBuffer
                  VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask,
                  VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask,
                  QueueType fromQueue = QueueType_Ignored,
-                 QueueType toQueue   = QueueType_Ignored);
+                 QueueType toQueue = QueueType_Ignored, u32 baseMipLevel = 0,
+                 u32 levelCount = VK_REMAINING_MIP_LEVELS, u32 baseArrayLayer = 0,
+                 u32 layerCount = VK_REMAINING_ARRAY_LAYERS);
     void Barrier(GPUImage *image, VkImageLayout layout, VkPipelineStageFlags2 stage,
                  VkAccessFlags2 access);
     void Barrier(GPUBuffer *buffer, VkPipelineStageFlags2 stage, VkAccessFlags2 access);
@@ -1118,7 +1129,10 @@ struct Vulkan
                        VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask,
                        VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask,
                        VkImageAspectFlags aspectFlags, QueueType fromQueue = QueueType_Count,
-                       QueueType toQueue = QueueType_Count);
+                       QueueType toQueue = QueueType_Count, u32 baseMipLevel = 0,
+                       u32 levelCount = VK_REMAINING_MIP_LEVELS, u32 baseArrayLayer = 0,
+                       u32 layerCount = VK_REMAINING_ARRAY_LAYERS);
+
     void CopyFrameBuffer(Swapchain *swapchain, CommandBuffer *cmd, GPUImage *image);
     ThreadPool &GetThreadPool(int threadIndex);
     DescriptorSetLayout CreateDescriptorSetLayout(u32 binding, VkDescriptorType type,
@@ -1137,6 +1151,7 @@ struct Vulkan
                           u32 numMips = VK_REMAINING_MIP_LEVELS, u32 baseLayer = 0,
                           u32 numLayers = VK_REMAINING_ARRAY_LAYERS);
     u32 GetImageSize(GPUImage *image);
+    void DestroyBufferHandle(GPUBuffer *buffer);
     void DestroyBuffer(GPUBuffer *buffer);
     void DestroyBuffer(VkBuffer buffer);
     void DestroyImageHandles(GPUImage *image);

@@ -1,3 +1,6 @@
+#ifndef CULL_HLSLI
+#define CULL_HLSLI
+
 #include "../common.hlsli"
 
 bool FrustumCull(float4x4 clipFromRender, float3x4 renderFromObject, float3 minP, float3 maxP, float p22, float p23)
@@ -73,7 +76,7 @@ bool FrustumCull(float4x4 clipFromRender, float3x4 renderFromObject, float3 minP
 
     visible = visible && isPartiallyInsideFarPlane && isPartiallyInsideNearPlane;
 #endif
-    
+
 #if 0
     results.aabb = aabb;
     results.minZ = saturate(minZ / minW);
@@ -83,3 +86,58 @@ bool FrustumCull(float4x4 clipFromRender, float3x4 renderFromObject, float3 minP
 
     return !visible;
 }
+
+#ifdef ENABLE_OCCLUSION
+bool HZBOcclusionTest(float4 aabb, float maxZ, int2 screenSize)//, out float4 outUv)
+{
+    bool occluded = false;
+    //if (cullResults.isVisible && !cullResults.crossesNearPlane)
+    {
+        float2 toScreenSpace = float2(0.5f, -0.5f);
+        float4 rect = saturate(aabb * toScreenSpace.xyxy + 0.5f);
+        int4 pixels = int4(screenSize.xyxy * rect);// + 0.5f);
+        pixels.xy = max(pixels.xw, 0);
+        pixels.zw = min(pixels.zy, screenSize.xy);
+
+        //bool overlapsPixelCenter = any(pixels.zw >= pixels.xy);
+
+        //if (overlapsPixelCenter)
+        //{
+            // 2 pixels in mip 0 = (2^(k+1)) pixels in mip k
+            // in order for n pixels in mip k to be covered by 2 pixels in mip 0: 
+            // k = ceil(log2(n)) - 1
+            // for n > 1, ceil(log2(n)) - 1 = (floor(log2(n-1)) + 1) - 1 = floor(log2(n-1))
+            // floor(log2(n-1)) = firstbithigh(n-1)
+
+            pixels >>= 1;
+            int2 mipLevel = int2(firstbithigh(pixels.z - pixels.x - 1), firstbithigh(pixels.w - pixels.y - 1));
+            int lod = max(max(mipLevel.x, mipLevel.y), 0);
+
+            lod += any((pixels.zw >> lod) - (pixels.xy >> lod) > 1) ? 1 : 0; // z-x and w-y shouldn't be > 1
+            pixels >>= lod;
+
+            float width, height;
+            depthPyramid.GetDimensions(width, height);
+            float2 texelSize = pow(2, lod) / float2(width, height);
+            float4 uv = (pixels + 0.5f) * texelSize.xyxy;
+
+            //outUv = uv;
+
+            float4 depth;
+            depth.x = depthPyramid.SampleLevel(samplerNearestClamp, uv.xy, lod).r; // (-, -)
+            depth.y = depthPyramid.SampleLevel(samplerNearestClamp, uv.zy, lod).r; // (+, -)
+            depth.z = depthPyramid.SampleLevel(samplerNearestClamp, uv.zw, lod).r; // (+, +)
+            depth.w = depthPyramid.SampleLevel(samplerNearestClamp, uv.xw, lod).r; // (-, +)
+
+            depth.yz = (pixels.x == pixels.z) ? 1.f : depth.yz;
+            depth.zw = (pixels.y == pixels.w) ? 1.f : depth.zw;
+
+            float minDepth = min(min(depth.x, depth.y), min(depth.z, depth.w));
+            occluded = maxZ < minDepth;
+        //}
+    }
+    return occluded;
+}
+#endif
+
+#endif
