@@ -42,21 +42,22 @@ void main(uint3 dtID : SV_DispatchThreadID)
 
         float4 aabb;
         float maxZ;
+        float test;
         bool cull = FrustumCull(gpuScene.clipFromRender, renderFromObject, 
-                minP, maxP, gpuScene.p22, gpuScene.p23, aabb, maxZ);
+                minP, maxP, gpuScene.p22, gpuScene.p23, aabb, maxZ, test);
 
         useProxies = cull;
 
+#if 0
         if (!cull && !pc.firstFrame)
         {
-            float test;
-            bool occluded = HZBOcclusionTest(aabb, maxZ, int2(gpuScene.width, gpuScene.height), test);
+            uint lod;
+            bool occluded = HZBOcclusionTest(aabb, maxZ, int2(gpuScene.width, gpuScene.height), lod);
             useProxies = occluded;
-#if 0
-            partitionInfos[partitionIndex].debug0 = test;
-            partitionInfos[partitionIndex].debug1 = maxZ;
-#endif
+            partitionInfos[partitionIndex].debug0 = aabb;
+            partitionInfos[partitionIndex].debug1 = lod;
         }
+#endif
     }
 #if 0
     else if ((flags & PARTITION_FLAG_HAS_PROXIES) && pc.firstFrame)

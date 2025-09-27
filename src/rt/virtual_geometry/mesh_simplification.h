@@ -126,6 +126,8 @@ struct MeshSimplifier
 
 void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndices,
                     string filename, bool useVoxels = false, u32 rootClusterMax = 128);
+void CreateClusters2(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndices,
+                     string filename);
 
 struct SGGXCompact
 {

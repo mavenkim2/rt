@@ -77,6 +77,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
     }
 #endif
 
+#if 0
     Resource resource = resources[instance.resourceID];
 
     PartitionInfo info = partitionInfos[instance.partitionIndex];
@@ -84,10 +85,10 @@ void main(uint3 dtID : SV_DispatchThreadID)
     AABB aabb = aabbs[instance.resourceID];
 
     float4 temp;
-    float tempfloat;
+    float tempfloat, tempfloat2;
     bool cull = FrustumCull(gpuScene.clipFromRender, renderFromObject, 
             float3(aabb.minX, aabb.minY, aabb.minZ),
-            float3(aabb.maxX, aabb.maxY, aabb.maxZ), gpuScene.p22, gpuScene.p23, temp, tempfloat);
+            float3(aabb.maxX, aabb.maxY, aabb.maxZ), gpuScene.p22, gpuScene.p23, temp, tempfloat, tempfloat2);
     Translate(renderFromObject, -gpuScene.cameraP);
 
     // BLAS Sharing
@@ -157,5 +158,6 @@ void main(uint3 dtID : SV_DispatchThreadID)
     {
         gpuInstances[instanceIndex].flags &= ~GPU_INSTANCE_FLAG_CULL;
     }
+#endif
     //gpuInstances[instanceIndex].flags &= ~(GPU_INSTANCE_FLAG_MERGED_INSTANCE | GPU_INSTANCE_FLAG_SHARED_INSTANCE);
 }

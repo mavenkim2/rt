@@ -210,181 +210,6 @@ void main()
 #endif
                     continue;
                 }
-
-#if 0
-#ifndef TRACE_BRICKS
-#error
-                uint levelTableOffset = query.CandidateInstanceID();
-                uint primIndex = query.CandidatePrimitiveIndex();
-
-                uint brickIndex = (primIndex >> 6) & 127;
-                uint voxelIndex = primIndex & 63;
-                uint tableOffset = primIndex >> 13;
-
-                uint clusterID = 0;
-                //uint clusterID = clusterLookupTable[levelTableOffset + tableOffset];
-
-                uint pageIndex = GetPageIndexFromClusterID(clusterID); 
-                uint clusterIndex = GetClusterIndexFromClusterID(clusterID);
-
-                uint basePageAddress = GetClusterPageBaseAddress(pageIndex);
-                uint numClusters = GetNumClustersInPage(basePageAddress);
-                DenseGeometry dg = GetDenseGeometryHeader(basePageAddress, numClusters, clusterIndex);
-
-                float3 position = dg.DecodePosition(brickIndex);
-                float voxelSize = dg.lodError;
-                float rcpVoxelSize = 1.f / voxelSize;
-
-                uint x         = voxelIndex & 3u;
-                uint y         = (voxelIndex >> 2u) & 3u;
-                uint z         = voxelIndex >> 4u;
-
-                position += float3(x, y, z) * voxelSize;
-                //float3 boundsMin = position + float3(x, y, z) * voxelSize; 
-                //float3 boundsMax = boundsMin + voxelSize;
-
-                //float3 objectRayOrigin = query.CandidateObjectRayOrigin();
-                //float3 objectRayDir = query.CandidateObjectRayDirection();
-                //float3 invDir = rcp(objectRayDir);
-                //float tEntry, tLeave;
-                //float3 tMin;
-
-                //IntersectAABB(boundsMin, boundsMax, objectRayOrigin, invDir, tEntry, tLeave, tMin);
-
-                float3 objectRayOrigin = (query.CandidateObjectRayOrigin() - position) * rcpVoxelSize;
-                float3 objectRayDir = query.CandidateObjectRayDirection() * rcpVoxelSize;
-                float3 invDir =
-                    float3(abs(objectRayDir.x) < 1e-8f ? 0.f : 1.f / objectRayDir.x, 
-                           abs(objectRayDir.y) < 1e-8f ? 0.f : 1.f / objectRayDir.y, 
-                           abs(objectRayDir.z) < 1e-8f ? 0.f : 1.f / objectRayDir.z);
-
-                float tEntry, tLeave;
-                float3 tMin;
-                IntersectAABB(float3(0, 0, 0), float3(1, 1, 1), objectRayOrigin, invDir, tEntry, tLeave, tMin);
-
-                tLeave = min(tLeave, hitT);
-                tEntry = max(tEntry, 0);
-
-                if (tEntry <= tLeave)
-                {
-#if 0
-                    Brick brick = dg.DecodeBrick(brickIndex);
-                    uint vertexOffset = GetVoxelVertexOffset(brick.vertexOffset, brick.bitMask, voxelIndex);
-                    float alpha = dg.DecodeCoverage(vertexOffset);
-
-                    if (rng.Uniform() < alpha)
-                    {
-                        hitT = tEntry;
-
-                        query.CommitProceduralPrimitiveHit(tEntry);
-                        break;
-                    }
-#else
-                    hitT = tEntry;
-                    query.CommitProceduralPrimitiveHit(tEntry);
-#endif
-                }
-#else
-                uint tableBaseOffset = gpuInstances[instanceID].clusterLookupTableOffset;
-                //uint resourceID = query.CandidateInstanceID();
-                uint primIndex = query.CandidatePrimitiveIndex();
-
-                uint brickIndex = primIndex & 127;
-                uint tableOffset = primIndex >> 7;
-
-                uint clusterID = 0;//clusterLookupTable[tableBaseOffset + tableOffset];
-
-                uint pageIndex = GetPageIndexFromClusterID(clusterID); 
-                uint clusterIndex = GetClusterIndexFromClusterID(clusterID);
-
-                uint basePageAddress = GetClusterPageBaseAddress(pageIndex);
-                uint numClusters = GetNumClustersInPage(basePageAddress);
-                DenseGeometry dg = GetDenseGeometryHeader(basePageAddress, numClusters, clusterIndex);
-
-                Brick brick = dg.DecodeBrick(brickIndex);
-
-                float3 position = dg.DecodePosition(brickIndex);
-                float voxelSize = dg.lodError;
-                float rcpVoxelSize = rcp(voxelSize);
-
-                uint3 voxelMax;
-                GetBrickMax(brick.bitMask, voxelMax);
-                //float3 boundsMin = position * rcpVoxelSize; 
-                //float3 boundsMax = boundsMin + float3(voxelMax);
-
-                float3 objectRayOrigin = (query.CandidateObjectRayOrigin() - position) * rcpVoxelSize;
-                float3 objectRayDir = query.CandidateObjectRayDirection() * rcpVoxelSize;
-                float3 invDir =
-                    float3(abs(objectRayDir.x) < 1e-8f ? 0.f : 1.f / objectRayDir.x, 
-                           abs(objectRayDir.y) < 1e-8f ? 0.f : 1.f / objectRayDir.y, 
-                           abs(objectRayDir.z) < 1e-8f ? 0.f : 1.f / objectRayDir.z);
-
-                float tEntry, tLeave;
-                IntersectAABB(float3(0, 0, 0), float3(voxelMax), objectRayOrigin, invDir, tEntry, tLeave);
-
-                tLeave = min(tLeave, hitT);
-                tEntry = max(tEntry, 0);
-
-                if (tEntry <= tLeave)
-                {
-                    float tHit = tEntry;
-                    float maxT = tLeave;
-
-                    int3 step = int3(objectRayDir.x >= 0 ? 1 : -1, objectRayDir.y >= 0 ? 1 : -1, 
-                                     objectRayDir.z >= 0 ? 1 : -1);
-                    int3 add = int3(objectRayDir.x >= 0 ? 1 : 0, objectRayDir.y >= 0 ? 1 : 0,
-                                    objectRayDir.z >= 0 ? 1 : 0);
-
-                    float3 stepT = abs(invDir);
-
-                    float3 intersectP = objectRayOrigin + objectRayDir * tHit;
-
-                    int3 voxel = floor(intersectP);
-
-                    float3 nextTime = tHit + ((voxel + add) - intersectP) * invDir;
-
-                    // DDA
-                    for (;;)
-                    {
-                        if (tHit >= maxT || any(and(objectRayDir < 0, voxel < 0)) || any(and(objectRayDir >= 0, voxel >= voxelMax))) break;
-
-                        if (all(voxel >= 0) && all(voxel < voxelMax))
-                        {
-                            uint bit = voxel.x + voxel.y * 4 + voxel.z * 16;
-                            if (brick.bitMask & (1u << bit))
-                            {
-#if 0
-                                uint vertexOffset = GetVoxelVertexOffset(brick.vertexOffset, brick.bitMask, bit);
-                                float alpha = dg.DecodeCoverage(vertexOffset);
-
-                                if (rng.Uniform() < alpha)
-                                {
-                                    hitKind = bit;
-                                    hitT = tHit;
-
-                                    query.CommitProceduralPrimitiveHit(tHit);
-                                    break;
-                                }
-#else
-                                hitKind = bit;
-                                hitT = tHit;
-
-                                query.CommitProceduralPrimitiveHit(tHit);
-                                break;
-#endif
-                            }
-                        }
-
-                        float nextT = min(nextTime.x, min(nextTime.y, nextTime.z));
-                        uint axis = nextT == nextTime.x ? 0 : (nextT == nextTime.y ? 1 : 2);
-
-                        voxel[axis] += step[axis];
-                        nextTime[axis] += stepT[axis];
-                        tHit = nextT;
-                    }
-                }
-#endif
-#endif
             }
         }
 
@@ -476,9 +301,14 @@ void main()
 
             uint triangleIndex = query.CommittedPrimitiveIndex();
             float2 bary = query.CommittedTriangleBarycentrics();
+#if 0
             uint basePageAddress = GetClusterPageBaseAddress(pageIndex);
             uint numClusters = GetNumClustersInPage(basePageAddress);
             DenseGeometry dg = GetDenseGeometryHeader(basePageAddress, numClusters, clusterIndex);
+#endif
+            // TODO IMPORTANT
+            uint baseAddress = 0;
+            DenseGeometry dg = GetDenseGeometryHeader2(clusterID, baseAddress);
 
             uint materialID = dg.DecodeMaterialID(triangleIndex);
             uint3 vids = dg.DecodeTriangle(triangleIndex);
@@ -577,66 +407,6 @@ void main()
                 hitInfo.ss = tb[0];
                 hitInfo.ts = tb[1];
             }
-#if 0
-            else 
-            {
-#ifndef TRACE_BRICKS
-#error
-                uint primIndex = query.CommittedPrimitiveIndex();
-                uint brickIndex = primIndex >> 6u;
-                hitKind = primIndex & 63u;
-#else
-                uint primIndex = query.CandidatePrimitiveIndex();
-                uint brickIndex = primIndex & 127;
-                uint tableOffset = primIndex >> 7;
-#endif
-                uint tableBaseOffset = gpuInstances[instanceID].clusterLookupTableOffset;
-                uint clusterID = 0;//clusterLookupTable[tableBaseOffset + tableOffset];
-
-                uint pageIndex = GetPageIndexFromClusterID(clusterID); 
-                uint clusterIndex = GetClusterIndexFromClusterID(clusterID);
-
-                uint basePageAddress = GetClusterPageBaseAddress(pageIndex);
-                uint numClusters = GetNumClustersInPage(basePageAddress);
-                DenseGeometry dg = GetDenseGeometryHeader(basePageAddress, numClusters, clusterIndex);
-
-                materialID = dg.DecodeMaterialID(brickIndex);
-                Brick brick = dg.DecodeBrick(brickIndex);
-
-                uint vertexOffset = GetVoxelVertexOffset(brick.vertexOffset, brick.bitMask, hitKind);
-                float3 normal = dg.DecodeNormal(vertexOffset);
-
-#if 1
-                float2x3 wBasis = BuildOrthonormalBasis(-objectRayDir);
-                float3 wk = wBasis[0];
-                float3 wj = wBasis[1];
-                SGGX sggx = dg.DecodeSGGX(vertexOffset);
-
-                float3 wm = sggx.SampleSGGX(-objectRayDir, wk, wj, rng.Uniform2D());
-
-                if (any(isnan(wm)) || any(isinf(wm)))
-                {
-                    hitInfo.n = normal;
-                    hitInfo.gn = hitInfo.n;
-                }
-                else 
-                {
-                    hitInfo.n = wm;
-                    hitInfo.gn = normal;
-                }
-                float2x3 tb = BuildOrthonormalBasis(hitInfo.n);
-                hitInfo.ss = tb[0];
-                hitInfo.ts = tb[1];
-
-#else
-                hitInfo.n = normal;
-                hitInfo.gn = hitInfo.n;
-                float2x3 tb = BuildOrthonormalBasis(hitInfo.n);
-                hitInfo.ss = tb[0];
-                hitInfo.ts = tb[1];
-#endif
-            }
-#endif
         }
 
         // Get material

@@ -232,7 +232,6 @@ GPUBuffer *RenderGraph::GetBuffer(ResourceHandle handle, u32 &offset)
 {
     RenderGraphResource &resource = resources[handle.index];
     offset                        = 0;
-    Assert(EnumHasAllFlags(resource.flags, ResourceFlags::Transient | ResourceFlags::Buffer));
     return &resource.buffer;
 }
 

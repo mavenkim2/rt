@@ -187,7 +187,6 @@ struct VirtualGeometryManager
 
     struct Page
     {
-        u32 numTriangleClusters;
         u32 numClusters;
 
         VirtualPageHandle handle;
@@ -232,10 +231,10 @@ struct VirtualGeometryManager
         Vec4f lodBounds;
         u32 numLodLevels;
         u32 resourceSharingInfoOffset;
+        u32 clusterOffset;
     };
 
     u32 currentClusterTotal;
-    u32 currentTriangleClusterTotal;
     u32 totalNumVirtualPages;
     u32 totalNumNodes;
     u32 maxWriteClusters;
@@ -363,16 +362,17 @@ struct VirtualGeometryManager
     GPUBuffer clusterAccelSizes;
     ResourceHandle clusterAccelSizesHandle;
 
-    ResourceHandle indexBuffer;
-    ResourceHandle vertexBuffer;
-    ResourceHandle clasGlobalsBuffer;
+    GPUBuffer indexBuffer;
+    GPUBuffer vertexBuffer;
+    GPUBuffer clasGlobalsBuffer;
+    ResourceHandle clasGlobalsBufferHandle;
 
-    ResourceHandle decodeClusterDataBuffer;
-    ResourceHandle buildClusterTriangleInfoBuffer;
+    GPUBuffer decodeClusterDataBuffer;
+    GPUBuffer buildClusterTriangleInfoBuffer;
     GPUBuffer clasPageInfoBuffer;
     ResourceHandle clasPageInfoBufferHandle;
 
-    ResourceHandle clasScratchBuffer;
+    GPUBuffer clasScratchBuffer;
     GPUBuffer clasImplicitData;
     ResourceHandle clasImplicitDataHandle;
 
@@ -388,7 +388,8 @@ struct VirtualGeometryManager
     ResourceHandle blasDataBuffer;
     ResourceHandle buildClusterBottomLevelInfoBuffer;
     ResourceHandle blasClasAddressBuffer;
-    ResourceHandle blasAccelAddresses;
+    GPUBuffer blasAccelAddresses;
+    ResourceHandle blasAccelAddressesHandle;
     ResourceHandle blasAccelSizes;
 
     ResourceHandle ptlasIndirectCommandBuffer;
@@ -493,16 +494,17 @@ struct VirtualGeometryManager
     bool ProcessInstanceRequests(CommandBuffer *cmd);
     void ProcessRequests(CommandBuffer *cmd, bool test);
     u32 AddNewMesh(Arena *arena, CommandBuffer *cmd, string filename);
+    u32 AddNewMesh2(Arena *arena, CommandBuffer *cmd, string filename);
     void FinalizeResources(CommandBuffer *cmd);
     void PrepareInstances(CommandBuffer *cmd, ResourceHandle sceneBuffer, bool ptlas);
     void HierarchyTraversal(CommandBuffer *cmd, ResourceHandle gpuSceneBuffer);
-    void BuildClusterBLAS(CommandBuffer *cmd);
+    void BuildClusterBLAS(CommandBuffer *cmd, GPUBuffer *debug);
     void AllocateInstances(StaticArray<GPUInstance> &gpuInstances);
-    void BuildPTLAS(CommandBuffer *cmd);
+    void BuildPTLAS(CommandBuffer *cmd, GPUBuffer *debug);
     void UnlinkLRU(int pageIndex);
     void LinkLRU(int index);
 
-    void Test(Arena *arena, CommandBuffer *cmd, StaticArray<Instance> &inputInstances,
+    bool Test(Arena *arena, CommandBuffer *cmd, StaticArray<Instance> &inputInstances,
               StaticArray<AffineSpace> &transforms);
     void BuildHierarchy(PrimRef *refs, RecordAOSSplits &record,
                         std::atomic<u32> &numPartitions, StaticArray<u32> &partitionIndices,

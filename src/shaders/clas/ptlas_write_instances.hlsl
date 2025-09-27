@@ -64,7 +64,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
     if (instance.flags & GPU_INSTANCE_FLAG_MERGED)
     {
         address = info.mergedProxyDeviceAddress;
-        float3x4 worldFromObject = float3x4(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0);
+        worldFromObject = float3x4(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0);
         update = false;
         flags = 0u;
     }
@@ -76,5 +76,8 @@ void main(uint3 dtID : SV_DispatchThreadID)
     }
     if (address == 0) return;
 
+#if 0
     WritePTLASDescriptors(worldFromObject, address, blasData.instanceID, blasData.instanceID, aabb, update, flags);
+#endif
+    WritePTLASDescriptors(worldFromObject, address, blasData.instanceID, instance.resourceID, aabb, update, flags);
 }

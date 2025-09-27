@@ -21,7 +21,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
     if (instance.flags & (GPU_INSTANCE_FLAG_FREED | GPU_INSTANCE_FLAG_MERGED)) return;
 
     //if (instance.resourceID > 8 || instance.resourceID == 2) return;
-    if (instance.resourceID != 0 && instance.resourceID < 18) return;
+    if (instance.resourceID != 0) return;// && instance.resourceID != 18 && instance.resourceID != 19) return;
 
     // Share
     BLASData blasData = (BLASData)0;
@@ -67,7 +67,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
                 uint flags = (wasSet & bit) ? CANDIDATE_NODE_FLAG_STREAMING_ONLY : CANDIDATE_NODE_FLAG_HIGHEST_DETAIL;
 
                 CandidateNode candidateNode;
-                candidateNode.nodeOffset = flags << 16u;
+                candidateNode.nodeOffset = 0u;//flags << 16u;
                 candidateNode.blasIndex = blasIndex;
 
                 uint nodeIndex;

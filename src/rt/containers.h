@@ -838,7 +838,7 @@ struct ChunkedLinkedList
             MemoryCopy(array.data + runningCount, node->values, node->count * sizeof(T));
             runningCount += node->count;
         }
-        array.size = runningCount;
+        array.size_ = runningCount;
     }
     inline void Merge(ChunkedLinkedList<T, memoryTag> *list)
     {

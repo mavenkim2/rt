@@ -478,6 +478,83 @@ DenseGeometry GetDenseGeometryHeader(uint4 packed[NUM_CLUSTER_HEADER_FLOAT4S], u
     return result;
 }
 
+DenseGeometry GetDenseGeometryHeader2(uint headerIndex, uint baseAddress)
+{
+    DenseGeometry result;
+
+    uint4 packed[3];
+
+    uint offset = baseAddress + 12 * 4 * headerIndex;
+
+    packed[0] = clusterPageData.Load4(offset);
+    packed[1] = clusterPageData.Load4(offset + 16);
+    packed[2] = clusterPageData.Load4(offset + 32);
+
+    result.baseAddress = baseAddress;
+    result.shadBaseAddress = packed[0].x;
+    result.geoBaseAddress = packed[0].y;
+
+    result.anchor[0] = BitFieldExtractI32((int)packed[0].z, ANCHOR_WIDTH, 0);
+    result.numTriangles = BitFieldExtractU32(packed[0].z, 8, ANCHOR_WIDTH);
+
+    result.anchor[1] = BitFieldExtractI32((int)packed[0].w, ANCHOR_WIDTH, 0);
+    result.posBitWidths[0] = BitFieldExtractU32(packed[0].w, 5, ANCHOR_WIDTH);
+    result.indexBitWidth = BitFieldExtractU32(packed[0].w, 3, ANCHOR_WIDTH + 5) + 1;
+
+    result.anchor[2] = BitFieldExtractI32((int)packed[1].x, ANCHOR_WIDTH, 0);
+    result.posPrecision = (int)BitFieldExtractU32(packed[1].x, 8, ANCHOR_WIDTH) + CLUSTER_MIN_PRECISION;
+    
+    result.numVertices     = BitFieldExtractU32(packed[1].y, 14, 0);
+    uint reuseBufferLength = BitFieldExtractU32(packed[1].y, 8, 14);
+    result.posBitWidths[1] = BitFieldExtractU32(packed[1].y, 5, 22);
+    result.posBitWidths[2] = BitFieldExtractU32(packed[1].y, 5, 27);
+
+    result.prevHighRestartBeforeDwords[1] = BitFieldExtractU32(packed[1].z, 6, 0);
+    result.prevHighRestartBeforeDwords[2] = BitFieldExtractU32(packed[1].z, 7, 6);
+    result.prevHighEdge1BeforeDwords[0] = BitFieldExtractI32(packed[1].z, 6, 13);
+    result.prevHighEdge1BeforeDwords[1] = BitFieldExtractI32(packed[1].z, 7, 19);
+    result.prevHighEdge2BeforeDwords[0] = BitFieldExtractI32(packed[1].z, 6, 26);
+
+    result.numBricks = 0;
+    result.prevHighRestartBeforeDwords[0] = BitFieldExtractU32(packed[1].w, 5, 0);
+    result.prevHighEdge1BeforeDwords[2] = BitFieldExtractI32(packed[1].w, 8, 5);
+    result.prevHighEdge2BeforeDwords[1] = BitFieldExtractI32(packed[1].w, 7, 13);
+    result.prevHighEdge2BeforeDwords[2] = BitFieldExtractI32(packed[1].w, 8, 20);
+
+    result.octBitWidths[0]                = BitFieldExtractU32(packed[2].x, 5, 0);
+    result.octBitWidths[1]                = BitFieldExtractU32(packed[2].x, 5, 5);
+    result.numPrevRestartsBeforeDwords[0] = BitFieldExtractU32(packed[2].x, 6, 10);
+    result.numPrevRestartsBeforeDwords[1] = BitFieldExtractU32(packed[2].x, 7, 16);
+    result.numPrevRestartsBeforeDwords[2] = BitFieldExtractU32(packed[2].x, 8, 23);
+
+    result.numFaceIDBits = 0;
+    //result.numFaceIDBits = BitFieldExtractU32(packed[3].x, 6, 26); 
+
+    result.octBase[0] = BitFieldExtractU32(packed[2].y, 16, 0);
+    result.octBase[1] = BitFieldExtractU32(packed[2].y, 16, 16);
+
+    result.materialInfo = packed[2].z;
+
+    // Size of vertex buffer and normal buffer
+    const uint vertexBitWidth = result.posBitWidths[0] + result.posBitWidths[1] + result.posBitWidths[2];
+    const uint octBitWidth = result.octBitWidths[0] + result.octBitWidths[1];
+
+    uint numPositions = result.numBricks ? result.numBricks : result.numVertices;
+
+    result.normalOffset = 0;
+    result.coverageOffset = result.normalOffset + ((result.numVertices * octBitWidth + 7) >> 3);
+    result.sggxOffset = result.coverageOffset + 4 * result.numVertices;
+    //result.faceIDOffset = result.normalOffset + ((result.numVertices * octBitWidth + 7) >> 3);
+
+    result.ctrlOffset = (numPositions * vertexBitWidth + 7) >> 3;
+    result.brickOffset = result.ctrlOffset;
+
+    result.indexOffset = result.ctrlOffset + 12 * ((result.numTriangles + 31u) >> 5u);
+    result.firstBitOffset = (result.indexOffset << 3) + reuseBufferLength * result.indexBitWidth;
+
+    return result;
+}
+
 DenseGeometry GetDenseGeometryHeader(uint basePageAddress, uint numClusters, uint clusterIndex)
 {
     uint clusterHeaderSOAStride = numClusters * 16;

@@ -51,6 +51,16 @@ struct ClusterFileHeader
     bool hasTruncatedEllipsoid;
 };
 
+struct ClusterFileHeader2
+{
+    uint numClusters;
+    uint geoOffset;
+    uint shadOffset;
+
+    float3 boundsMin;
+    float3 boundsMax;
+};
+
 struct DecodeClusterData
 {
     uint32_t pageIndex;
@@ -231,6 +241,9 @@ struct FillClusterTriangleInfoPushConstant
     uint vertexBufferBaseAddressLowBits;
     uint vertexBufferBaseAddressHighBits;
     uint clusterOffset;
+
+    uint numClusters;
+    uint baseAddress;
 };
 
 struct DefragPushConstant
@@ -375,9 +388,9 @@ struct PartitionInfo
     uint32_t transformCount;
     uint32_t flags;
 
-    float debug0;
+    float4 debug0;
 
-    float debug1;
+    uint debug1;
     bool test;
 };
 
@@ -403,6 +416,7 @@ struct Resource
     float4 lodBounds;
     uint resourceSharingInfoOffset;
     uint numLodLevels;
+    uint clusterOffset;
 };
 
 struct ResourceSharingInfo

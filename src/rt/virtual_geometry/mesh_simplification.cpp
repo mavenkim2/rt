@@ -1153,7 +1153,7 @@ f32 MeshSimplifier::Simplify(u32 targetNumVerts, u32 targetNumTris, f32 targetEr
         }
     }
 
-    ConstructVirtualEdges(scratch.temp.arena);
+    // ConstructVirtualEdges(scratch.temp.arena);
     Heap<Pair> heap(scratch.temp.arena, pairs.Length());
 
     for (int pairIndex = 0; pairIndex < pairs.Length(); pairIndex++)
@@ -2468,8 +2468,6 @@ HierarchyNode BuildTopLevelHierarchy(Arena *arena,
     numNodes++;
     return node;
 }
-
-static_assert((sizeof(PackedDenseGeometryHeader) + 4) % 16 == 0, "bad header size");
 
 static Vec3f &GetPosition(f32 *vertexData, u32 vertexIndex, u32 numAttributes)
 {
@@ -5650,6 +5648,269 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
     ReleaseArenaArray(arenas);
 
     return output;
+}
+
+void CreateClusters2(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndices,
+                     string filename)
+{
+    ScratchArena scratch;
+    Arena **arenas = GetArenaArray(scratch.temp.arena);
+
+    // Create clusters
+    StaticArray<DenseGeometryBuildData> buildDatas(scratch.temp.arena, OS_NumProcessors());
+    for (int i = 0; i < buildDatas.capacity; i++)
+    {
+        buildDatas.Push(DenseGeometryBuildData(arenas[i]));
+    }
+
+    const u32 minGroupSize = 8;
+    const u32 maxGroupSize = 32;
+
+    for (u32 i = 0; i < numMeshes; i++)
+    {
+        Assert(meshes[i].numIndices % 3 == 0);
+        meshes[i].numFaces = meshes[i].numIndices / 3;
+    }
+
+    const u32 numAttributes = 0;
+
+    auto GetVertexData = [numAttributes](f32 *ptr, u32 index) {
+        return ptr + (3 + numAttributes) * index;
+    };
+
+    auto GetPosition = [numAttributes](f32 *ptr, u32 index) -> Vec3f & {
+        return *(Vec3f *)(ptr + (3 + numAttributes) * index);
+    };
+
+    auto GetTriangle = [GetPosition](f32 *ptr, u32 *indices, u32 triangle, Vec3f &p0,
+                                     Vec3f &p1, Vec3f &p2) {
+        p0 = GetPosition(ptr, indices[3 * triangle + 0]);
+        p1 = GetPosition(ptr, indices[3 * triangle + 1]);
+        p2 = GetPosition(ptr, indices[3 * triangle + 2]);
+    };
+
+    StaticArray<Vec2u> meshVertexOffsets(scratch.temp.arena, numMeshes);
+    u32 totalNumVertices  = 0;
+    u32 totalNumTriangles = 0;
+    for (int i = 0; i < numMeshes; i++)
+    {
+        Vec2u offsets(totalNumVertices, totalNumTriangles);
+        meshVertexOffsets.Push(offsets);
+        totalNumVertices += meshes[i].numVertices;
+        totalNumTriangles += meshes[i].numIndices / 3;
+    }
+
+    u32 totalClustersEstimate = ((totalNumTriangles) >> (MAX_CLUSTER_TRIANGLES_BIT - 1)) * 3;
+    u32 totalGroupsEstimate   = (totalClustersEstimate + minGroupSize - 1) / minGroupSize;
+
+    Vec3f *positions   = PushArrayNoZero(scratch.temp.arena, Vec3f, totalNumVertices);
+    Vec3f *normals     = PushArrayNoZero(scratch.temp.arena, Vec3f, totalNumVertices);
+    u32 *indexData     = PushArrayNoZero(scratch.temp.arena, u32, totalNumTriangles * 3);
+    Bounds *meshBounds = PushArrayNoZero(scratch.temp.arena, Bounds, numMeshes);
+
+    ParallelFor(0, numMeshes, 1, [&](int jobID, int start, int count) {
+        for (int meshIndex = start; meshIndex < start + count; meshIndex++)
+        {
+            Bounds bounds;
+            Mesh &mesh       = meshes[meshIndex];
+            u32 vertexOffset = meshVertexOffsets[meshIndex].x;
+            u32 indexOffset  = 3 * meshVertexOffsets[meshIndex].y;
+
+            for (u32 i = 0; i < mesh.numVertices; i++)
+            {
+                bounds.Extend(mesh.p[i]);
+            }
+            meshBounds[meshIndex] = bounds;
+            MemoryCopy(positions + vertexOffset, mesh.p, sizeof(Vec3f) * mesh.numVertices);
+            MemoryCopy(normals + vertexOffset, mesh.n, sizeof(Vec3f) * mesh.numVertices);
+
+            for (int indexIndex = 0; indexIndex < mesh.numIndices; indexIndex++)
+            {
+                indexData[indexOffset + indexIndex] = mesh.indices[indexIndex] + vertexOffset;
+            }
+        }
+    });
+
+    Bounds bounds;
+    for (u32 i = 0; i < numMeshes; i++)
+    {
+        bounds.Extend(meshBounds[i]);
+    }
+
+    Mesh combinedMesh       = {};
+    combinedMesh.p          = positions;
+    combinedMesh.n          = normals;
+    combinedMesh.indices    = indexData;
+    combinedMesh.numIndices = totalNumTriangles * 3;
+    combinedMesh.numFaces   = totalNumTriangles;
+
+    u32 hashSize = NextPowerOfTwo(totalNumVertices * 3);
+    HashIndex vertexHashSet(scratch.temp.arena, hashSize, hashSize);
+    StaticArray<u32> remap(scratch.temp.arena, totalNumVertices, totalNumVertices);
+    u32 newNumVertices = 0;
+    for (int vertexIndex = 0; vertexIndex < totalNumVertices; vertexIndex++)
+    {
+        Vec3f p  = combinedMesh.p[vertexIndex];
+        int hash = Hash(p);
+
+        bool found = false;
+        for (int hashIndex = vertexHashSet.FirstInHash(hash); hashIndex != -1;
+             hashIndex     = vertexHashSet.NextInHash(hashIndex))
+        {
+            if (combinedMesh.p[hashIndex] == p &&
+                combinedMesh.n[hashIndex] == combinedMesh.n[vertexIndex])
+            {
+                remap[vertexIndex] = hashIndex;
+                found              = true;
+                break;
+            }
+        }
+        if (!found)
+        {
+            u32 newVertexIndex = newNumVertices++;
+            remap[vertexIndex] = newVertexIndex;
+            vertexHashSet.AddInHash(hash, newVertexIndex);
+            combinedMesh.p[newVertexIndex] = p;
+            combinedMesh.n[newVertexIndex] = combinedMesh.n[vertexIndex];
+        }
+    }
+
+    for (int indexIndex = 0; indexIndex < totalNumTriangles * 3; indexIndex++)
+    {
+        combinedMesh.indices[indexIndex] = remap[combinedMesh.indices[indexIndex]];
+    }
+
+    combinedMesh.numVertices = newNumVertices;
+
+    for (int i = 0; i < OS_NumProcessors(); i++)
+    {
+        arenas[i]->align = 16;
+    }
+
+    PrimitiveIndices *primIndices =
+        PushArrayNoZero(scratch.temp.arena, PrimitiveIndices, numMeshes);
+    for (int i = 0; i < numMeshes; i++)
+    {
+        PrimitiveIndices ind = {};
+        ind.materialID       = MaterialHandle(materialIndices[i]);
+        ind.alphaTexture     = 0;
+        primIndices[i]       = ind;
+    }
+
+    StaticArray<u32> triangleGeomIDs(scratch.temp.arena, totalNumTriangles);
+
+    u32 currentMesh = 0;
+    for (int tri = 0; tri < totalNumTriangles; tri++)
+    {
+        u32 limit = currentMesh == numMeshes - 1 ? totalNumTriangles
+                                                 : meshVertexOffsets[currentMesh + 1].y;
+        if (tri >= limit)
+        {
+            currentMesh++;
+        }
+        triangleGeomIDs.Push(currentMesh);
+    }
+
+    GraphPartitionResult partitionResult;
+    u32 maxNumTriangles = MAX_CLUSTER_TRIANGLES;
+    for (;;)
+    {
+        bool success =
+            GenerateValidTriClusters(scratch.temp.arena, combinedMesh, maxNumTriangles, ~0u,
+                                     triangleGeomIDs, partitionResult);
+        if (success)
+        {
+            break;
+        }
+        maxNumTriangles -= 2;
+        Print("Triangle clusterization exceeded limits; trying "
+              "again\n");
+    }
+    u32 numFinestClusters = partitionResult.ranges.Length();
+
+    StaticArray<u32> newTriangleGeomIDs(scratch.temp.arena, totalNumTriangles);
+
+    for (u32 i = 0; i < partitionResult.clusterIndices.Length(); i++)
+    {
+        int triIndex = partitionResult.clusterIndices[i];
+        newTriangleGeomIDs.Push(triangleGeomIDs[triIndex]);
+    }
+
+    Array<Cluster> clusters(scratch.temp.arena, totalClustersEstimate);
+
+    for (int i = 0; i < partitionResult.ranges.Length(); i++)
+    {
+        ScratchArena clusterScratch(&scratch.temp.arena, 1);
+        Cluster cluster     = {};
+        cluster.mipLevel    = 0;
+        cluster.headerIndex = i;
+
+        PartitionRange range = partitionResult.ranges[i];
+        StaticArray<int> triangleIndices(partitionResult.clusterIndices.data + range.begin,
+                                         range.end - range.begin);
+        StaticArray<u32> geomIDs(newTriangleGeomIDs.data + range.begin,
+                                 range.end - range.begin);
+        cluster.triangleIndices = triangleIndices;
+        cluster.geomIDs         = geomIDs;
+
+        clusters.Push(cluster);
+    }
+
+    string outFilename =
+        PushStr8F(scratch.temp.arena, "%S.geo", RemoveFileExtension(filename));
+    StringBuilderMapped builder(outFilename);
+
+    u64 fileHeaderOffset = AllocateSpace(&builder, sizeof(ClusterFileHeader2));
+
+    for (Cluster &cluster : clusters)
+    {
+        buildDatas[0].WriteTriangleData(cluster.triangleIndices, cluster.geomIDs, combinedMesh,
+                                        materialIndices);
+    }
+
+    StaticArray<PackedDenseGeometryHeader> headers(scratch.temp.arena,
+                                                   buildDatas[0].headers.Length());
+    StaticArray<u8> geoByteDatasBuffer(scratch.temp.arena,
+                                       buildDatas[0].geoByteBuffer.Length());
+    StaticArray<u8> shadingByteDatasBuffer(scratch.temp.arena,
+                                           buildDatas[0].shadingByteBuffer.Length());
+    buildDatas[0].headers.Flatten(headers);
+    buildDatas[0].geoByteBuffer.Flatten(geoByteDatasBuffer);
+    buildDatas[0].shadingByteBuffer.Flatten(shadingByteDatasBuffer);
+
+    u64 headersOffset =
+        AllocateSpace(&builder, sizeof(PackedDenseGeometryHeader) * headers.Length());
+    u64 geoByteDataOffset = AllocateSpace(&builder, geoByteDatasBuffer.Length());
+    u64 shadingByteOffset = AllocateSpace(&builder, shadingByteDatasBuffer.Length());
+
+    u8 *ptr = (u8 *)GetMappedPtr(&builder, fileHeaderOffset);
+
+    u32 numClusters = clusters.Length();
+
+    ClusterFileHeader2 fileHeader;
+    fileHeader.numClusters = clusters.Length();
+    fileHeader.geoOffset   = geoByteDataOffset - sizeof(ClusterFileHeader2);
+    fileHeader.shadOffset  = shadingByteOffset - sizeof(ClusterFileHeader2);
+    fileHeader.boundsMin   = ToVec3f(bounds.minP);
+    fileHeader.boundsMax   = ToVec3f(bounds.maxP);
+
+    MemoryCopy(ptr, &fileHeader, sizeof(ClusterFileHeader2));
+
+    for (PackedDenseGeometryHeader &header : headers)
+    {
+        header.z += fileHeader.shadOffset;
+        header.a += fileHeader.geoOffset;
+    }
+
+    ptr = (u8 *)GetMappedPtr(&builder, headersOffset);
+    MemoryCopy(ptr, headers.data, sizeof(PackedDenseGeometryHeader) * headers.Length());
+    ptr = (u8 *)GetMappedPtr(&builder, geoByteDataOffset);
+    MemoryCopy(ptr, geoByteDatasBuffer.data, geoByteDatasBuffer.Length());
+    ptr = (u8 *)GetMappedPtr(&builder, shadingByteOffset);
+    MemoryCopy(ptr, shadingByteDatasBuffer.data, shadingByteDatasBuffer.Length());
+
+    OS_UnmapFile(builder.ptr);
+    OS_ResizeFile(builder.filename, builder.totalSize);
 }
 
 void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndices,

@@ -3,7 +3,7 @@
 
 #include "../common.hlsli"
 
-bool FrustumCull(float4x4 clipFromRender, float3x4 renderFromObject, float3 minP, float3 maxP, float p22, float p23, out float4 outAabb, out float outMaxZ)
+bool FrustumCull(float4x4 clipFromRender, float3x4 renderFromObject, float3 minP, float3 maxP, float p22, float p23, out float4 outAabb, out float outMaxZ, out float test)
 {
     float4x4 renderFromObject_ = float4x4(
         renderFromObject[0][0], renderFromObject[0][1], renderFromObject[0][2], renderFromObject[0][3], 
@@ -66,6 +66,7 @@ bool FrustumCull(float4x4 clipFromRender, float3x4 renderFromObject, float3 minP
     float maxZ = -minW * p22 + p23;
 
     outMaxZ = maxZ / minW;
+    test = minZ / maxW;
 #if 0
     // NOTE: w = -z in view space. Min(z) = -(Max(-z)) and Max(z) = -(Min(-z))
 
@@ -91,7 +92,7 @@ bool FrustumCull(float4x4 clipFromRender, float3x4 renderFromObject, float3 minP
 }
 
 #ifdef ENABLE_OCCLUSION
-bool HZBOcclusionTest(float4 aabb, float maxZ, int2 screenSize, out float test)//, out float4 outUv)
+bool HZBOcclusionTest(float4 aabb, float maxZ, int2 screenSize, out uint test)//, out float4 outUv)
 {
     bool occluded = false;
     //if (cullResults.isVisible && !cullResults.crossesNearPlane)
@@ -112,8 +113,7 @@ bool HZBOcclusionTest(float4 aabb, float maxZ, int2 screenSize, out float test)/
             // for n > 1, ceil(log2(n)) - 1 = (floor(log2(n-1)) + 1) - 1 = floor(log2(n-1))
             // floor(log2(n-1)) = firstbithigh(n-1)
 
-            pixels >>= 1;
-            int2 mipLevel = int2(firstbithigh(pixels.z - pixels.x - 1), firstbithigh(pixels.w - pixels.y - 1));
+            int2 mipLevel = int2(firstbithigh(pixels.z - pixels.x), firstbithigh(pixels.w - pixels.y));
             int lod = max(max(mipLevel.x, mipLevel.y), 0);
 
             lod += any((pixels.zw >> lod) - (pixels.xy >> lod) > 1) ? 1 : 0; // z-x and w-y shouldn't be > 1
@@ -121,7 +121,7 @@ bool HZBOcclusionTest(float4 aabb, float maxZ, int2 screenSize, out float test)/
 
             float width, height;
             depthPyramid.GetDimensions(width, height);
-            float2 texelSize = pow(2, lod) / float2(width, height);
+            float2 texelSize = (1u << lod) / float2(width, height);
             float4 uv = (pixels + 0.5f) * texelSize.xyxy;
 
             //outUv = uv;
@@ -132,12 +132,13 @@ bool HZBOcclusionTest(float4 aabb, float maxZ, int2 screenSize, out float test)/
             depth.z = depthPyramid.SampleLevel(samplerNearestClamp, uv.zw, lod).r; // (+, +)
             depth.w = depthPyramid.SampleLevel(samplerNearestClamp, uv.xw, lod).r; // (-, +)
 
-            depth.yz = (pixels.x == pixels.z) ? 1.f : depth.yz;
-            depth.xy = (pixels.y == pixels.w) ? 1.f : depth.xy;
+            //depth.yz = (pixels.x == pixels.z) ? 1.f : depth.yz;
+            //depth.xy = (pixels.y == pixels.w) ? 1.f : depth.xy;
 
             float minDepth = min(min(depth.x, depth.y), min(depth.z, depth.w));
             occluded = maxZ < minDepth;
-            test = minDepth;
+
+            test = lod;
         //}
     }
     return occluded;

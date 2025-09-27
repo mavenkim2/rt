@@ -980,7 +980,7 @@ static string WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState 
         });
 
         u32 testVert = 0;
-        u32 testInd = 0;
+        u32 testInd  = 0;
         for (int meshIndex = 0; meshIndex < meshes.Length(); meshIndex++)
         {
             testVert += meshes[meshIndex].numVertices;
@@ -1142,7 +1142,7 @@ static string WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState 
                     }
                 }
 
-                mesh.numIndices   = 3 * numTriangles;
+                mesh.numIndices = 3 * numTriangles;
             }
         });
 
@@ -1168,9 +1168,9 @@ static string WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState 
         }
         u8 *buffer = PushArrayNoZero(tempArena, u8, size);
 
-        u32 offset = 0;
+        u32 offset           = 0;
         u32 totalNumVertices = 0;
-        u32 totalNumIndices = 0;
+        u32 totalNumIndices  = 0;
         for (u32 i = 0; i < newNumMeshes; i++)
         {
             Mesh &mesh = meshes[i];
@@ -1190,7 +1190,8 @@ static string WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState 
                 offset += sizeof(Vec2f) * mesh.numVertices;
             }
         }
-        Print("stats for %S: vert %u ind %u \n", currentFilename, totalNumVertices, totalNumIndices);
+        Print("stats for %S: vert %u ind %u \n", currentFilename, totalNumVertices,
+              totalNumIndices);
 
         string str = {buffer, size};
         u64 hash   = MurmurHash64A(str.str, size, 0);
@@ -1200,7 +1201,7 @@ static string WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState 
 
         if (!result)
         {
-            CreateClusters(meshes.data, newNumMeshes, materialIndices, virtualGeoFilename);
+            CreateClusters2(meshes.data, newNumMeshes, materialIndices, virtualGeoFilename);
         }
         else
         {

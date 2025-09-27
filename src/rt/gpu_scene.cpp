@@ -731,8 +731,15 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         scene->sceneIndex = virtualGeoFilenames.Length();
         virtualGeoFilenames.Push(virtualGeoFilename);
         filenameHash.AddInHash(hash, scene->sceneIndex);
-        virtualGeometryManager.AddNewMesh(sceneScratch.temp.arena, dgfTransferCmd,
-                                          virtualGeoFilename);
+
+        dgfTransferCmd->ClearBuffer(&virtualGeometryManager.clasGlobalsBuffer, 0);
+        dgfTransferCmd->Barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                                VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
+                                VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT);
+        dgfTransferCmd->FlushBarriers();
+        virtualGeometryManager.AddNewMesh2(sceneScratch.temp.arena, dgfTransferCmd,
+                                           virtualGeoFilename);
 
         auto &meshInfo =
             virtualGeometryManager.meshInfos[virtualGeometryManager.meshInfos.Length() - 1];
@@ -826,8 +833,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         Assert(numScenes == 1);
     }
 
-    virtualGeometryManager.Test(sceneScratch.temp.arena, allCommandBuffer, instances,
-                                instanceTransforms);
+    bool built = virtualGeometryManager.Test(sceneScratch.temp.arena, allCommandBuffer,
+                                             instances, instanceTransforms);
     // virtualGeometryManager.AllocateInstances(gpuInstances);
 
     // TransferBuffer gpuInstancesBuffer =
@@ -854,8 +861,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     device->SubmitCommandBuffer(allCommandBuffer);
 
     device->Wait(tlasSemaphore);
-    device->DestroyBuffer(&virtualGeometryManager.blasProxyScratchBuffer);
-    device->DestroyBuffer(&virtualGeometryManager.mergedInstancesAABBBuffer);
+    if (built)
+    {
+        device->DestroyBuffer(&virtualGeometryManager.blasProxyScratchBuffer);
+        device->DestroyBuffer(&virtualGeometryManager.mergedInstancesAABBBuffer);
+    }
 
     f32 frameDt = 1.f / 60.f;
     int envMapBindlessIndex;
@@ -906,9 +916,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     Semaphore frameSemaphore = device->CreateSemaphore();
 
-    // GPUBuffer readback  = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-    //                                            virtualGeometryManager.clasGlobalsBuffer.size,
-    //                                            MemoryUsage::GPU_TO_CPU);
+    GPUBuffer readback = device->CreateBuffer(
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        sizeof(BUILD_CLUSTERS_BOTTOM_LEVEL_INFO) * (1u << 21u), MemoryUsage::GPU_TO_CPU);
 
     Semaphore transferSem   = device->CreateSemaphore();
     transferSem.signalValue = 1;
@@ -1048,7 +1058,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         gpuScene.dispatchDimX = dispatchDimX;
         gpuScene.dispatchDimY = dispatchDimY;
 
-        // u32 *data = (u32 *)readback.mappedPtr;
+        u32 *data = (u32 *)readback.mappedPtr;
         if (!device->BeginFrame(false))
         {
             Assert(0);
@@ -1065,10 +1075,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         // data[GLOBALS_BLAS_CLAS_COUNT_INDEX],
         //       data[GLOBALS_VISIBLE_CLUSTER_COUNT_INDEX],
         //       data[GLOBALS_FREED_PARTITION_COUNT]);
-        // Print("freed partition count: %u visible count: %u, writes: %u updates %u\n",
-        //       data[GLOBALS_FREED_PARTITION_COUNT], data[GLOBALS_VISIBLE_PARTITION_COUNT],
-        //       data[GLOBALS_PTLAS_WRITE_COUNT_INDEX],
-        //       data[GLOBALS_PTLAS_UPDATE_COUNT_INDEX]);
+        Print("freed partition count: %u visible count: %u, writes: %u updates %u\n",
+              data[GLOBALS_FREED_PARTITION_COUNT], data[GLOBALS_VISIBLE_PARTITION_COUNT],
+              data[GLOBALS_PTLAS_WRITE_COUNT_INDEX], data[GLOBALS_PTLAS_UPDATE_COUNT_INDEX]);
 
         string cmdBufferName =
             PushStr8F(frameScratch.temp.arena, "Graphics Cmd %u", device->frameCount);
@@ -1088,7 +1097,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         u32 currentBuffer   = device->frameCount & 1;
         u32 lastFrameBuffer = device->frameCount == 0 ? 0 : !currentBuffer;
 
-        if (device->frameCount == 0)
+        if (0) // device->frameCount == 0)
         {
             CommandBuffer *computeCmd =
                 device->BeginCommandBuffer(QueueType_Compute, "cmd populate readback");
@@ -1103,7 +1112,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             rg->StartPass(
                   7,
                   [queue                = virtualGeometryManager.queueBuffer,
-                   clasGlobals          = virtualGeometryManager.clasGlobalsBuffer,
+                   &clasGlobals         = virtualGeometryManager.clasGlobalsBuffer,
                    resourceBitVector    = virtualGeometryManager.resourceBitVector,
                    maxMinLodLevelBuffer = virtualGeometryManager.maxMinLodLevelBuffer,
                    candidateClusters    = virtualGeometryManager.candidateClusterBuffer,
@@ -1121,8 +1130,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                       buffer = rg->GetBuffer(queue, offset, size);
                       cmd->ClearBuffer(buffer, 0);
 
-                      buffer = rg->GetBuffer(clasGlobals, offset, size);
-                      cmd->ClearBuffer(buffer, 0);
+                      cmd->ClearBuffer(&clasGlobals, 0);
 
                       buffer = rg->GetBuffer(resourceBitVector, offset, size);
                       cmd->ClearBuffer(buffer, 0);
@@ -1147,7 +1155,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 .AddHandle(virtualGeometryManager.maxMinLodLevelBuffer,
                            ResourceUsageType::Write)
                 .AddHandle(virtualGeometryManager.queueBuffer, ResourceUsageType::Write)
-                .AddHandle(virtualGeometryManager.clasGlobalsBuffer, ResourceUsageType::Write)
+                .AddHandle(virtualGeometryManager.clasGlobalsBufferHandle,
+                           ResourceUsageType::Write)
                 .AddHandle(virtualGeometryManager.candidateNodeBuffer,
                            ResourceUsageType::Write)
                 .AddHandle(virtualGeometryManager.candidateClusterBuffer,
@@ -1247,7 +1256,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         rg->StartPass(6,
                       [queue                = virtualGeometryManager.queueBuffer,
-                       clasGlobals          = virtualGeometryManager.clasGlobalsBuffer,
+                       &clasGlobals         = virtualGeometryManager.clasGlobalsBuffer,
                        resourceBitVector    = virtualGeometryManager.resourceBitVector,
                        maxMinLodLevelBuffer = virtualGeometryManager.maxMinLodLevelBuffer,
                        candidateClusters    = virtualGeometryManager.candidateClusterBuffer,
@@ -1264,8 +1273,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                           buffer = rg->GetBuffer(queue, offset, size);
                           cmd->ClearBuffer(buffer, 0);
 
-                          buffer = rg->GetBuffer(clasGlobals, offset, size);
-                          cmd->ClearBuffer(buffer, 0);
+                          cmd->ClearBuffer(&clasGlobals, 0);
 
                           buffer = rg->GetBuffer(resourceBitVector, offset, size);
                           cmd->ClearBuffer(buffer, 0);
@@ -1283,7 +1291,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             .AddHandle(virtualGeometryManager.resourceBitVector, ResourceUsageType::Write)
             .AddHandle(virtualGeometryManager.maxMinLodLevelBuffer, ResourceUsageType::Write)
             .AddHandle(virtualGeometryManager.queueBuffer, ResourceUsageType::Write)
-            .AddHandle(virtualGeometryManager.clasGlobalsBuffer, ResourceUsageType::Write)
+            .AddHandle(virtualGeometryManager.clasGlobalsBufferHandle,
+                       ResourceUsageType::Write)
             .AddHandle(virtualGeometryManager.candidateNodeBuffer, ResourceUsageType::Write)
             .AddHandle(virtualGeometryManager.candidateClusterBuffer,
                        ResourceUsageType::Write);
@@ -1292,7 +1301,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         // bool test    = virtualGeometryManager.ProcessInstanceRequests(cmd);
         int cpuIndex = TIMED_CPU_RANGE_BEGIN();
 
-        virtualGeometryManager.ProcessRequests(cmd, testCount);
+        // virtualGeometryManager.ProcessRequests(cmd, testCount);
         TIMED_RANGE_END(cpuIndex);
 
         if (device->frameCount > 0)
@@ -1322,10 +1331,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         }
 
         // Hierarchy traversal
-        {
-            virtualGeometryManager.HierarchyTraversal(
-                cmd, sceneTransferBufferHandles[currentBuffer]);
-        }
+        // {
+        //     virtualGeometryManager.HierarchyTraversal(
+        //         cmd, sceneTransferBufferHandles[currentBuffer]);
+        // }
 
         rg->StartPass(
               2,
@@ -1364,11 +1373,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                  cmd->FlushBarriers();
                                  device->EndEvent(cmd);
                              })
-            .AddHandle(virtualGeometryManager.clasGlobalsBuffer, ResourceUsageType::RW);
+            .AddHandle(virtualGeometryManager.clasGlobalsBufferHandle, ResourceUsageType::RW);
 
-        virtualGeometryManager.BuildClusterBLAS(cmd);
+        virtualGeometryManager.BuildClusterBLAS(cmd, &readback);
 
-        virtualGeometryManager.BuildPTLAS(cmd);
+        virtualGeometryManager.BuildPTLAS(cmd, &readback);
 
         rg->StartPass(0, [](CommandBuffer *cmd) {
             cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
@@ -1377,49 +1386,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                          VK_ACCESS_2_SHADER_READ_BIT);
             cmd->FlushBarriers();
         });
-
-#if 0
-
-            {
-                // Prepare instance descriptors for TLAS build
-                device->BeginEvent(cmd, "Prepare TLAS");
-                cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, fillInstancePipeline);
-
-                DescriptorSet ds = fillInstanceLayout.CreateDescriptorSet();
-                ds.Bind(&virtualGeometryManager.blasAccelAddresses)
-                    .Bind(&virtualGeometryManager.clasGlobalsBuffer)
-                    .Bind(&virtualGeometryManager.blasDataBuffer)
-                    .Bind(&gpuInstancesBuffer.buffer)
-                    .Bind(&tlasBuffer)
-                    .Bind(&virtualGeometryManager.voxelBlasInfosBuffer)
-                    .Bind(&sceneTransferBuffers[currentBuffer].buffer);
-                cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
-                                        fillInstanceLayout.pipelineLayout);
-
-                cmd->DispatchIndirect(&virtualGeometryManager.clasGlobalsBuffer,
-                                      sizeof(u32) * GLOBALS_BLAS_INDIRECT_X);
-                cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                             VK_ACCESS_2_SHADER_WRITE_BIT,
-                             VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
-                cmd->FlushBarriers();
-
-                device->EndEvent(cmd);
-            }
-
-            {
-                // Build the TLAS
-                device->BeginEvent(cmd, "Build TLAS");
-                tlas.as = cmd->BuildTLAS(&tlasAccelBuffer, &tlasScratchBuffer, &tlasBuffer,
-                                         1u << 21u); // virtualGeometryManager.maxInstances);
-                cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                             VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                             VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                             VK_ACCESS_2_SHADER_READ_BIT);
-                cmd->FlushBarriers();
-                device->EndEvent(cmd);
-            }
-#endif
 
         RayPushConstant pc;
         pc.envMap   = envMapBindlessIndex;
