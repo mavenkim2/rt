@@ -3506,23 +3506,6 @@ void CommandBuffer::ComputeBLASSizes(GPUBuffer *srcInfosArray, GPUBuffer *scratc
                  dstSizes, srcInfosArray, srcInfosCount, srcInfosOffset);
 }
 
-void CommandBuffer::ComputeBLASSizes(u64 srcInfosArray, u32 srcInfosArraySize,
-                                     u64 scratchBuffer, u64 dstSizes, u32 dstSizesSize,
-                                     u64 srcInfosCount, u32 maxTotalClusterCount,
-                                     u32 maxClusterCountPerAccelerationStructure,
-                                     u32 maxAccelerationStructureCount)
-{
-    CLASOpInput opInput;
-    opInput.clusterBottomLevel.maxTotalClusterCount = maxTotalClusterCount;
-    opInput.clusterBottomLevel.maxClusterCountPerAccelerationStructure =
-        maxClusterCountPerAccelerationStructure;
-
-    opInput.maxAccelerationStructureCount = maxAccelerationStructureCount;
-
-    CLASIndirect(opInput, CLASOpMode::ComputeSizes, CLASOpType::BLAS, 0, scratchBuffer, 0, 0,
-                 dstSizes, dstSizesSize, srcInfosArray, srcInfosArraySize, srcInfosCount);
-}
-
 void CommandBuffer::ComputeCLASTemplateSizes(GPUBuffer *srcInfosArray,
                                              GPUBuffer *scratchBuffer, GPUBuffer *dstSizes,
                                              GPUBuffer *srcInfosCount, u32 srcInfosOffset,
@@ -3595,25 +3578,6 @@ void CommandBuffer::BuildClusterBLAS(CLASOpMode opMode, GPUBuffer *implicitBuffe
 
     CLASIndirect(opInput, opMode, CLASOpType::BLAS, implicitBuffer, scratchBuffer,
                  dstAddresses, dstSizes, bottomLevelInfo, srcInfosCount, srcInfosOffset, 0);
-}
-
-void CommandBuffer::BuildClusterBLAS(CLASOpMode opMode, u64 dstImplicitData, u64 scratchBuffer,
-                                     u64 srcInfosArray, u32 srcInfosArraySize,
-                                     u64 dstAddressesArray, u32 dstAddressesSize, u64 dstSizes,
-                                     u32 dstSizesSize, u64 srcInfosCount,
-                                     u32 maxClusterCountPerAccelerationStructure,
-                                     u32 maxTotalClusterCount,
-                                     u32 maxAccelerationStructureCount)
-{
-    CLASOpInput opInput;
-    opInput.clusterBottomLevel.maxClusterCountPerAccelerationStructure =
-        maxClusterCountPerAccelerationStructure;
-    opInput.clusterBottomLevel.maxTotalClusterCount = maxTotalClusterCount;
-    opInput.maxAccelerationStructureCount           = maxAccelerationStructureCount;
-
-    CLASIndirect(opInput, opMode, CLASOpType::BLAS, dstImplicitData, scratchBuffer,
-                 dstAddressesArray, dstAddressesSize, dstSizes, dstSizesSize, srcInfosArray,
-                 srcInfosArraySize, srcInfosCount);
 }
 
 void CommandBuffer::MoveCLAS(CLASOpMode opMode, GPUBuffer *dstImplicitData,

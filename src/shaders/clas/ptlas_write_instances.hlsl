@@ -61,7 +61,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
     uint flags = 0x10u;
     AABB aabb;
 
-    if (instance.flags & GPU_INSTANCE_FLAG_MERGED)
+    if (0)//instance.flags & GPU_INSTANCE_FLAG_MERGED)
     {
         address = info.mergedProxyDeviceAddress;
         worldFromObject = float3x4(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0);
@@ -70,7 +70,8 @@ void main(uint3 dtID : SV_DispatchThreadID)
     }
     else 
     {
-        address = blasAddresses[blasData.addressIndex];
+        //address = resources[instance.resourceID].blasDeviceAddress;//blasAddresses[blasData.addressIndex];
+        address = blasAddresses[instance.resourceID];
         worldFromObject = ConvertGPUMatrix(instanceTransforms[instance.transformIndex], info.base, info.scale);
         aabb = aabbs[instance.resourceID];
     }

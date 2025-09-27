@@ -59,22 +59,22 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex, uint3 dis
         }
     }
 #else
-    uint clusterID = dispatchThreadID.x;
+    uint id = dispatchThreadID.x;
     // TODO
     uint baseAddress = 0;
 
-    if (clusterID >= globals[GLOBALS_CLAS_COUNT_INDEX]) return;
+    if (id >= globals[GLOBALS_CLAS_COUNT_INDEX]) return;
 
-    DecodeClusterData decodeClusterData = decodeClusterDatas[clusterID];
+    DecodeClusterData decodeClusterData = decodeClusterDatas[id];
     //uint pageIndex = decodeClusterData.pageIndex;
     uint clusterIndex = decodeClusterData.clusterIndex;
     uint indexBufferOffset = decodeClusterData.indexBufferOffset;
     uint vertexBufferOffset = decodeClusterData.vertexBufferOffset;
 
-    DenseGeometry header = GetDenseGeometryHeader2(clusterID, baseAddress);
+    DenseGeometry header = GetDenseGeometryHeader2(clusterIndex, baseAddress);
 
     // Decode triangle indices
-    for (uint triangleIndex = groupIndex; triangleIndex < header.numTriangles; triangleIndex++)
+    for (uint triangleIndex = 0; triangleIndex < header.numTriangles; triangleIndex++)
     {
         // write u8 indices
         uint3 triangleIndices = header.DecodeTriangle(triangleIndex);
@@ -97,7 +97,7 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex, uint3 dis
     }
 
     // Decode vertices
-    for (uint vertexIndex = groupIndex; vertexIndex < header.numVertices; vertexIndex++)
+    for (uint vertexIndex = 0; vertexIndex < header.numVertices; vertexIndex++)
     {
         float3 position = header.DecodePosition(vertexIndex);
         decodeVertexBuffer[vertexBufferOffset + vertexIndex] = position;

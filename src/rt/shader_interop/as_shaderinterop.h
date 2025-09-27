@@ -413,6 +413,7 @@ struct Resource
     uint globalRootNodeOffset;
     uint flags;
 
+    uint64_t blasDeviceAddress;
     float4 lodBounds;
     uint resourceSharingInfoOffset;
     uint numLodLevels;

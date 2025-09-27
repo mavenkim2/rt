@@ -341,9 +341,9 @@ void main()
             float3 n0, n1, n2;
             if (dg.HasNormals())
             {
-                //n0 = dg.DecodeNormal(vids[0]);
-                //n1 = dg.DecodeNormal(vids[1]);
-                //n2 = dg.DecodeNormal(vids[2]);
+                n0 = dg.DecodeNormal(vids[0]);
+                n1 = dg.DecodeNormal(vids[1]);
+                n2 = dg.DecodeNormal(vids[2]);
             }
             else 
             {

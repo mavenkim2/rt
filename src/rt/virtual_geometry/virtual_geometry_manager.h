@@ -346,6 +346,8 @@ struct VirtualGeometryManager
     GPUBuffer fixupBuffer;
     GPUBuffer voxelTransferBuffer;
 
+    GPUBuffer blasUploadBuffer;
+
     // ResourceHandle uploadBuffer;
     ResourceHandle streamingRequestsBuffer;
     GPUBuffer readbackBuffer;
@@ -384,13 +386,14 @@ struct VirtualGeometryManager
     GPUBuffer clasBlasImplicitBuffer;
     ResourceHandle clasBlasImplicitHandle;
 
-    ResourceHandle blasScratchBuffer;
+    GPUBuffer blasScratchBuffer;
     ResourceHandle blasDataBuffer;
-    ResourceHandle buildClusterBottomLevelInfoBuffer;
+    GPUBuffer buildClusterBottomLevelInfoBuffer;
+
     ResourceHandle blasClasAddressBuffer;
     GPUBuffer blasAccelAddresses;
     ResourceHandle blasAccelAddressesHandle;
-    ResourceHandle blasAccelSizes;
+    GPUBuffer blasAccelSizes;
 
     ResourceHandle ptlasIndirectCommandBuffer;
     ResourceHandle ptlasWriteInfosBuffer;
@@ -407,9 +410,9 @@ struct VirtualGeometryManager
     // ResourceHandle ptlasInstanceBitVectorBuffer;
     // ResourceHandle ptlasInstanceFrameBitVectorBuffer0;
     // ResourceHandle ptlasInstanceFrameBitVectorBuffer1;
-    GPUBuffer resourceSharingInfosBuffer;
-    ResourceHandle resourceSharingInfosBufferHandle;
-    ResourceHandle maxMinLodLevelBuffer;
+    // GPUBuffer resourceSharingInfosBuffer;
+    // ResourceHandle resourceSharingInfosBufferHandle;
+    // ResourceHandle maxMinLodLevelBuffer;
 
     ResourceHandle voxelAABBBuffer;
     ResourceHandle voxelBlasBuffer;
@@ -493,7 +496,7 @@ struct VirtualGeometryManager
                         ResourceHandle scene);
     bool ProcessInstanceRequests(CommandBuffer *cmd);
     void ProcessRequests(CommandBuffer *cmd, bool test);
-    u32 AddNewMesh(Arena *arena, CommandBuffer *cmd, string filename);
+    // u32 AddNewMesh(Arena *arena, CommandBuffer *cmd, string filename);
     u32 AddNewMesh2(Arena *arena, CommandBuffer *cmd, string filename);
     void FinalizeResources(CommandBuffer *cmd);
     void PrepareInstances(CommandBuffer *cmd, ResourceHandle sceneBuffer, bool ptlas);

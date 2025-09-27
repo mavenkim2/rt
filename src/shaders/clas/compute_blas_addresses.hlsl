@@ -3,7 +3,6 @@
 StructuredBuffer<uint> blasSizes : register(t0);
 RWStructuredBuffer<uint64_t> blasAddresses : register(u1);
 RWStructuredBuffer<uint> globals : register(u2);
-StructuredBuffer<BLASData> blasDatas : register(t3);
 
 [[vk::push_constant]] AddressPushConstant pc;
 

@@ -6,10 +6,9 @@
 RWStructuredBuffer<uint> globals : register(u0);
 RWStructuredBuffer<BLASData> blasDatas : register(u1);
 StructuredBuffer<GPUInstance> instances : register(t2);
-StructuredBuffer<uint2> maxMinLodLevel : register(t3);
-RWStructuredBuffer<CandidateNode> nodeQueue : register(u4);
-RWStructuredBuffer<Queue> queue : register(u5);
-RWStructuredBuffer<uint> resourceBitVector : register(u6);
+RWStructuredBuffer<CandidateNode> nodeQueue : register(u3);
+RWStructuredBuffer<Queue> queue : register(u4);
+RWStructuredBuffer<uint> resourceBitVector : register(u5);
 
 [numthreads(64, 1, 1)]
 void main(uint3 dtID : SV_DispatchThreadID) 
@@ -21,15 +20,15 @@ void main(uint3 dtID : SV_DispatchThreadID)
     if (instance.flags & (GPU_INSTANCE_FLAG_FREED | GPU_INSTANCE_FLAG_MERGED)) return;
 
     //if (instance.resourceID > 8 || instance.resourceID == 2) return;
-    if (instance.resourceID != 0) return;// && instance.resourceID != 18 && instance.resourceID != 19) return;
+    if (instanceIndex > 0) return;// && instance.resourceID != 18 && instance.resourceID != 19) return;
 
     // Share
     BLASData blasData = (BLASData)0;
     blasData.instanceID = instanceIndex;
     uint blasIndex;
     InterlockedAdd(globals[GLOBALS_BLAS_COUNT_INDEX], 1, blasIndex);
-    uint sharedInstance = maxMinLodLevel[instance.resourceID].x & ((1u << 27u) - 1u);
-    uint minMaxLodLevel = maxMinLodLevel[instance.resourceID].y;
+    //uint sharedInstance = maxMinLodLevel[instance.resourceID].x & ((1u << 27u) - 1u);
+    //uint minMaxLodLevel = maxMinLodLevel[instance.resourceID].y;
 
     if (0)//instanceIndex == sharedInstance)
     {

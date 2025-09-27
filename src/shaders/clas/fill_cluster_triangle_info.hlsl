@@ -1,5 +1,4 @@
-#include "../../rt/shader_interop/as_shaderinterop.h"
-#include "../../rt/shader_interop/dense_geometry_shaderinterop.h"
+#include "../../rt/shader_interop/as_shaderinterop.h" include "../../rt/shader_interop/dense_geometry_shaderinterop.h"
 #include "../../rt/shader_interop/hierarchy_traversal_shaderinterop.h"
 #include "../wave_intrinsics.hlsli"
 #include "../dense_geometry.hlsli"
@@ -119,6 +118,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
         globals[GLOBALS_CLAS_COUNT_INDEX] = numClusters;
         globals[GLOBALS_DECODE_INDIRECT_Y] = 1;
         globals[GLOBALS_DECODE_INDIRECT_Z] = 1;
+
+        globals[GLOBALS_BLAS_FINAL_COUNT_INDEX] = 1;
     }
 
     uint clusterIndex = dispatchThreadID.x;

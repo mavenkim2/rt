@@ -18,9 +18,11 @@ StructuredBuffer<PartitionInfo> partitionInfos : register(t5);
 RWStructuredBuffer<StreamingRequest> requests : register(u6);
 StructuredBuffer<Resource> resources : register(t7);
 
+#if 0
 StructuredBuffer<ResourceSharingInfo> resourceSharingInfos : register(t8);
 RWStructuredBuffer<uint2> maxMinLodLevel : register(u9);
-RWStructuredBuffer<BLASData> blasDatas : register(u10);
+#endif
+RWStructuredBuffer<BLASData> blasDatas : register(u8);
 
 [numthreads(64, 1, 1)]
 void main(uint3 dtID : SV_DispatchThreadID)
