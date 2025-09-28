@@ -337,18 +337,10 @@ struct VirtualGeometryManager
     VkPipeline reprojectDepthPipeline        = {};
 
     ResourceHandle evictedPagesBuffer;
-    GPUBuffer hierarchyNodeBuffer;
-    ResourceHandle hierarchyNodeBufferHandle;
     GPUBuffer clusterPageDataBuffer;
     ResourceHandle clusterPageDataBufferHandle;
 
-    ResourceHandle clusterFixupBuffer;
-    ResourceHandle voxelPageDecodeBuffer;
-
     GPUBuffer pageUploadBuffer;
-    GPUBuffer fixupBuffer;
-    GPUBuffer voxelTransferBuffer;
-
     GPUBuffer blasUploadBuffer;
 
     GPUBuffer clusterAccelAddresses;
@@ -378,7 +370,6 @@ struct VirtualGeometryManager
     ResourceHandle blasDataBuffer;
     GPUBuffer buildClusterBottomLevelInfoBuffer;
 
-    ResourceHandle blasClasAddressBuffer;
     GPUBuffer blasAccelAddresses;
     ResourceHandle blasAccelAddressesHandle;
     GPUBuffer blasAccelSizes;
@@ -437,8 +428,6 @@ struct VirtualGeometryManager
     GPUBuffer mergedInstancesAABBBuffer;
 
     u32 numStreamedInstances;
-    ResourceHandle instanceUploadBuffer;
-    ResourceHandle tempInstanceBuffer;
 
     GPUBuffer instanceFreeListBuffer;
     ResourceHandle instanceFreeListBufferHandle;
@@ -462,7 +451,6 @@ struct VirtualGeometryManager
 
     StaticArray<VirtualPage> virtualTable;
     StaticArray<Page> physicalPages;
-    StaticArray<Range> instanceIDFreeRanges;
     u32 virtualInstanceOffset;
     u32 voxelAddressOffset;
     u32 clusterLookupTableOffset;
@@ -484,7 +472,6 @@ struct VirtualGeometryManager
                         ResourceHandle scene);
     bool ProcessInstanceRequests(CommandBuffer *cmd);
     void ProcessRequests(CommandBuffer *cmd, bool test);
-    // u32 AddNewMesh(Arena *arena, CommandBuffer *cmd, string filename);
     u32 AddNewMesh2(Arena *arena, CommandBuffer *cmd, string filename);
     void FinalizeResources(CommandBuffer *cmd);
     void PrepareInstances(CommandBuffer *cmd, ResourceHandle sceneBuffer, bool ptlas);

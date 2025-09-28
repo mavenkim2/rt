@@ -821,6 +821,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     device->DestroyBuffer(&virtualGeometryManager.clasScratchBuffer);
     device->DestroyBuffer(&virtualGeometryManager.buildClusterTriangleInfoBuffer);
     device->DestroyBuffer(&virtualGeometryManager.decodeClusterDataBuffer);
+    device->DestroyBuffer(&virtualGeometryManager.pageUploadBuffer);
 
     virtualGeometryManager.FinalizeResources(dgfTransferCmd);
 
@@ -1317,10 +1318,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                        ResourceUsageType::Write);
 
         // Streaming
-        // bool test    = virtualGeometryManager.ProcessInstanceRequests(cmd);
         int cpuIndex = TIMED_CPU_RANGE_BEGIN();
 
-        // virtualGeometryManager.ProcessRequests(cmd, testCount);
         TIMED_RANGE_END(cpuIndex);
 
         if (device->frameCount > 0)
