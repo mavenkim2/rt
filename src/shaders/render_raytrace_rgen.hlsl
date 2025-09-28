@@ -42,6 +42,7 @@ StructuredBuffer<GPUTruncatedEllipsoid> truncatedEllipsoids : register(t16);
 StructuredBuffer<GPUTransform> instanceTransforms : register(t17);
 StructuredBuffer<PartitionInfo> partitionInfos : register(t18);
 StructuredBuffer<uint> partitionResourceIDs : register(t19);
+StructuredBuffer<Resource> resources : register(t20);
 
 //RWStructuredBuffer<float2> debugBuffer : register(u19);
 //RWStructuredBuffer<uint> globals : register(u20);
@@ -306,8 +307,7 @@ void main()
             uint numClusters = GetNumClustersInPage(basePageAddress);
             DenseGeometry dg = GetDenseGeometryHeader(basePageAddress, numClusters, clusterIndex);
 #endif
-            // TODO IMPORTANT
-            uint baseAddress = 0;
+            uint baseAddress = resources[instanceID].baseAddress;
             DenseGeometry dg = GetDenseGeometryHeader2(clusterID, baseAddress);
 
             uint materialID = dg.DecodeMaterialID(triangleIndex);

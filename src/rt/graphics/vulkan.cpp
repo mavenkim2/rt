@@ -1278,7 +1278,7 @@ void Vulkan::CheckInitializedThreadPool(int threadIndex)
 
         poolCreateInfo.pPoolSizes    = poolSize;
         poolCreateInfo.poolSizeCount = ArrayLength(poolSize);
-        poolCreateInfo.maxSets       = 50;
+        poolCreateInfo.maxSets       = 150;
 
         vkCreateDescriptorPool(device, &poolCreateInfo, 0, &pool.descriptorPool[0]);
         vkCreateDescriptorPool(device, &poolCreateInfo, 0, &pool.descriptorPool[1]);
@@ -3493,7 +3493,7 @@ void CommandBuffer::ComputeBLASSizes(GPUBuffer *srcInfosArray, GPUBuffer *scratc
                                      GPUBuffer *dstSizes, GPUBuffer *srcInfosCount,
                                      u32 srcInfosOffset, u32 maxTotalClusterCount,
                                      u32 maxClusterCountPerAccelerationStructure,
-                                     u32 maxAccelerationStructureCount)
+                                     u32 maxAccelerationStructureCount, u32 blasOffset)
 {
     CLASOpInput opInput;
     opInput.clusterBottomLevel.maxTotalClusterCount = maxTotalClusterCount;
@@ -3503,7 +3503,7 @@ void CommandBuffer::ComputeBLASSizes(GPUBuffer *srcInfosArray, GPUBuffer *scratc
     opInput.maxAccelerationStructureCount = maxAccelerationStructureCount;
 
     CLASIndirect(opInput, CLASOpMode::ComputeSizes, CLASOpType::BLAS, 0, scratchBuffer, 0,
-                 dstSizes, srcInfosArray, srcInfosCount, srcInfosOffset);
+                 dstSizes, srcInfosArray, srcInfosCount, srcInfosOffset, blasOffset);
 }
 
 void CommandBuffer::ComputeCLASTemplateSizes(GPUBuffer *srcInfosArray,
@@ -3568,7 +3568,7 @@ void CommandBuffer::BuildClusterBLAS(CLASOpMode opMode, GPUBuffer *implicitBuffe
                                      GPUBuffer *srcInfosCount, u32 srcInfosOffset,
                                      u32 maxClusterCountPerAccelerationStructure,
                                      u32 maxTotalClusterCount,
-                                     u32 maxAccelerationStructureCount)
+                                     u32 maxAccelerationStructureCount, u32 blasOffset)
 {
     CLASOpInput opInput;
     opInput.clusterBottomLevel.maxClusterCountPerAccelerationStructure =
@@ -3577,7 +3577,8 @@ void CommandBuffer::BuildClusterBLAS(CLASOpMode opMode, GPUBuffer *implicitBuffe
     opInput.maxAccelerationStructureCount           = maxAccelerationStructureCount;
 
     CLASIndirect(opInput, opMode, CLASOpType::BLAS, implicitBuffer, scratchBuffer,
-                 dstAddresses, dstSizes, bottomLevelInfo, srcInfosCount, srcInfosOffset, 0);
+                 dstAddresses, dstSizes, bottomLevelInfo, srcInfosCount, srcInfosOffset,
+                 blasOffset);
 }
 
 void CommandBuffer::MoveCLAS(CLASOpMode opMode, GPUBuffer *dstImplicitData,

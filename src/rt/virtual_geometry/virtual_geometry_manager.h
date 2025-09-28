@@ -131,7 +131,7 @@ struct alignas(16) TempHierarchyNode
 struct VirtualGeometryManager
 {
     const u32 streamingPoolSize = megabytes(512);
-    const u32 maxPages          = 1024; // streamingPoolSize >> CLUSTER_PAGE_SIZE_BITS;
+    const u32 maxPages          = 4096; // streamingPoolSize >> CLUSTER_PAGE_SIZE_BITS;
     const u32 maxVirtualPages   = maxPages << 8u;
 
     const u32 instanceIDStart = maxPages * MAX_CLUSTERS_PER_PAGE;
@@ -232,9 +232,11 @@ struct VirtualGeometryManager
         u32 numLodLevels;
         u32 resourceSharingInfoOffset;
         u32 clusterOffset;
+        u32 dataOffset;
     };
 
     u32 currentClusterTotal;
+    u32 currentGeoMemoryTotal;
     u32 totalNumVirtualPages;
     u32 totalNumNodes;
     u32 maxWriteClusters;
@@ -244,6 +246,7 @@ struct VirtualGeometryManager
     DescriptorSetLayout fillClusterTriangleInfoLayout = {};
     VkPipeline fillClusterTriangleInfoPipeline;
 
+    PushConstant decodeDgfPush;
     DescriptorSetLayout decodeDgfClustersLayout = {};
     VkPipeline decodeDgfClustersPipeline;
 
@@ -367,6 +370,9 @@ struct VirtualGeometryManager
     GPUBuffer indexBuffer;
     GPUBuffer vertexBuffer;
     GPUBuffer clasGlobalsBuffer;
+
+    GPUBuffer totalAccelSizesBuffer;
+
     ResourceHandle clasGlobalsBufferHandle;
 
     GPUBuffer decodeClusterDataBuffer;

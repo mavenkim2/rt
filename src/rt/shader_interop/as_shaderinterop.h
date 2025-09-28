@@ -228,6 +228,25 @@ struct GeometryIndexAndFlags
     uint32_t geometryFlags : 3;
 };
 
+struct ComputeCLASAddressesPushConstant
+{
+    uint addressHighBits;
+    uint addressLowBits;
+    uint clasOffset;
+};
+
+struct ComputeBLASAddressesPushConstant
+{
+    uint addressHighBits;
+    uint addressLowBits;
+    uint blasOffset;
+};
+
+struct DecodePushConstant 
+{
+    uint baseAddress;
+};
+
 struct MergedInstancesPushConstant
 {
     uint num;
@@ -413,11 +432,11 @@ struct Resource
     uint globalRootNodeOffset;
     uint flags;
 
-    uint64_t blasDeviceAddress;
     float4 lodBounds;
     uint resourceSharingInfoOffset;
     uint numLodLevels;
     uint clusterOffset;
+    uint baseAddress;
 };
 
 struct ResourceSharingInfo

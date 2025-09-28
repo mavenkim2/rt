@@ -15,6 +15,7 @@ RWStructuredBuffer<uint64_t> clasAddresses : register(u0);
 StructuredBuffer<uint> clasSizes : register(t1);
 RWStructuredBuffer<uint> globals : register(u2);
 StructuredBuffer<DecodeClusterData> decodeClusterDatas : register(t3);
+RWStructuredBuffer<uint> totalClasSize : register(u4);
 #endif
 
 #if 0
@@ -23,7 +24,7 @@ groupshared uint pageClusterAccelOffset;
 groupshared uint descriptorStartIndex;
 #endif
 
-[[vk::push_constant]] AddressPushConstant pc;
+[[vk::push_constant]] ComputeCLASAddressesPushConstant pc;
 
 //[numthreads(MAX_CLUSTERS_PER_PAGE, 1, 1)]
 [numthreads(32, 1, 1)]
@@ -78,16 +79,15 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex, uint3 dis
 
     DecodeClusterData clusterData = decodeClusterDatas[clusterID];
 
-    uint clasOldPageDataByteOffset = globals[GLOBALS_OLD_PAGE_DATA_BYTES];
-    uint clasSize = clasSizes[clusterID];
+    uint clasSize = clasSizes[pc.clasOffset + clusterID];
 
     // Reuse page cluster accel size as page byte offset
     uint clasOffset;
-    InterlockedAdd(globals[GLOBALS_NEW_PAGE_DATA_BYTES], clasSize, clasOffset);
+    InterlockedAdd(totalClasSize[0], clasSize, clasOffset);
 
     uint64_t clusterBaseAddress = ((uint64_t)pc.addressHighBits << 32u) | (uint64_t)pc.addressLowBits;
 
-    uint64_t clasAddress = clusterBaseAddress + clasOldPageDataByteOffset + clasOffset;
-    clasAddresses[clusterID] = clasAddress;
+    uint64_t clasAddress = clusterBaseAddress + clasOffset;
+    clasAddresses[pc.clasOffset + clusterID] = clasAddress;
 #endif
 }

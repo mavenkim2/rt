@@ -20,7 +20,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
     if (instance.flags & (GPU_INSTANCE_FLAG_FREED | GPU_INSTANCE_FLAG_MERGED)) return;
 
     //if (instance.resourceID > 8 || instance.resourceID == 2) return;
-    if (instanceIndex > 0) return;// && instance.resourceID != 18 && instance.resourceID != 19) return;
+    //if (instanceIndex > 0) return;// && instance.resourceID != 18 && instance.resourceID != 19) return;
 
     // Share
     BLASData blasData = (BLASData)0;

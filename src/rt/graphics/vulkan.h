@@ -844,7 +844,7 @@ struct CommandBuffer
                           GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
                           u32 maxTotalClusterCount,
                           u32 maxClusterCountPerAccelerationStructure,
-                          u32 maxAccelerationStructureCount);
+                          u32 maxAccelerationStructureCount, u32 blasOffset = 0);
     void ComputeCLASTemplateSizes(GPUBuffer *srcInfosArray, GPUBuffer *scratchBuffer,
                                   GPUBuffer *dstSizes, GPUBuffer *srcInfosCount,
                                   u32 srcInfosOffset, u32 maxNumTriangles, u32 maxNumVertices,
@@ -879,7 +879,8 @@ struct CommandBuffer
                           GPUBuffer *dstAddresses, GPUBuffer *dstSizes,
                           GPUBuffer *srcInfosCount, u32 srcInfosOffset,
                           u32 maxClusterCountPerAccelerationStructure,
-                          u32 maxTotalClusterCount, u32 maxAccelerationStructureCount);
+                          u32 maxTotalClusterCount, u32 maxAccelerationStructureCount,
+                          u32 blasOffset = 0);
     void BuildCLASTemplates(CLASOpMode opMode, GPUBuffer *dstImplicitData,
                             GPUBuffer *scratchBuffer, GPUBuffer *dstAddresses,
                             GPUBuffer *dstSizes, GPUBuffer *srcInfosArray,

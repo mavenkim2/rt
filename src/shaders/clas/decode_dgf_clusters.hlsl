@@ -7,6 +7,7 @@ RWStructuredBuffer<float3> decodeVertexBuffer : register(u1);
 StructuredBuffer<DecodeClusterData> decodeClusterDatas : register(t2);
 StructuredBuffer<uint> globals : register(t3);
 
+[[vk::push_constant]] DecodePushConstant pc;
 #define THREAD_GROUP_SIZE 32
 [numthreads(THREAD_GROUP_SIZE, 1, 1)] 
 void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex, uint3 dispatchThreadID : SV_DispatchThreadID)
@@ -60,8 +61,7 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex, uint3 dis
     }
 #else
     uint id = dispatchThreadID.x;
-    // TODO
-    uint baseAddress = 0;
+    uint baseAddress = pc.baseAddress;
 
     if (id >= globals[GLOBALS_CLAS_COUNT_INDEX]) return;
 

@@ -2129,7 +2129,7 @@ bool RecursivePartitionGraph(ArrayView<int> clusterIndices, ArrayView<idx_t> clu
     {
         int rangeIndex = numPartitions.fetch_add(1, std::memory_order_relaxed);
 
-        if (rangeIndex == ranges.Length()) return false;
+        if (rangeIndex >= ranges.Length()) return false;
 
         PartitionRange range;
         range.begin = globalClusterOffset;
@@ -2183,11 +2183,6 @@ bool RecursivePartitionGraph(ArrayView<int> clusterIndices, ArrayView<idx_t> clu
             numAdjacency, minGroupSize, maxGroupSize);
     };
 
-    // if (numClusters > 256)
-    // {
-    //     scheduler.ScheduleAndWait(2, 1, Recurse);
-    // }
-    // else
     bool result = true;
     {
         result = result && Recurse(0);
@@ -2787,6 +2782,7 @@ static bool GenerateValidTriClusters(Arena *arena, Mesh &mesh, u32 maxNumTriangl
         return false;
     }
 
+#if 0
     for (u32 cluster = 0; cluster < result.ranges.Length(); cluster++)
     {
         PartitionRange range = result.ranges[cluster];
@@ -2822,6 +2818,10 @@ static bool GenerateValidTriClusters(Arena *arena, Mesh &mesh, u32 maxNumTriangl
                         found = true;
                         break;
                     }
+                    if (index != hashIndex && mesh.p[hashIndex] == p)
+                    {
+                        Assert(0);
+                    }
                 }
                 if (!found)
                 {
@@ -2837,6 +2837,7 @@ static bool GenerateValidTriClusters(Arena *arena, Mesh &mesh, u32 maxNumTriangl
             return false;
         }
     }
+#endif
 
     out = result;
     return true;
@@ -5862,8 +5863,28 @@ void CreateClusters2(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndi
 
     u64 fileHeaderOffset = AllocateSpace(&builder, sizeof(ClusterFileHeader2));
 
+    StaticArray<u32> vertexClusterCount(scratch.temp.arena, combinedMesh.numVertices,
+                                        combinedMesh.numVertices);
+
+    u32 repeat = 0;
     for (Cluster &cluster : clusters)
     {
+        // BitVector bits(scratch.temp.arena, combinedMesh.numVertices);
+        // for (u32 triangle : cluster.triangleIndices)
+        // {
+        //     for (u32 i = 0; i < 3; i++)
+        //     {
+        //         u32 vertex = combinedMesh.indices[3 * triangle + i];
+        //         if (!bits.GetBit(vertex))
+        //         {
+        //             bits.SetBit(vertex);
+        //             if (vertexClusterCount[vertex]++ > 0)
+        //             {
+        //                 repeat++;
+        //             }
+        //         }
+        //     }
+        // }
         buildDatas[0].WriteTriangleData(cluster.triangleIndices, cluster.geomIDs, combinedMesh,
                                         materialIndices);
     }
