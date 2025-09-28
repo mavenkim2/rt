@@ -819,6 +819,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     device->DestroyBuffer(&virtualGeometryManager.vertexBuffer);
     device->DestroyBuffer(&virtualGeometryManager.indexBuffer);
     device->DestroyBuffer(&virtualGeometryManager.clasScratchBuffer);
+    device->DestroyBuffer(&virtualGeometryManager.buildClusterTriangleInfoBuffer);
+    device->DestroyBuffer(&virtualGeometryManager.decodeClusterDataBuffer);
 
     virtualGeometryManager.FinalizeResources(dgfTransferCmd);
 
@@ -982,8 +984,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     Semaphore frameSemaphore = device->CreateSemaphore();
 
     GPUBuffer readback = device->CreateBuffer(
-        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        sizeof(BUILD_CLUSTERS_BOTTOM_LEVEL_INFO) * (1u << 21u), MemoryUsage::GPU_TO_CPU);
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT, sizeof(u32) * GLOBALS_SIZE, MemoryUsage::GPU_TO_CPU);
 
     Semaphore transferSem   = device->CreateSemaphore();
     transferSem.signalValue = 1;
@@ -1174,51 +1175,33 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                        sizeof(ShaderDebugInfo));
             computeCmd->SubmitTransfer(&shaderDebugBuffers[currentBuffer]);
 
-            rg->StartPass(
-                  6,
-                  [queue             = virtualGeometryManager.queueBuffer,
-                   &clasGlobals      = virtualGeometryManager.clasGlobalsBuffer,
-                   resourceBitVector = virtualGeometryManager.resourceBitVector,
-                   candidateClusters = virtualGeometryManager.candidateClusterBuffer,
-                   candidateNodes    = virtualGeometryManager.candidateNodeBuffer,
-                   pyramid = virtualGeometryManager.depthPyramid](CommandBuffer *cmd) {
-                      RenderGraph *rg = GetRenderGraph();
+            rg->StartPass(3,
+                          [&clasGlobals      = virtualGeometryManager.clasGlobalsBuffer,
+                           resourceBitVector = virtualGeometryManager.resourceBitVector,
+                           pyramid = virtualGeometryManager.depthPyramid](CommandBuffer *cmd) {
+                              RenderGraph *rg = GetRenderGraph();
 
-                      u32 offset, size;
-                      GPUBuffer *buffer = rg->GetBuffer(candidateClusters, offset, size);
-                      cmd->ClearBuffer(buffer, ~0u);
+                              cmd->ClearBuffer(&clasGlobals, 0);
 
-                      buffer = rg->GetBuffer(candidateNodes, offset, size);
-                      cmd->ClearBuffer(buffer, ~0u);
+                              GPUBuffer *buffer = rg->GetBuffer(resourceBitVector);
+                              cmd->ClearBuffer(buffer, 0);
 
-                      buffer = rg->GetBuffer(queue, offset, size);
-                      cmd->ClearBuffer(buffer, 0);
+                              GPUImage *image = rg->GetImage(pyramid);
 
-                      cmd->ClearBuffer(&clasGlobals, 0);
-
-                      buffer = rg->GetBuffer(resourceBitVector, offset, size);
-                      cmd->ClearBuffer(buffer, 0);
-
-                      GPUImage *image = rg->GetImage(pyramid);
-
-                      cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                   VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                                   VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
-                      cmd->Barrier(image, VK_IMAGE_LAYOUT_UNDEFINED,
-                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                   VK_PIPELINE_STAGE_2_NONE,
-                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_NONE,
-                                   VK_ACCESS_2_SHADER_READ_BIT);
-                      cmd->FlushBarriers();
-                  })
+                              cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                           VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                           VK_ACCESS_2_SHADER_WRITE_BIT |
+                                               VK_ACCESS_2_SHADER_READ_BIT);
+                              cmd->Barrier(image, VK_IMAGE_LAYOUT_UNDEFINED,
+                                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                           VK_PIPELINE_STAGE_2_NONE,
+                                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                           VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_READ_BIT);
+                              cmd->FlushBarriers();
+                          })
                 .AddHandle(virtualGeometryManager.resourceBitVector, ResourceUsageType::Write)
-                .AddHandle(virtualGeometryManager.queueBuffer, ResourceUsageType::Write)
                 .AddHandle(virtualGeometryManager.clasGlobalsBufferHandle,
-                           ResourceUsageType::Write)
-                .AddHandle(virtualGeometryManager.candidateNodeBuffer,
-                           ResourceUsageType::Write)
-                .AddHandle(virtualGeometryManager.candidateClusterBuffer,
                            ResourceUsageType::Write)
                 .AddHandle(virtualGeometryManager.depthPyramid, ResourceUsageType::Write);
 
@@ -1235,9 +1218,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
             virtualGeometryManager.PrepareInstances(
                 computeCmd, sceneTransferBufferHandles[currentBuffer], false);
-
-            // virtualGeometryManager.HierarchyTraversal(
-            //     computeCmd, sceneTransferBufferHandles[currentBuffer]);
 
             // rg->StartPass(2,
             //               [&readback = virtualGeometryManager.readbackBuffer,
@@ -1314,27 +1294,15 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         // cmd->ClearBuffer(&virtualGeometryManager.visibleClustersBuffer, ~0u);
         // cmd->ClearBuffer(&virtualGeometryManager.partitionCountsBuffer);
 
-        rg->StartPass(5,
-                      [queue             = virtualGeometryManager.queueBuffer,
-                       &clasGlobals      = virtualGeometryManager.clasGlobalsBuffer,
-                       resourceBitVector = virtualGeometryManager.resourceBitVector,
-                       candidateClusters = virtualGeometryManager.candidateClusterBuffer,
-                       candidateNodes =
-                           virtualGeometryManager.candidateNodeBuffer](CommandBuffer *cmd) {
+        rg->StartPass(2,
+                      [&clasGlobals = virtualGeometryManager.clasGlobalsBuffer,
+                       resourceBitVector =
+                           virtualGeometryManager.resourceBitVector](CommandBuffer *cmd) {
                           RenderGraph *rg = GetRenderGraph();
-                          u32 offset, size;
-                          GPUBuffer *buffer = rg->GetBuffer(candidateClusters, offset, size);
-                          cmd->ClearBuffer(buffer, ~0u);
-
-                          buffer = rg->GetBuffer(candidateNodes, offset, size);
-                          cmd->ClearBuffer(buffer, ~0u);
-
-                          buffer = rg->GetBuffer(queue, offset, size);
-                          cmd->ClearBuffer(buffer, 0);
 
                           cmd->ClearBuffer(&clasGlobals, 0);
 
-                          buffer = rg->GetBuffer(resourceBitVector, offset, size);
+                          GPUBuffer *buffer = rg->GetBuffer(resourceBitVector);
                           cmd->ClearBuffer(buffer, 0);
 
                           cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
@@ -1345,11 +1313,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                           cmd->FlushBarriers();
                       })
             .AddHandle(virtualGeometryManager.resourceBitVector, ResourceUsageType::Write)
-            .AddHandle(virtualGeometryManager.queueBuffer, ResourceUsageType::Write)
             .AddHandle(virtualGeometryManager.clasGlobalsBufferHandle,
-                       ResourceUsageType::Write)
-            .AddHandle(virtualGeometryManager.candidateNodeBuffer, ResourceUsageType::Write)
-            .AddHandle(virtualGeometryManager.candidateClusterBuffer,
                        ResourceUsageType::Write);
 
         // Streaming
@@ -1383,12 +1347,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         {
             virtualGeometryManager.PrepareInstances(
                 cmd, sceneTransferBufferHandles[currentBuffer], true);
-        }
-
-        // Hierarchy traversal
-        {
-            // virtualGeometryManager.HierarchyTraversal(
-            //     cmd, sceneTransferBufferHandles[currentBuffer]);
         }
 
         // rg->StartPass(
@@ -1431,8 +1389,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                  device->EndEvent(cmd);
                              })
             .AddHandle(virtualGeometryManager.clasGlobalsBufferHandle, ResourceUsageType::RW);
-
-        // virtualGeometryManager.BuildClusterBLAS(cmd, &readback);
 
         virtualGeometryManager.BuildPTLAS(cmd, &readback);
 

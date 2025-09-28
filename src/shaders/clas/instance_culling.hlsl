@@ -15,8 +15,7 @@ StructuredBuffer<AABB> aabbs : register(t3);
 
 StructuredBuffer<GPUTransform> instanceTransforms : register(t4);
 StructuredBuffer<PartitionInfo> partitionInfos : register(t5);
-RWStructuredBuffer<StreamingRequest> requests : register(u6);
-StructuredBuffer<Resource> resources : register(t7);
+StructuredBuffer<Resource> resources : register(t6);
 
 #if 0
 StructuredBuffer<ResourceSharingInfo> resourceSharingInfos : register(t8);
@@ -28,10 +27,6 @@ RWStructuredBuffer<BLASData> blasDatas : register(u8);
 void main(uint3 dtID : SV_DispatchThreadID)
 {
     uint instanceIndex = dtID.x;
-    if (dtID.x == 0)
-    {
-        requests[0] = (StreamingRequest)0;
-    }
     if (instanceIndex >= 1u << 21u) return;
 
     GPUInstance instance = gpuInstances[instanceIndex];

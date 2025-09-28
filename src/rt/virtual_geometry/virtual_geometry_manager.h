@@ -351,17 +351,6 @@ struct VirtualGeometryManager
 
     GPUBuffer blasUploadBuffer;
 
-    // ResourceHandle uploadBuffer;
-    ResourceHandle streamingRequestsBuffer;
-    GPUBuffer readbackBuffer;
-    ResourceHandle readbackBufferHandle;
-
-    ResourceHandle visibleClustersBuffer;
-    ResourceHandle queueBuffer;
-
-    ResourceHandle candidateNodeBuffer;
-    ResourceHandle candidateClusterBuffer;
-
     GPUBuffer clusterAccelAddresses;
     ResourceHandle clusterAccelAddressesHandle;
     GPUBuffer clusterAccelSizes;
@@ -377,17 +366,10 @@ struct VirtualGeometryManager
 
     GPUBuffer decodeClusterDataBuffer;
     GPUBuffer buildClusterTriangleInfoBuffer;
-    GPUBuffer clasPageInfoBuffer;
-    ResourceHandle clasPageInfoBufferHandle;
 
     GPUBuffer clasScratchBuffer;
     GPUBuffer clasImplicitData;
     ResourceHandle clasImplicitDataHandle;
-
-    ResourceHandle moveScratchBuffer;
-    ResourceHandle moveDescriptors;
-    ResourceHandle moveDstAddresses;
-    ResourceHandle moveDstSizes;
 
     GPUBuffer clasBlasImplicitBuffer;
     ResourceHandle clasBlasImplicitHandle;
@@ -506,9 +488,6 @@ struct VirtualGeometryManager
     u32 AddNewMesh2(Arena *arena, CommandBuffer *cmd, string filename);
     void FinalizeResources(CommandBuffer *cmd);
     void PrepareInstances(CommandBuffer *cmd, ResourceHandle sceneBuffer, bool ptlas);
-    void HierarchyTraversal(CommandBuffer *cmd, ResourceHandle gpuSceneBuffer);
-    void BuildClusterBLAS(CommandBuffer *cmd, GPUBuffer *debug);
-    void AllocateInstances(StaticArray<GPUInstance> &gpuInstances);
     void BuildPTLAS(CommandBuffer *cmd, GPUBuffer *debug);
     void UnlinkLRU(int pageIndex);
     void LinkLRU(int index);
