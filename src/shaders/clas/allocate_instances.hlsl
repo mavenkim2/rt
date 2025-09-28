@@ -30,7 +30,6 @@ void main(uint3 dtID : SV_DispatchThreadID)
         uint instanceIndex = instanceFreeList[instanceFreeListIndex];
 
         gpuInstances[instanceIndex].transformIndex = ~0u;
-        gpuInstances[instanceIndex].globalRootNodeOffset = 0;
         gpuInstances[instanceIndex].resourceID = 0;
         gpuInstances[instanceIndex].partitionIndex = partition;
         gpuInstances[instanceIndex].flags = GPU_INSTANCE_FLAG_MERGED;
@@ -53,7 +52,6 @@ void main(uint3 dtID : SV_DispatchThreadID)
         uint resourceID = partitionResourceIDs[info.transformOffset + (uint)i];
 
         gpuInstances[instanceIndex].transformIndex = info.transformOffset + (uint)i;
-        gpuInstances[instanceIndex].globalRootNodeOffset = resources[resourceID].globalRootNodeOffset;
         gpuInstances[instanceIndex].resourceID = resourceID;
         gpuInstances[instanceIndex].partitionIndex = partition;
         gpuInstances[instanceIndex].flags = GPU_INSTANCE_FLAG_INDIV;

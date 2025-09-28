@@ -200,37 +200,12 @@ struct VirtualGeometryManager
 
     struct MeshInfo
     {
-        Graph<HierarchyFixup> pageToHierarchyNodeGraph;
-
-        Graph<u32> pageToParentPageGraph;
-        Graph<ClusterFixup> pageToParentClusters;
-
-        StaticArray<VoxelClusterGroupFixup> voxelClusterGroupFixups;
-        StaticArray<ResourceSharingInfo> resourceSharingInfos;
-
         TruncatedEllipsoid ellipsoid;
-
-        u32 voxelBLASBitmask;
-        u32 voxelAddressOffset;
-        u32 clusterLookupTableOffset;
 
         Vec3f boundsMin;
         Vec3f boundsMax;
 
-        // TODO: replace with filename
-        u8 *pageData;
-        u32 hierarchyNodeOffset;
-        u32 virtualPageOffset;
-
-        u32 totalNumVoxelClusters;
-        u32 numFinestClusters;
-
-        PackedHierarchyNode *nodes;
-        u32 numNodes;
-
         Vec4f lodBounds;
-        u32 numLodLevels;
-        u32 resourceSharingInfoOffset;
         u32 clusterOffset;
         u32 dataOffset;
     };
@@ -262,21 +237,11 @@ struct VirtualGeometryManager
     DescriptorSetLayout computeClasAddressesLayout = {};
     VkPipeline computeClasAddressesPipeline;
 
-    DescriptorSetLayout hierarchyTraversalLayout = {};
-    VkPipeline hierarchyTraversalPipeline;
-
     DescriptorSetLayout writeClasDefragLayout = {};
     VkPipeline writeClasDefragPipeline;
 
-    PushConstant fillClusterBottomLevelInfoPush;
-    DescriptorSetLayout fillClusterBLASInfoLayout = {};
-    VkPipeline fillClusterBLASInfoPipeline;
-
     DescriptorSetLayout fillBlasAddressArrayLayout = {};
     VkPipeline fillBlasAddressArrayPipeline;
-
-    DescriptorSetLayout getBlasAddressOffsetLayout = {};
-    VkPipeline getBlasAddressOffsetPipeline;
 
     PushConstant computeBlasAddressesPush;
     DescriptorSetLayout computeBlasAddressesLayout = {};
@@ -421,7 +386,6 @@ struct VirtualGeometryManager
 
     GPUBuffer instancesBuffer;
     ResourceHandle instancesBufferHandle;
-    BitVector partitionStreamedIn;
     Graph<Instance> partitionInstanceGraph;
     StaticArray<u32> allocatedPartitionIndices;
 
@@ -462,11 +426,6 @@ struct VirtualGeometryManager
 
     VirtualGeometryManager(CommandBuffer *cmd, Arena *arena, u32 targetWidth,
                            u32 targetHeight);
-    void EditRegistration(u32 instanceID, u32 pageIndex, bool add);
-    void RecursePageDependencies(StaticArray<VirtualPageHandle> &pages, u32 instanceID,
-                                 u32 pageIndex, u32 priority);
-    bool VerifyPageDependencies(u32 virtualOffset, u32 startPage, u32 numPages);
-    bool CheckDuplicatedFixup(u32 virtualOffset, u32 pageIndex, u32 startPage, u32 numPages);
     void UpdateHZB();
     void ReprojectDepth(u32 targetWidth, u32 targetHeight, ResourceHandle depth,
                         ResourceHandle scene);

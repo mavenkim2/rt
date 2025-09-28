@@ -242,7 +242,7 @@ struct ComputeBLASAddressesPushConstant
     uint blasOffset;
 };
 
-struct DecodePushConstant 
+struct DecodePushConstant
 {
     uint baseAddress;
 };
@@ -381,7 +381,6 @@ float3x4 ConvertGPUMatrix(GPUTransform transform, float3 anchor, float3 scale)
 struct GPUInstance
 {
     uint transformIndex;
-    uint globalRootNodeOffset;
     uint resourceID;
     uint partitionIndex;
     // uint voxelAddressOffset;
@@ -427,15 +426,6 @@ struct Brick
 #define RESOURCE_FLAG_ONE_CLUSTER (1u << 0u)
 struct Resource
 {
-    uint mergedAddressIndex;
-    uint sharedAddressIndex;
-    uint globalRootNodeOffset;
-    uint flags;
-
-    float4 lodBounds;
-    uint resourceSharingInfoOffset;
-    uint numLodLevels;
-    uint clusterOffset;
     uint baseAddress;
 };
 

@@ -61,11 +61,6 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena,
     Shader computeClasAddressesShader = device->CreateShader(
         ShaderStage::Compute, "compute clas addresses", computeClasAddressesData);
 
-    string hierarchyTraversalName   = "../src/shaders/hierarchy_traversal.spv";
-    string hierarchyTraversalData   = OS_ReadFile(arena, hierarchyTraversalName);
-    Shader hierarchyTraversalShader = device->CreateShader(
-        ShaderStage::Compute, "hierarchy traversal", hierarchyTraversalData);
-
     string writeClasDefragAddressesName   = "../src/shaders/write_clas_defrag_addresses.spv";
     string writeClasDefragAddressesData   = OS_ReadFile(arena, writeClasDefragAddressesName);
     Shader writeClasDefragAddressesShader = device->CreateShader(
@@ -75,16 +70,6 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena,
     string fillBlasAddressArrayData   = OS_ReadFile(arena, fillBlasAddressArrayName);
     Shader fillBlasAddressArrayShader = device->CreateShader(
         ShaderStage::Compute, "fill blas address array", fillBlasAddressArrayData);
-
-    string fillClusterBLASName       = "../src/shaders/fill_cluster_bottom_level_info.spv";
-    string fillClusterBLASInfoData   = OS_ReadFile(arena, fillClusterBLASName);
-    Shader fillClusterBLASInfoShader = device->CreateShader(
-        ShaderStage::Compute, "fill cluster bottom level info", fillClusterBLASInfoData);
-
-    string getBlasAddressOffsetName   = "../src/shaders/get_blas_address_offset.spv";
-    string getBlasAddressOffsetData   = OS_ReadFile(arena, getBlasAddressOffsetName);
-    Shader getBlasAddressOffsetShader = device->CreateShader(
-        ShaderStage::Compute, "get blas address offset", getBlasAddressOffsetData);
 
     string computeBlasAddressesName   = "../src/shaders/compute_blas_addresses.spv";
     string computeBlasAddressesData   = OS_ReadFile(arena, computeBlasAddressesName);
@@ -264,18 +249,6 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena,
                                           VK_SHADER_STAGE_COMPUTE_BIT);
     computeClasAddressesPipeline = device->CreateComputePipeline(
         &computeClasAddressesShader, &computeClasAddressesLayout, &computeClasAddressesPush);
-    hierarchyTraversalLayout.AddBinding(0, DescriptorType::StorageBuffer,
-                                        VK_SHADER_STAGE_COMPUTE_BIT);
-    hierarchyTraversalLayout.AddBinding(1, DescriptorType::UniformBuffer,
-                                        VK_SHADER_STAGE_COMPUTE_BIT);
-    for (int i = 2; i <= 12; i++)
-    {
-        hierarchyTraversalLayout.AddBinding(i, DescriptorType::StorageBuffer,
-                                            VK_SHADER_STAGE_COMPUTE_BIT);
-    }
-
-    hierarchyTraversalPipeline = device->CreateComputePipeline(
-        &hierarchyTraversalShader, &hierarchyTraversalLayout, 0, "hierarchy traversal");
 
     for (int i = 0; i <= 4; i++)
     {
@@ -284,34 +257,6 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena,
     }
     writeClasDefragPipeline =
         device->CreateComputePipeline(&writeClasDefragAddressesShader, &writeClasDefragLayout);
-
-    // fill cluster bottom level info
-    fillClusterBottomLevelInfoPush.offset = 0;
-    fillClusterBottomLevelInfoPush.size   = sizeof(AddressPushConstant);
-    fillClusterBottomLevelInfoPush.stage  = ShaderStage::Compute;
-
-    for (int i = 0; i <= 3; i++)
-    {
-        fillClusterBLASInfoLayout.AddBinding(i, DescriptorType::StorageBuffer,
-                                             VK_SHADER_STAGE_COMPUTE_BIT);
-    }
-    fillClusterBLASInfoPipeline = device->CreateComputePipeline(
-        &fillClusterBLASInfoShader, &fillClusterBLASInfoLayout,
-        &fillClusterBottomLevelInfoPush, "fill cluster bottom level info");
-
-    // fill finest
-    fillFinestClusterBottomLevelInfoPush.offset = 0;
-    fillFinestClusterBottomLevelInfoPush.size   = sizeof(AddressPushConstant);
-    fillFinestClusterBottomLevelInfoPush.stage  = ShaderStage::Compute;
-
-    for (int i = 0; i <= 4; i++)
-    {
-        fillFinestClusterBLASInfoLayout.AddBinding(i, DescriptorType::StorageBuffer,
-                                                   VK_SHADER_STAGE_COMPUTE_BIT);
-    }
-    fillFinestClusterBLASInfoPipeline = device->CreateComputePipeline(
-        &fillFinestClusterBlasShader, &fillFinestClusterBLASInfoLayout,
-        &fillFinestClusterBottomLevelInfoPush, "fill finest blas");
 
     // fill blas address array
     for (int i = 0; i <= 5; i++)
@@ -325,16 +270,6 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena,
     fillBlasAddressArrayPipeline =
         device->CreateComputePipeline(&fillBlasAddressArrayShader, &fillBlasAddressArrayLayout,
                                       0, "fill blas address array");
-
-    // get blas address offset
-    for (int i = 0; i <= 1; i++)
-    {
-        getBlasAddressOffsetLayout.AddBinding(i, DescriptorType::StorageBuffer,
-                                              VK_SHADER_STAGE_COMPUTE_BIT);
-    }
-    getBlasAddressOffsetPipeline =
-        device->CreateComputePipeline(&getBlasAddressOffsetShader, &getBlasAddressOffsetLayout,
-                                      0, "get blas address offset");
 
     // compute blas addresses
     computeBlasAddressesPush.size   = sizeof(ComputeBLASAddressesPushConstant);
@@ -677,86 +612,6 @@ VirtualGeometryManager::VirtualGeometryManager(CommandBuffer *cmd, Arena *arena,
     rg->CreateImageSubresources(depthPyramid, subresources);
 }
 
-void VirtualGeometryManager::UnlinkLRU(int pageIndex)
-{
-    Page &page = physicalPages[pageIndex];
-
-    int prevPage = page.prevPage;
-    int nextPage = page.nextPage;
-
-    if (prevPage == -1 && nextPage == -1)
-    {
-        lruHead = lruTail = -1;
-        return;
-    }
-
-    if (prevPage != -1)
-    {
-        physicalPages[prevPage].nextPage = nextPage;
-    }
-    else
-    {
-        Assert(lruHead == pageIndex);
-        lruHead = nextPage;
-    }
-    page.prevPage = -1;
-
-    if (nextPage != -1)
-    {
-        physicalPages[nextPage].prevPage = prevPage;
-    }
-    else
-    {
-        Assert(lruTail == pageIndex);
-        lruTail = prevPage;
-    }
-    page.nextPage = -1;
-}
-
-void VirtualGeometryManager::LinkLRU(int index)
-{
-    physicalPages[index].nextPage = lruHead;
-    physicalPages[index].prevPage = -1;
-
-    if (lruHead != -1) physicalPages[lruHead].prevPage = index;
-    else lruTail = index;
-
-    lruHead = index;
-}
-
-void VirtualGeometryManager::EditRegistration(u32 instanceID, u32 pageIndex, bool add)
-{
-    MeshInfo &meshInfo = meshInfos[instanceID];
-    Graph<u32> &graph  = meshInfo.pageToParentPageGraph;
-
-    int physicalPageIndex = virtualTable[meshInfo.virtualPageOffset + pageIndex].pageIndex;
-    Assert(add || (!add && physicalPageIndex != -1));
-
-    Page &physicalPage = physicalPages[physicalPageIndex];
-    Assert(add || (!add && physicalPage.numDependents == 0));
-
-    int increment = add ? 1 : -1;
-
-    for (int parentPageIndex = graph.offsets[pageIndex];
-         parentPageIndex < graph.offsets[pageIndex + 1]; parentPageIndex++)
-    {
-        u32 parentIndex             = graph.data[parentPageIndex];
-        u32 virtualIndex            = meshInfo.virtualPageOffset + parentIndex;
-        int parentPhysicalPageIndex = virtualTable[virtualIndex].pageIndex;
-        Assert(parentPhysicalPageIndex != -1);
-        physicalPages[parentPhysicalPageIndex].numDependents += increment;
-    }
-
-    if (!add)
-    {
-        UnlinkLRU(physicalPageIndex);
-    }
-    else
-    {
-        LinkLRU(physicalPageIndex);
-    }
-}
-
 u32 VirtualGeometryManager::AddNewMesh2(Arena *arena, CommandBuffer *cmd, string filename)
 {
     string clusterPageData = OS_ReadFile(arena, filename);
@@ -1074,8 +929,6 @@ void VirtualGeometryManager::FinalizeResources(CommandBuffer *cmd)
     StaticArray<AABB> resourceAABBs(scratch.temp.arena, meshInfos.Length());
     StaticArray<GPUTruncatedEllipsoid> truncatedEllipsoids(scratch.temp.arena,
                                                            meshInfos.Length());
-    Array<ResourceSharingInfo> resourceSharingInfos(scratch.temp.arena,
-                                                    16 * meshInfos.Length());
 
     RenderGraph *rg = GetRenderGraph();
     u32 clasBlasScratchSize, blasSize;
@@ -1083,21 +936,9 @@ void VirtualGeometryManager::FinalizeResources(CommandBuffer *cmd)
 
     for (MeshInfo &meshInfo : meshInfos)
     {
-        Resource resource     = {};
-        resource.flags        = meshInfo.numNodes == 1 && (*(u32 *)meshInfo.pageData == 1)
-                                    ? RESOURCE_FLAG_ONE_CLUSTER
-                                    : 0;
-        resource.lodBounds    = meshInfo.lodBounds;
-        resource.numLodLevels = meshInfo.numLodLevels;
-        resource.resourceSharingInfoOffset = meshInfo.resourceSharingInfoOffset;
-        resource.globalRootNodeOffset      = meshInfo.hierarchyNodeOffset;
-        resource.baseAddress               = meshInfo.dataOffset;
+        Resource resource    = {};
+        resource.baseAddress = meshInfo.dataOffset;
         resources.Push(resource);
-
-        for (ResourceSharingInfo &info : meshInfo.resourceSharingInfos)
-        {
-            resourceSharingInfos.Push(info);
-        }
 
         AABB aabb;
         aabb.minX = meshInfo.boundsMin[0];
@@ -1143,141 +984,6 @@ void VirtualGeometryManager::FinalizeResources(CommandBuffer *cmd)
         rg->RegisterExternalResource("ellisoid buffer", &resourceTruncatedEllipsoidsBuffer);
     cmd->SubmitBuffer(&resourceTruncatedEllipsoidsBuffer, truncatedEllipsoids.data,
                       sizeof(TruncatedEllipsoid) * truncatedEllipsoids.Length());
-
-    // resourceSharingInfosBuffer = device->CreateBuffer(
-    //     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-    //     sizeof(ResourceSharingInfo) * resourceSharingInfos.Length());
-    // resourceSharingInfosBufferHandle =
-    //     rg->RegisterExternalResource("resource sharing buffer",
-    //     &resourceSharingInfosBuffer);
-    // cmd->SubmitBuffer(&resourceSharingInfosBuffer, resourceSharingInfos.data,
-    //                   sizeof(ResourceSharingInfo) * resourceSharingInfos.Length());
-    //
-    // maxMinLodLevelBuffer = rg->CreateBufferResource("max min lod level buffer",
-    //                                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-    //                                                     VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-    //                                                 sizeof(Vec2u) * meshInfos.Length());
-}
-
-void VirtualGeometryManager::RecursePageDependencies(StaticArray<VirtualPageHandle> &pages,
-                                                     u32 instanceID, u32 pageIndex,
-                                                     u32 priority)
-{
-    MeshInfo &meshInfo = meshInfos[instanceID];
-
-    VirtualPage &virtualPage = virtualTable[meshInfo.virtualPageOffset + pageIndex];
-    if (virtualPage.priority == 0)
-    {
-        pages.Push(VirtualPageHandle{instanceID, pageIndex});
-    }
-
-    if (priority <= virtualPage.priority) return;
-    virtualPage.priority = priority;
-
-    Graph<u32> &graph = meshInfo.pageToParentPageGraph;
-    u32 numParents    = graph.offsets[pageIndex + 1] - graph.offsets[pageIndex];
-
-    for (int parentPageIndex = 0; parentPageIndex < numParents; parentPageIndex++)
-    {
-        u32 parentPage = graph.data[graph.offsets[pageIndex] + parentPageIndex];
-        VirtualPage &parentVirtualPage = virtualTable[meshInfo.virtualPageOffset + parentPage];
-        if (priority + 1 > parentVirtualPage.priority)
-        {
-            RecursePageDependencies(pages, instanceID, parentPage, priority + 1);
-        }
-    }
-}
-
-bool VirtualGeometryManager::VerifyPageDependencies(u32 virtualOffset, u32 startPage,
-                                                    u32 numPages)
-{
-    for (u32 pageIndex = startPage; pageIndex < startPage + numPages; pageIndex++)
-    {
-        VirtualPage &virtualPage = virtualTable[virtualOffset + pageIndex];
-        if (virtualPage.pageIndex == -1)
-        {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool VirtualGeometryManager::CheckDuplicatedFixup(u32 virtualOffset, u32 pageIndex,
-                                                  u32 startPage, u32 numPages)
-{
-    for (u32 otherPageIndex = startPage; otherPageIndex < pageIndex; otherPageIndex++)
-    {
-        VirtualPage &virtualPage = virtualTable[virtualOffset + otherPageIndex];
-        Assert(virtualPage.pageIndex != -1);
-        if (virtualPage.pageFlag == PageFlag::ResidentThisFrame)
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
-static void GetBrickMax(u64 bitMask, Vec3u &maxP)
-{
-    maxP.z = 4u - (LeadingZeroCount64(bitMask) >> 4u);
-
-    u32 bits = (u32)bitMask | u32(bitMask >> 32u);
-    bits |= bits << 16u;
-    maxP.y = 4u - (LeadingZeroCount(bits) >> 2u);
-
-    bits |= bits << 8u;
-    bits |= bits << 4u;
-    maxP.x = 4u - LeadingZeroCount(bits);
-
-    Assert(maxP.x <= 4 && maxP.y <= 4 && maxP.z <= 4);
-}
-
-static Brick DecodeBrick(u8 *pageData, u32 brickIndex, u32 baseAddress, u32 brickOffset)
-{
-    u32 bitsOffset = (64 + 14) * brickIndex;
-    u32 byteOffset = baseAddress + brickOffset + (bitsOffset >> 3u);
-    u32 bitOffset  = bitsOffset & 7u;
-
-    Vec3u data = *(Vec3u *)(pageData + byteOffset);
-
-    Vec3u packed;
-    packed.x = BitAlignU32(data.y, data.x, bitOffset);
-    packed.y = BitAlignU32(data.z, data.y, bitOffset);
-    packed.z = data.z >> bitOffset;
-
-    Brick brick;
-    brick.bitMask = packed.x;
-    brick.bitMask |= ((u64)packed.y << 32u);
-    brick.vertexOffset = BitFieldExtractU32(packed.z, 14, 0);
-
-    return brick;
-}
-
-static Vec3f DecodePosition(u8 *pageData, u32 vertexIndex, Vec3u posBitWidths, Vec3i anchor,
-                            u32 baseAddress, u32 geoBaseAddress)
-{
-    const uint bitsPerVertex = posBitWidths[0] + posBitWidths[1] + posBitWidths[2];
-    const uint bitsOffset    = vertexIndex * bitsPerVertex;
-
-    u32 byteOffset = baseAddress + geoBaseAddress + (bitsOffset >> 3u);
-    u32 bitOffset  = bitsOffset & 7u;
-    Vec3u data     = *(Vec3u *)(pageData + byteOffset);
-
-    Vec2u packed =
-        Vec2u(BitAlignU32(data.y, data.x, bitOffset), BitAlignU32(data.z, data.y, bitOffset));
-
-    Vec3i pos = Vec3i(0, 0, 0);
-    pos.x     = BitFieldExtractU32(packed.x, posBitWidths.x, 0);
-    packed.x  = BitAlignU32(packed.y, packed.x, posBitWidths.x);
-
-    packed.y >>= posBitWidths.x;
-    pos.y = BitFieldExtractU32(packed.x, posBitWidths.y, 0);
-
-    packed.x = BitAlignU32(packed.y, packed.x, posBitWidths.y);
-    pos.z    = BitFieldExtractU32(packed.x, posBitWidths.z, 0);
-
-    const float scale = AsFloat((127u - 6u) << 23u);
-    return Vec3f(pos + anchor) * scale;
 }
 
 void VirtualGeometryManager::UpdateHZB()
@@ -1760,25 +1466,6 @@ bool VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
     ScratchArena scratch(&arena, 1);
     scratch.temp.arena->align = 16;
 
-    partitionStreamedIn = BitVector(arena, inputInstances.Length());
-
-    // u32 numInstances;
-    // Instance *instances = PushArrayNoZero(scratch.temp.arena, Instance, numInstances);
-    // AffineSpace *transforms;
-
-    TempHierarchyNode *nodes =
-        PushArrayNoZero(scratch.temp.arena, TempHierarchyNode, totalNumNodes);
-
-    u32 nodeIndex = 0;
-    for (auto &meshInfo : meshInfos)
-    {
-        for (int i = 0; i < meshInfo.numNodes; i++)
-        {
-            nodes[nodeIndex].node  = &meshInfo.nodes[i];
-            nodes[nodeIndex].nodes = nodes;
-            nodeIndex++;
-        }
-    }
     StaticArray<PrimRef> refs(scratch.temp.arena, inputInstances.Length());
 
     Bounds geom;
@@ -1817,7 +1504,6 @@ bool VirtualGeometryManager::Test(Arena *arena, CommandBuffer *cmd,
     record.centBounds = Lane8F32(-cent.minP, cent.maxP);
     record.SetRange(0, refs.Length());
 
-    u32 numNodes                   = 0;
     std::atomic<u32> numPartitions = 0;
     StaticArray<u32> partitionIndices(scratch.temp.arena, inputInstances.Length(),
                                       inputInstances.Length());
