@@ -302,11 +302,6 @@ void main()
 
             uint triangleIndex = query.CommittedPrimitiveIndex();
             float2 bary = query.CommittedTriangleBarycentrics();
-#if 0
-            uint basePageAddress = GetClusterPageBaseAddress(pageIndex);
-            uint numClusters = GetNumClustersInPage(basePageAddress);
-            DenseGeometry dg = GetDenseGeometryHeader(basePageAddress, numClusters, clusterIndex);
-#endif
             uint baseAddress = resources[instanceID].baseAddress;
             DenseGeometry dg = GetDenseGeometryHeader2(clusterID, baseAddress);
 
@@ -339,13 +334,15 @@ void main()
             //}
 
             float3 n0, n1, n2;
+#if 0
             if (dg.HasNormals())
             {
                 n0 = dg.DecodeNormal(vids[0]);
                 n1 = dg.DecodeNormal(vids[1]);
                 n2 = dg.DecodeNormal(vids[2]);
             }
-            else 
+#endif
+            //else 
             {
                 n0 = gn;
                 n1 = gn;
@@ -427,7 +424,8 @@ void main()
                 dir = SampleDielectric(wo, material.eta, sample, throughput, printDebug);
             }
             break;
-            case GPUMaterialType::Diffuse: 
+            default:
+            //case GPUMaterialType::Diffuse: 
             {
                 // Get base face data
 

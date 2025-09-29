@@ -57,7 +57,14 @@ void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, Geo
         Assert(materialHashMap);
         string materialName      = ReadWord(&tokenizer);
         const MaterialNode *node = materialHashMap->Get(materialName);
-        materialHandle           = node->handle;
+        if (!node)
+        {
+            materialHandle = MaterialHandle(MaterialTypes::Diffuse, 1);
+        }
+        else
+        {
+            materialHandle = node->handle;
+        }
     }
 
     if (Advance(&tokenizer, "transform "))
@@ -697,16 +704,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     }
 
     // Virtual geometry initialization
-    CommandBuffer *dgfTransferCmd = device->BeginCommandBuffer(QueueType_Compute);
 
-    VirtualGeometryManager virtualGeometryManager(dgfTransferCmd, sceneScratch.temp.arena,
-                                                  targetWidth, targetHeight);
-    dgfTransferCmd->ClearBuffer(&virtualGeometryManager.totalAccelSizesBuffer, 0);
-    dgfTransferCmd->Barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                            VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
-                            VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT);
-    dgfTransferCmd->FlushBarriers();
+    VirtualGeometryManager virtualGeometryManager(sceneScratch.temp.arena, targetWidth,
+                                                  targetHeight, blasScenes.Length());
     StaticArray<AABB> blasSceneBounds(sceneScratch.temp.arena, numBlas);
     StaticArray<string> virtualGeoFilenames(sceneScratch.temp.arena, numBlas);
     HashIndex filenameHash(sceneScratch.temp.arena, NextPowerOfTwo(numBlas),
@@ -714,6 +714,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     Semaphore geoSemaphore   = device->CreateSemaphore();
     geoSemaphore.signalValue = 0;
+    GPUBuffer sizeReadback   = device->CreateBuffer(
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT, virtualGeometryManager.totalAccelSizesBuffer.size,
+        MemoryUsage::GPU_TO_CPU);
     for (int sceneIndex = 0; sceneIndex < numBlas; sceneIndex++)
     {
         ScenePrimitives *scene    = blasScenes[sceneIndex];
@@ -740,10 +743,29 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         virtualGeoFilenames.Push(virtualGeoFilename);
         filenameHash.AddInHash(hash, scene->sceneIndex);
 
-        CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Compute);
         if (sceneIndex > 0)
         {
-            device->Wait(geoSemaphore);
+            bool result = device->Wait(geoSemaphore, 10e9);
+            Assert(result);
+        }
+        device->ResetDescriptorPool(0);
+        CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Compute);
+
+        if (sceneIndex == 0)
+        {
+            cmd->ClearBuffer(&virtualGeometryManager.totalAccelSizesBuffer, 0);
+            cmd->Barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                         VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                         VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
+                         VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT);
+            cmd->FlushBarriers();
+        }
+
+        bool debug = false;
+        if (sceneIndex == numBlas - 1)
+        {
+            //     debug    = true;
+            int stop = 5;
         }
         geoSemaphore.signalValue++;
         cmd->SignalOutsideFrame(geoSemaphore);
@@ -753,52 +775,17 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                      VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
                      VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT);
         cmd->FlushBarriers();
-        virtualGeometryManager.AddNewMesh2(sceneScratch.temp.arena, cmd, virtualGeoFilename);
+        virtualGeometryManager.AddNewMesh(sceneScratch.temp.arena, cmd, virtualGeoFilename,
+                                          debug);
 
-        // if (sceneIndex == numBlas - 1)
-        // {
-        //     // RenderGraph *rg   = GetRenderGraph();
-        //     GPUBuffer readback0 = device->CreateBuffer(
-        //         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        //         virtualGeometryManager.totalAccelSizesBuffer.size, MemoryUsage::GPU_TO_CPU);
-        //     cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-        //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-        //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-        //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     // cmd->Barrier(
-        //     //     img, VK_IMAGE_LAYOUT_GENERAL,
-        //     //     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        //     //     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        //     // VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //     //     VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-        //     //     QueueType_Ignored, QueueType_Ignored, level, 1);
-        //
-        //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-        //     //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //     //     // VK_ACCESS_2_SHADER_WRITE_BIT,
-        //     //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     cmd->FlushBarriers();
-        //
-        //     // BufferImageCopy copy = {};
-        //     // copy.mipLevel        = level;
-        //     // copy.extent          = Vec3u(width, height, 1);
-        //
-        //     cmd->CopyBuffer(&readback0, &virtualGeometryManager.totalAccelSizesBuffer);
-        //     // cmd->CopyBuffer(&readback2, buffer1);
-        //     // cmd->CopyImageToBuffer(&readback0, img, &copy, 1);
-        //     Semaphore testSemaphore   = device->CreateSemaphore();
-        //     testSemaphore.signalValue = 1;
-        //     cmd->SignalOutsideFrame(testSemaphore);
-        //     device->SubmitCommandBuffer(cmd);
-        //     device->Wait(testSemaphore);
-        //
-        //     u32 *data = (u32 *)readback0.mappedPtr;
-        //
-        //     int stop = 5;
-        // }
+        cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                     VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                     VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                     VK_ACCESS_2_TRANSFER_READ_BIT);
+        cmd->FlushBarriers();
+
+        cmd->CopyBuffer(&sizeReadback, &virtualGeometryManager.totalAccelSizesBuffer);
+
         device->SubmitCommandBuffer(cmd);
 
         auto &meshInfo =
@@ -815,6 +802,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         aabb.maxZ = boundsMax[2];
         blasSceneBounds.Push(aabb);
     }
+    bool result = device->Wait(geoSemaphore, 10e9);
+    Assert(result);
+
+    // count++;
     // TODO: destroy temp memory
     device->DestroyBuffer(&virtualGeometryManager.vertexBuffer);
     device->DestroyBuffer(&virtualGeometryManager.indexBuffer);
@@ -823,6 +814,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     device->DestroyBuffer(&virtualGeometryManager.decodeClusterDataBuffer);
     device->DestroyBuffer(&virtualGeometryManager.pageUploadBuffer);
 
+    CommandBuffer *dgfTransferCmd = device->BeginCommandBuffer(QueueType_Compute);
     virtualGeometryManager.FinalizeResources(dgfTransferCmd);
 
     Semaphore sem   = device->CreateSemaphore();
@@ -845,28 +837,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     // Build the TLAS over BLAS
     StaticArray<Instance> instances;
     StaticArray<AffineSpace> instanceTransforms;
-
-#if 0
-    GPUBuffer tlasBuffer = device->CreateBuffer(
-        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        virtualGeometryManager.maxInstances * sizeof(VkAccelerationStructureInstanceKHR));
-
-    u32 tlasScratchSize, tlasAccelSize;
-    device->GetTLASBuildSizes(1u << 21u, tlasScratchSize, tlasAccelSize);
-    GPUBuffer tlasScratchBuffer = device->CreateBuffer(
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-        tlasScratchSize);
-    GPUBuffer tlasAccelBuffer = device->CreateBuffer(
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
-        tlasAccelSize);
-#endif
 
     if (tlasScenes.Length() >= 1)
     {
@@ -901,8 +871,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         Assert(numScenes == 1);
     }
 
-    bool built = virtualGeometryManager.Test(sceneScratch.temp.arena, allCommandBuffer,
-                                             instances, instanceTransforms);
+    bool built = virtualGeometryManager.AddInstances(sceneScratch.temp.arena, allCommandBuffer,
+                                                     instances, instanceTransforms);
     // virtualGeometryManager.AllocateInstances(gpuInstances);
 
     // TransferBuffer gpuInstancesBuffer =
@@ -929,6 +899,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     device->SubmitCommandBuffer(allCommandBuffer);
 
     device->Wait(tlasSemaphore);
+    device->DestroyBuffer(&virtualGeometryManager.instanceTransformsUploadBuffer);
     if (built)
     {
         device->DestroyBuffer(&virtualGeometryManager.blasProxyScratchBuffer);

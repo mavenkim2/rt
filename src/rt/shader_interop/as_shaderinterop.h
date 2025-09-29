@@ -51,6 +51,14 @@ struct ClusterFileHeader
     bool hasTruncatedEllipsoid;
 };
 
+struct TruncatedEllipsoid
+{
+    float3x4 transform;
+    float4 sphere;
+    float3 boundsMin;
+    float3 boundsMax;
+};
+
 struct ClusterFileHeader2
 {
     uint numClusters;
@@ -59,6 +67,8 @@ struct ClusterFileHeader2
 
     float3 boundsMin;
     float3 boundsMax;
+
+    TruncatedEllipsoid ellipsoid;
 };
 
 struct DecodeClusterData

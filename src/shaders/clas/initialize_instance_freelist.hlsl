@@ -5,7 +5,7 @@ RWStructuredBuffer<GPUInstance> gpuInstances : register(u1);
 [numthreads(1, 1, 1)]
 void main(uint3 dtID : SV_DispatchThreadID)
 {
-    int maxInstances = 1u << 21u;
+    int maxInstances = 1u << 22u;
     instanceIDFreeList[0] = maxInstances;
     for (int i = 0; i < maxInstances; i++)
     {

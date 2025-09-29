@@ -8,11 +8,11 @@ RWStructuredBuffer<BLASData> blasDatas : register(u1);
 StructuredBuffer<GPUInstance> instances : register(t2);
 RWStructuredBuffer<uint> resourceBitVector : register(u3);
 
-[numthreads(64, 1, 1)]
+[numthreads(128, 1, 1)]
 void main(uint3 dtID : SV_DispatchThreadID) 
 {
     uint instanceIndex = dtID.x;
-    if (instanceIndex >= 1u << 21u) return;
+    if (instanceIndex >= 1u << 22u) return;
 
     GPUInstance instance = instances[instanceIndex];
     if (instance.flags & (GPU_INSTANCE_FLAG_FREED | GPU_INSTANCE_FLAG_MERGED)) return;

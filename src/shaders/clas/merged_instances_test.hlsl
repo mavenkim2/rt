@@ -37,6 +37,8 @@ void main(uint3 dtID : SV_DispatchThreadID)
 
     if ((flags & PARTITION_FLAG_HAS_PROXIES))
     {
+        useProxies = true;
+#if 0
         float3 minP = lodBounds.xyz - lodBounds.w;
         float3 maxP = lodBounds.xyz + lodBounds.w;
 
@@ -48,7 +50,6 @@ void main(uint3 dtID : SV_DispatchThreadID)
 
         useProxies = cull;
 
-#if 0
         if (!cull && !pc.firstFrame)
         {
             uint lod;

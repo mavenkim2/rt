@@ -1343,6 +1343,12 @@ CommandBuffer *Vulkan::BeginCommandBuffer(QueueType queue, string name)
     return cmd;
 }
 
+void Vulkan::ResetDescriptorPool(u32 buffer)
+{
+    ThreadPool &pool = GetThreadPool(GetThreadIndex());
+    vkResetDescriptorPool(device, pool.descriptorPool[buffer], 0);
+}
+
 void Vulkan::SubmitCommandBuffer(CommandBuffer *cmd, bool frame, bool parallel)
 {
     Assert(cmd->semaphore != VK_NULL_HANDLE || frame);
@@ -4612,14 +4618,15 @@ void Vulkan::EndFrame(int queueTypes)
     std::atomic_thread_fence(std::memory_order_seq_cst);
 }
 
-void Vulkan::Wait(Semaphore s)
+bool Vulkan::Wait(Semaphore s, u64 waitVal)
 {
     u64 val                      = s.signalValue;
     VkSemaphoreWaitInfo waitInfo = {VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
     waitInfo.pValues             = &val;
     waitInfo.semaphoreCount      = 1;
     waitInfo.pSemaphores         = &s.semaphore;
-    vkWaitSemaphores(device, &waitInfo, UINT64_MAX);
+    VkResult result              = vkWaitSemaphores(device, &waitInfo, waitVal);
+    return result == VK_SUCCESS;
 }
 
 void Vulkan::GetDLSSTargetDimensions(u32 &width, u32 &height)

@@ -21,13 +21,13 @@ StructuredBuffer<Resource> resources : register(t6);
 StructuredBuffer<ResourceSharingInfo> resourceSharingInfos : register(t8);
 RWStructuredBuffer<uint2> maxMinLodLevel : register(u9);
 #endif
-RWStructuredBuffer<BLASData> blasDatas : register(u8);
+RWStructuredBuffer<BLASData> blasDatas : register(u7);
 
-[numthreads(64, 1, 1)]
+[numthreads(128, 1, 1)]
 void main(uint3 dtID : SV_DispatchThreadID)
 {
     uint instanceIndex = dtID.x;
-    if (instanceIndex >= 1u << 21u) return;
+    if (instanceIndex >= 1u << 22u) return;
 
     GPUInstance instance = gpuInstances[instanceIndex];
 

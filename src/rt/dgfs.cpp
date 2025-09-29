@@ -204,7 +204,7 @@ void DenseGeometryBuildData::WriteVertexData(const Mesh &mesh,
         }
     }
 
-    if (mesh.n)
+    if (mesh.n && normalNode)
     {
         for (u32 index : meshNormalIndices)
         {

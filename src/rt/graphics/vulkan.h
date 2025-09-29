@@ -1114,6 +1114,7 @@ struct Vulkan
     void AllocateCommandBuffers(ThreadPool &pool, QueueType type);
     void CheckInitializedThreadPool(int threadIndex);
     CommandBuffer *BeginCommandBuffer(QueueType queue, string name = "Command Buffer");
+    void ResetDescriptorPool(u32 buffer);
     void SubmitCommandBuffer(CommandBuffer *cmd, bool frame = false, bool parallel = false);
     VkImageMemoryBarrier2
     ImageMemoryBarrier(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
@@ -1218,7 +1219,7 @@ struct Vulkan
     bool BeginFrame(bool doubleBuffer = true);
     void EndFrame(int queueType);
 
-    void Wait(Semaphore s);
+    bool Wait(Semaphore s, u64 val = UINT64_MAX);
     void GetDLSSTargetDimensions(u32 &width, u32 &height);
     DLSSTargets InitializeDLSSTargets(GPUImage *inColor, GPUImage *inDiffuseAlbedo,
                                       GPUImage *inSpecularAlbedo, GPUImage *inNormalRoughness,

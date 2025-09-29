@@ -3263,14 +3263,6 @@ static Mesh SimplifyTriangleMesh(Arena *arena, GraphPartitionResult &partitionRe
     return simplifiedMesh;
 }
 
-struct TruncatedEllipsoid
-{
-    AffineSpace transform;
-    Vec4f sphere;
-    Vec3f boundsMin;
-    Vec3f boundsMax;
-};
-
 struct ClusterizationOutput
 {
     StaticArray<Cluster> clusters;
@@ -4127,6 +4119,100 @@ static void WriteClustersToDisk(ClusterizationOutput &output,
 
     OS_UnmapFile(builder.ptr);
     OS_ResizeFile(builder.filename, builder.totalSize);
+}
+
+static TruncatedEllipsoid CreateTruncatedEllipsoid(Mesh &mesh)
+{
+    TruncatedEllipsoid ellipsoid;
+
+    Vec3f center(0.f);
+    for (u32 i = 0; i < mesh.numVertices; i++)
+    {
+        center += mesh.p[i];
+    }
+    center /= (f32)mesh.numVertices;
+
+    f32 cxx = 0.f;
+    f32 cxy = 0.f;
+    f32 cxz = 0.f;
+    f32 cyy = 0.f;
+    f32 cyz = 0.f;
+    f32 czz = 0.f;
+
+    for (u32 i = 0; i < mesh.numVertices; i++)
+    {
+        Vec3f diff = mesh.p[i] - center;
+        cxx += Sqr(diff.x);
+        cxy += diff.x * diff.y;
+        cxz += diff.x * diff.z;
+        cyy += Sqr(diff.y);
+        cyz += diff.y * diff.z;
+        czz += Sqr(diff.z);
+    }
+    cxx /= mesh.numVertices;
+    cxy /= mesh.numVertices;
+    cxz /= mesh.numVertices;
+    cyy /= mesh.numVertices;
+    cyz /= mesh.numVertices;
+    czz /= mesh.numVertices;
+
+    float m[9] = {
+        cxx, cxy, cxz, cxy, cyy, cyz, cxz, cyz, czz,
+    };
+    float eigenVectors[9] = {};
+    float eigenValues[3]  = {};
+
+    Eigen::jacobiEigenSolver(m, eigenValues, eigenVectors, 1e-8f);
+
+    f32 maxValue        = 0.f;
+    int maxAxis         = 0;
+    float maxEigenValue = 0.f;
+    for (int axis = 0; axis < 3; axis++)
+    {
+        if (Abs(eigenValues[axis]) > maxEigenValue)
+        {
+            maxEigenValue = Abs(eigenValues[axis]);
+            maxAxis       = axis;
+        }
+    }
+
+    u32 nextAxis     = (1 << maxAxis) & 3;
+    u32 nextNextAxis = (1 << nextAxis) & 3;
+    LinearSpace3f basis(Vec3f(eigenVectors[3 * nextAxis], eigenVectors[3 * nextAxis + 1],
+                              eigenVectors[3 * nextAxis + 2]),
+                        Vec3f(eigenVectors[3 * nextNextAxis],
+                              eigenVectors[3 * nextNextAxis + 1],
+                              eigenVectors[3 * nextNextAxis + 2]),
+                        Vec3f(eigenVectors[3 * maxAxis], eigenVectors[3 * maxAxis + 1],
+                              eigenVectors[3 * maxAxis + 2]));
+
+    Bounds bounds;
+    for (u32 i = 0; i < mesh.numVertices; i++)
+    {
+        mesh.p[i] = basis.ToLocal(mesh.p[i] - center);
+        // mesh.p[i] -= center;
+        bounds.Extend(Lane4F32(mesh.p[i]));
+    }
+    Vec3f extents = ToVec3f(bounds.maxP - bounds.minP);
+
+    bounds = {};
+    for (u32 i = 0; i < mesh.numVertices; i++)
+    {
+        mesh.p[i] = mesh.p[i] / extents;
+        bounds.Extend(Lane4F32(mesh.p[i]));
+    }
+    Vec4f sphere = ConstructSphereFromPoints(mesh.p, mesh.numVertices);
+
+    AffineSpace transform(Transpose(basis), 0.f);
+
+    transform =
+        AffineSpace::Scale(1.f / extents) * transform * AffineSpace::Translate(-center);
+
+    ellipsoid.transform = transform;
+    ellipsoid.sphere    = sphere;
+    ellipsoid.boundsMin = ToVec3f(bounds.minP);
+    ellipsoid.boundsMax = ToVec3f(bounds.maxP);
+    return ellipsoid;
 }
 
 // TODO: the builder is no longer deterministic after adding edge quadrics?
@@ -5551,99 +5637,7 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
     if (clusters.Length() < 100)
     {
         Print("creating ellipsoid for %S\n", filename);
-        Mesh &mesh = meshes[0];
-        Vec3f center(0.f);
-        for (u32 i = 0; i < mesh.numVertices; i++)
-        {
-            center += mesh.p[i];
-        }
-        center /= (f32)mesh.numVertices;
-
-        f32 cxx = 0.f;
-        f32 cxy = 0.f;
-        f32 cxz = 0.f;
-        f32 cyy = 0.f;
-        f32 cyz = 0.f;
-        f32 czz = 0.f;
-
-        for (u32 i = 0; i < mesh.numVertices; i++)
-        {
-            Vec3f diff = mesh.p[i] - center;
-            cxx += Sqr(diff.x);
-            cxy += diff.x * diff.y;
-            cxz += diff.x * diff.z;
-            cyy += Sqr(diff.y);
-            cyz += diff.y * diff.z;
-            czz += Sqr(diff.z);
-        }
-        cxx /= mesh.numVertices;
-        cxy /= mesh.numVertices;
-        cxz /= mesh.numVertices;
-        cyy /= mesh.numVertices;
-        cyz /= mesh.numVertices;
-        czz /= mesh.numVertices;
-
-        float m[9] = {
-            cxx, cxy, cxz, cxy, cyy, cyz, cxz, cyz, czz,
-        };
-        float eigenVectors[9] = {};
-        float eigenValues[3]  = {};
-
-        Eigen::jacobiEigenSolver(m, eigenValues, eigenVectors, 1e-8f);
-
-        f32 maxValue        = 0.f;
-        int maxAxis         = 0;
-        float maxEigenValue = 0.f;
-        for (int axis = 0; axis < 3; axis++)
-        {
-            if (Abs(eigenValues[axis]) > maxEigenValue)
-            {
-                maxEigenValue = Abs(eigenValues[axis]);
-                maxAxis       = 2;
-            }
-        }
-
-        u32 nextAxis     = (1 << maxAxis) & 3;
-        u32 nextNextAxis = (1 << nextAxis) & 3;
-        LinearSpace3f basis(Vec3f(eigenVectors[3 * nextAxis], eigenVectors[3 * nextAxis + 1],
-                                  eigenVectors[3 * nextAxis + 2]),
-                            Vec3f(eigenVectors[3 * nextNextAxis],
-                                  eigenVectors[3 * nextNextAxis + 1],
-                                  eigenVectors[3 * nextNextAxis + 2]),
-                            Vec3f(eigenVectors[3 * maxAxis], eigenVectors[3 * maxAxis + 1],
-                                  eigenVectors[3 * maxAxis + 2]));
-
-        Bounds bounds;
-        for (u32 i = 0; i < mesh.numVertices; i++)
-        {
-            mesh.p[i] = basis.ToLocal(mesh.p[i] - center);
-            // mesh.p[i] -= center;
-            bounds.Extend(Lane4F32(mesh.p[i]));
-        }
-        Vec3f extents = ToVec3f(bounds.maxP - bounds.minP);
-
-        bounds = {};
-        for (u32 i = 0; i < mesh.numVertices; i++)
-        {
-            mesh.p[i] = mesh.p[i] / extents;
-            bounds.Extend(Lane4F32(mesh.p[i]));
-        }
-        Vec4f sphere = ConstructSphereFromPoints(mesh.p, mesh.numVertices);
-
-        AffineSpace transform(Transpose(basis), 0.f);
-
-        transform =
-            AffineSpace::Scale(1.f / extents) * transform * AffineSpace::Translate(-center);
-
-        output.ellipsoid.transform = transform;
-        output.ellipsoid.sphere    = sphere;
-        output.ellipsoid.boundsMin = ToVec3f(bounds.minP);
-        output.ellipsoid.boundsMax = ToVec3f(bounds.maxP);
-        output.hasEllpsoid         = true;
-
-        // ScratchArena scratch;
-        // WriteTriOBJ(mesh, PushStr8F(scratch.temp.arena, "%S_ellipsoid.obj",
-        //                             RemoveFileExtension(virtualGeoFilename)));
+        output.ellipsoid = CreateTruncatedEllipsoid(combinedMesh);
     }
 
     ReleaseArenaArray(arenas);
@@ -5654,6 +5648,12 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
 void CreateClusters2(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndices,
                      string filename)
 {
+    if (Contains(filename, "ironwood", MatchFlag_CaseInsensitive))
+    {
+        Print("%S skipped\n", filename);
+        return;
+    }
+
     ScratchArena scratch;
     Arena **arenas = GetArenaArray(scratch.temp.arena);
 
@@ -5857,12 +5857,6 @@ void CreateClusters2(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndi
         clusters.Push(cluster);
     }
 
-    string outFilename =
-        PushStr8F(scratch.temp.arena, "%S.geo", RemoveFileExtension(filename));
-    StringBuilderMapped builder(outFilename);
-
-    u64 fileHeaderOffset = AllocateSpace(&builder, sizeof(ClusterFileHeader2));
-
     StaticArray<u32> vertexClusterCount(scratch.temp.arena, combinedMesh.numVertices,
                                         combinedMesh.numVertices);
 
@@ -5889,6 +5883,12 @@ void CreateClusters2(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndi
                                         materialIndices);
     }
 
+    string outFilename =
+        PushStr8F(scratch.temp.arena, "%S.geo", RemoveFileExtension(filename));
+    StringBuilderMapped builder(outFilename);
+
+    u64 fileHeaderOffset = AllocateSpace(&builder, sizeof(ClusterFileHeader2));
+
     StaticArray<PackedDenseGeometryHeader> headers(scratch.temp.arena,
                                                    buildDatas[0].headers.Length());
     StaticArray<u8> geoByteDatasBuffer(scratch.temp.arena,
@@ -5914,6 +5914,16 @@ void CreateClusters2(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndi
     fileHeader.shadOffset  = shadingByteOffset - sizeof(ClusterFileHeader2);
     fileHeader.boundsMin   = ToVec3f(bounds.minP);
     fileHeader.boundsMax   = ToVec3f(bounds.maxP);
+
+    if (clusters.Length() < 100)
+    {
+        Print("creating ellipsoid for %S\n", filename);
+        fileHeader.ellipsoid = CreateTruncatedEllipsoid(combinedMesh);
+    }
+    else
+    {
+        fileHeader.ellipsoid.sphere.w = 0.f;
+    }
 
     MemoryCopy(ptr, &fileHeader, sizeof(ClusterFileHeader2));
 

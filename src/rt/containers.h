@@ -916,7 +916,7 @@ struct HashMap
         }
         if (!node)
         {
-            ErrorExit(0, "Name not found in hashmap: %S\n", name);
+            Print("Name not found in hashmap: %S\n", name);
         }
         return 0;
     }

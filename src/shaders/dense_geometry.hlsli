@@ -248,15 +248,24 @@ struct DenseGeometry
     float3 DecodeNormal(uint vertexIndex)
     {
         const uint bitsPerNormal = octBitWidths[0] + octBitWidths[1];
+        
+        float nx, ny;
+        if (bitsPerNormal == 0)
+        {
+            nx = Dequantize<16>(octBase[0]) * 2 - 1;
+            ny = Dequantize<16>(octBase[1]) * 2 - 1;
+        }
+        else 
+        {
+            const uint bitsOffset = bitsPerNormal * vertexIndex;
 
-        const uint bitsOffset = bitsPerNormal * vertexIndex;
+            uint2 vals = GetAlignedAddressAndBitOffset(baseAddress + shadBaseAddress + normalOffset, bitsOffset);
+            uint2 data = clusterPageData.Load2(vals[0]);
+            uint n = BitAlignU32(data.y, data.x, vals[1]);
 
-        uint2 vals = GetAlignedAddressAndBitOffset(baseAddress + shadBaseAddress + normalOffset, bitsOffset);
-        uint2 data = clusterPageData.Load2(vals[0]);
-        uint n = BitAlignU32(data.y, data.x, vals[1]);
-
-        float nx = Dequantize<16>(BitFieldExtractU32(n, octBitWidths[0], 0) + octBase[0]) * 2 - 1;
-        float ny = Dequantize<16>(BitFieldExtractU32(n, octBitWidths[1], octBitWidths[0]) + octBase[1]) * 2 - 1;
+            float nx = Dequantize<16>(BitFieldExtractU32(n, octBitWidths[0], 0) + octBase[0]) * 2 - 1;
+            float ny = Dequantize<16>(BitFieldExtractU32(n, octBitWidths[1], octBitWidths[0]) + octBase[1]) * 2 - 1;
+        }
 
         return UnpackOctahedral(float2(nx, ny));
     }

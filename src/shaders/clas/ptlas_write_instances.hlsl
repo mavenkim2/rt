@@ -16,7 +16,7 @@ StructuredBuffer<PartitionInfo> partitionInfos : register(t8);
 
 #include "ptlas_write_instances.hlsli"
 
-[numthreads(32, 1, 1)] 
+[numthreads(128, 1, 1)] 
 void main(uint3 dtID : SV_DispatchThreadID)
 {
     uint blasIndex = dtID.x;

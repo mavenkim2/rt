@@ -58,24 +58,6 @@ struct HierarchyFixup
     }
 };
 
-struct TruncatedEllipsoid
-{
-    AffineSpace transform;
-    Vec4f sphere;
-    Vec3f boundsMin;
-    Vec3f boundsMax;
-};
-
-struct VoxelClusterGroupFixup
-{
-    u32 clusterStartIndex;
-    u32 clusterEndIndex;
-    u32 pageStartIndex;
-    u32 numPages;
-    u32 clusterOffset;
-    u32 depth;
-};
-
 struct RecordAOSSplits;
 template <i32 N>
 struct BuildRef;
@@ -147,7 +129,7 @@ struct VirtualGeometryManager
         maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE * MAX_CLUSTER_TRIANGLE_VERTICES;
     const u32 maxNumClusters = maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE;
 
-    const u32 maxInstances         = 1u << 21;
+    const u32 maxInstances         = 1u << 22;
     const u32 maxTotalClusterCount = 8 * 1024 * 1024; // MAX_CLUSTERS_PER_BLAS * maxInstances;
     const u32 maxClusterCountPerAccelerationStructure = MAX_CLUSTERS_PER_BLAS;
 
@@ -208,13 +190,13 @@ struct VirtualGeometryManager
         Vec4f lodBounds;
         u32 clusterOffset;
         u32 dataOffset;
+        u32 numClusters;
     };
 
     u32 currentClusterTotal;
     u32 currentGeoMemoryTotal;
     u32 totalNumVirtualPages;
     u32 totalNumNodes;
-    u32 maxWriteClusters;
 
     // Render resources
     PushConstant fillClusterTriangleInfoPush;
@@ -378,6 +360,7 @@ struct VirtualGeometryManager
     ResourceHandle partitionInfosBufferHandle;
     // ResourceHandle partitionReadbackBuffer;
     GPUBuffer instanceTransformsBuffer;
+    GPUBuffer instanceTransformsUploadBuffer;
     ResourceHandle instanceTransformsBufferHandle;
     GPUBuffer instanceResourceIDsBuffer;
     ResourceHandle instanceResourceIDsBufferHandle;
@@ -424,22 +407,21 @@ struct VirtualGeometryManager
     u32 numAllocatedPartitions;
     u32 numInstances;
 
-    VirtualGeometryManager(CommandBuffer *cmd, Arena *arena, u32 targetWidth,
-                           u32 targetHeight);
+    VirtualGeometryManager(Arena *arena, u32 targetWidth, u32 targetHeight, u32 numBlas);
     void UpdateHZB();
     void ReprojectDepth(u32 targetWidth, u32 targetHeight, ResourceHandle depth,
                         ResourceHandle scene);
     bool ProcessInstanceRequests(CommandBuffer *cmd);
     void ProcessRequests(CommandBuffer *cmd, bool test);
-    u32 AddNewMesh2(Arena *arena, CommandBuffer *cmd, string filename);
+    u32 AddNewMesh(Arena *arena, CommandBuffer *cmd, string filename, bool debug);
     void FinalizeResources(CommandBuffer *cmd);
     void PrepareInstances(CommandBuffer *cmd, ResourceHandle sceneBuffer, bool ptlas);
     void BuildPTLAS(CommandBuffer *cmd, GPUBuffer *debug);
     void UnlinkLRU(int pageIndex);
     void LinkLRU(int index);
 
-    bool Test(Arena *arena, CommandBuffer *cmd, StaticArray<Instance> &inputInstances,
-              StaticArray<AffineSpace> &transforms);
+    bool AddInstances(Arena *arena, CommandBuffer *cmd, StaticArray<Instance> &inputInstances,
+                      StaticArray<AffineSpace> &transforms);
     void BuildHierarchy(PrimRef *refs, RecordAOSSplits &record,
                         std::atomic<u32> &numPartitions, StaticArray<u32> &partitionIndices,
                         StaticArray<RecordAOSSplits> &records, bool parallel);
