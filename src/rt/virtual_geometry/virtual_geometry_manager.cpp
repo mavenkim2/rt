@@ -106,11 +106,6 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
     Shader ptlasUpdatePartitionsShader = device->CreateShader(
         ShaderStage::Compute, "ptlas update partitions", ptlasUpdatePartitionsData);
 
-    string instanceStreamingName   = "../src/shaders/instance_streaming.spv";
-    string instanceStreamingData   = OS_ReadFile(arena, instanceStreamingName);
-    Shader instanceStreamingShader = device->CreateShader(
-        ShaderStage::Compute, "instance streaming", instanceStreamingData);
-
     string decodeMergedInstancesName   = "../src/shaders/decode_merged_instances.spv";
     string decodeMergedInstancesData   = OS_ReadFile(arena, decodeMergedInstancesName);
     Shader decodeMergedInstancesShader = device->CreateShader(
@@ -130,16 +125,6 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
     string allocateInstancesData   = OS_ReadFile(arena, allocateInstancesName);
     Shader allocateInstancesShader = device->CreateShader(
         ShaderStage::Compute, "allocate instances", allocateInstancesData);
-
-    string instanceCullingShaderName = "../src/shaders/instance_culling.spv";
-    string instanceCullingShaderData = OS_ReadFile(arena, instanceCullingShaderName);
-    Shader instanceCullingShader     = device->CreateShader(
-        ShaderStage::Compute, "instance culling", instanceCullingShaderData);
-
-    string assignInstancesShaderName = "../src/shaders/assign_instances.spv";
-    string assignInstancesShaderData = OS_ReadFile(arena, assignInstancesShaderName);
-    Shader assignInstancesShader     = device->CreateShader(
-        ShaderStage::Compute, "assign instances", assignInstancesShaderData);
 
     string generateMipsShaderName = "../src/shaders/generate_mips_naive.spv";
     string generateMipsShaderData = OS_ReadFile(arena, generateMipsShaderName);
@@ -311,18 +296,6 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
         &ptlasWriteCommandInfosShader, &ptlasWriteCommandInfosLayout,
         &ptlasWriteCommandInfosPush, "ptlas write command infos");
 
-    instanceStreamingPush.size   = sizeof(InstanceStreamingPushConstant);
-    instanceStreamingPush.offset = 0;
-    instanceStreamingPush.stage  = ShaderStage::Compute;
-    for (int i = 0; i <= 3; i++)
-    {
-        instanceStreamingLayout.AddBinding(i, DescriptorType::StorageBuffer,
-                                           VK_SHADER_STAGE_COMPUTE_BIT);
-    }
-    instanceStreamingPipeline =
-        device->CreateComputePipeline(&instanceStreamingShader, &instanceStreamingLayout,
-                                      &instanceStreamingPush, "instance streaming pipeline");
-
     for (int i = 0; i <= 6; i++)
     {
         decodeMergedInstancesLayout.AddBinding(i, DescriptorType::StorageBuffer,
@@ -364,25 +337,13 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
                                       &freeInstancesPush, "free instances pipeline");
 
     // allocate instances
-    for (int i = 0; i <= 7; i++)
+    for (int i = 0; i <= 8; i++)
     {
         allocateInstancesLayout.AddBinding(i, DescriptorType::StorageBuffer,
                                            VK_SHADER_STAGE_COMPUTE_BIT);
     }
     allocateInstancesPipeline = device->CreateComputePipeline(
         &allocateInstancesShader, &allocateInstancesLayout, 0, "allocate instance pipeline");
-
-    // instance culling
-    instanceCullingLayout.AddBinding(0, DescriptorType::UniformBuffer,
-                                     VK_SHADER_STAGE_COMPUTE_BIT);
-    for (int i = 1; i <= 7; i++)
-    {
-        instanceCullingLayout.AddBinding(i, DescriptorType::StorageBuffer,
-                                         VK_SHADER_STAGE_COMPUTE_BIT);
-    }
-
-    instanceCullingPipeline = device->CreateComputePipeline(
-        &instanceCullingShader, &instanceCullingLayout, 0, "instance culling");
 
     // cluster fixup
     clusterFixupPush.size   = sizeof(NumPushConstant);
@@ -394,15 +355,6 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
                                   VK_SHADER_STAGE_COMPUTE_BIT);
     clusterFixupPipeline = device->CreateComputePipeline(
         &clusterFixupShader, &clusterFixupLayout, &clusterFixupPush, "cluster fixups");
-
-    // assign instances
-    for (int i = 0; i <= 3; i++)
-    {
-        assignInstancesLayout.AddBinding(i, DescriptorType::StorageBuffer,
-                                         VK_SHADER_STAGE_COMPUTE_BIT);
-    }
-    assignInstancesPipeline = device->CreateComputePipeline(
-        &assignInstancesShader, &assignInstancesLayout, 0, "assign instances");
 
     // generate mips
     generateMipsLayout.AddBinding(0, DescriptorType::SampledImage,
@@ -499,10 +451,10 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
     clasBlasImplicitHandle =
         rg->RegisterExternalResource("clas blas implicit buffer", &clasBlasImplicitBuffer);
 
-    blasDataBuffer                    = rg->CreateBufferResource("blas data buffer",
+    allocatedInstancesBuffer          = rg->CreateBufferResource("allocated instances buffer",
                                                                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                                                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                                                 sizeof(BLASData) * maxInstances);
+                                                                 sizeof(u32) * maxInstances);
     buildClusterBottomLevelInfoBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
@@ -1122,7 +1074,7 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, ResourceHandle
         .AddHandle(freedInstancesBuffer, ResourceUsageType::RW);
 
     rg->StartComputePass(
-          allocateInstancesPipeline, allocateInstancesLayout, 8,
+          allocateInstancesPipeline, allocateInstancesLayout, 9,
           [maxPartitions = this->maxPartitions](CommandBuffer *cmd) {
               device->BeginEvent(cmd, "Allocate instances");
               cmd->Dispatch((maxPartitions + 31) / 32, 1, 1);
@@ -1136,60 +1088,14 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, ResourceHandle
               device->EndEvent(cmd);
           })
         .AddHandle(visiblePartitionsBuffer, ResourceUsageType::Read)
-        .AddHandle(clasGlobalsBufferHandle, ResourceUsageType::Read)
+        .AddHandle(clasGlobalsBufferHandle, ResourceUsageType::RW)
         .AddHandle(instanceTransformsBufferHandle, ResourceUsageType::Read)
         .AddHandle(partitionInfosBufferHandle, ResourceUsageType::Read)
         .AddHandle(instanceFreeListBufferHandle, ResourceUsageType::RW)
         .AddHandle(instancesBufferHandle, ResourceUsageType::Write)
         .AddHandle(resourceBufferHandle, ResourceUsageType::Read)
-        .AddHandle(instanceResourceIDsBufferHandle, ResourceUsageType::Read);
-
-    rg->StartComputePass(
-          instanceCullingPipeline, instanceCullingLayout, 8,
-          [&instances = this->instancesBuffer, maxInstances = this->maxInstances,
-           blasDataBuffer = this->blasDataBuffer](CommandBuffer *cmd) {
-              device->BeginEvent(cmd, "Instance Culling");
-              cmd->Dispatch(maxInstances / 64, 1, 1);
-              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                           VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                           VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
-                               VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
-                           VK_ACCESS_2_SHADER_WRITE_BIT,
-                           VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
-              cmd->FlushBarriers();
-              device->EndEvent(cmd);
-          })
-        .AddHandle(sceneBuffer, ResourceUsageType::Read)
-        .AddHandle(instancesBufferHandle, ResourceUsageType::RW)
-        .AddHandle(clasGlobalsBufferHandle, ResourceUsageType::Write)
-        .AddHandle(resourceAABBBufferHandle, ResourceUsageType::Read)
-        .AddHandle(instanceTransformsBufferHandle, ResourceUsageType::Read)
-        .AddHandle(partitionInfosBufferHandle, ResourceUsageType::Read)
-        .AddHandle(resourceBufferHandle, ResourceUsageType::Read)
-        .AddHandle(blasDataBuffer, ResourceUsageType::Write);
-
-    rg->StartComputePass(
-          assignInstancesPipeline, assignInstancesLayout, 4,
-          [maxInstances = this->maxInstances,
-           blasData     = this->blasDataBuffer](CommandBuffer *cmd) {
-              device->BeginEvent(cmd, "Assign Instances");
-              cmd->Dispatch(maxInstances / 64, 1, 1);
-              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                           VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-              cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                           VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                           VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
-              cmd->FlushBarriers();
-              device->EndEvent(cmd);
-          })
-        .AddHandle(clasGlobalsBufferHandle, ResourceUsageType::Write)
-        .AddHandle(blasDataBuffer, ResourceUsageType::Write)
-        .AddHandle(instancesBufferHandle, ResourceUsageType::Read)
-        .AddHandle(resourceBitVector, ResourceUsageType::Write);
+        .AddHandle(instanceResourceIDsBufferHandle, ResourceUsageType::Read)
+        .AddHandle(allocatedInstancesBuffer, ResourceUsageType::Write);
 }
 
 void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *debug)
@@ -1204,7 +1110,7 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *debug)
 
     rg->StartIndirectComputePass(
           "Update PTLAS Instances", ptlasWriteInstancesPipeline, ptlasWriteInstancesLayout, 9,
-          clasGlobalsBufferHandle, sizeof(u32) * GLOBALS_BLAS_INDIRECT_X,
+          clasGlobalsBufferHandle, sizeof(u32) * GLOBALS_ALLOCATE_INSTANCE_INDIRECT_X,
           [&clasGlobalsBuffer = this->clasGlobalsBuffer, debug](CommandBuffer *cmd) {
               cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -1218,7 +1124,7 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *debug)
         .AddHandle(ptlasWriteInfosBuffer, ResourceUsageType::Write)
         .AddHandle(ptlasUpdateInfosBuffer, ResourceUsageType::Write)
         .AddHandle(blasAccelAddressesHandle, ResourceUsageType::Read)
-        .AddHandle(blasDataBuffer, ResourceUsageType::Read)
+        .AddHandle(allocatedInstancesBuffer, ResourceUsageType::Read)
         .AddHandle(instancesBufferHandle, ResourceUsageType::RW)
         .AddHandle(resourceAABBBufferHandle, ResourceUsageType::Read)
         .AddHandle(instanceTransformsBufferHandle, ResourceUsageType::Read)

@@ -233,10 +233,6 @@ struct VirtualGeometryManager
     DescriptorSetLayout fillFinestClusterBLASInfoLayout = {};
     VkPipeline fillFinestClusterBLASInfoPipeline;
 
-    PushConstant instanceStreamingPush;
-    DescriptorSetLayout instanceStreamingLayout = {};
-    VkPipeline instanceStreamingPipeline;
-
     DescriptorSetLayout decodeMergedInstancesLayout = {};
     VkPipeline decodeMergedInstancesPipeline;
 
@@ -250,13 +246,6 @@ struct VirtualGeometryManager
 
     DescriptorSetLayout allocateInstancesLayout = {};
     VkPipeline allocateInstancesPipeline;
-
-    PushConstant instanceCullingPush;
-    DescriptorSetLayout instanceCullingLayout = {};
-    VkPipeline instanceCullingPipeline;
-
-    DescriptorSetLayout assignInstancesLayout = {};
-    VkPipeline assignInstancesPipeline        = {};
 
     DescriptorSetLayout generateMipsLayout = {};
     VkPipeline generateMipsPipeline        = {};
@@ -294,7 +283,7 @@ struct VirtualGeometryManager
     ResourceHandle clasBlasImplicitHandle;
 
     GPUBuffer blasScratchBuffer;
-    ResourceHandle blasDataBuffer;
+    ResourceHandle allocatedInstancesBuffer;
     GPUBuffer buildClusterBottomLevelInfoBuffer;
 
     GPUBuffer blasAccelAddresses;
