@@ -46,21 +46,25 @@ void main(uint3 dtID : SV_DispatchThreadID)
         uint bit = instanceBitVector[index >> 5u] & (1u << (index & 31u));
         if (bit) continue;
 
-        uint instanceFreeListOffset;
-        InterlockedAdd(instanceFreeList[0], -1, instanceFreeListOffset);
-        if (instanceFreeListOffset < 1) return;
-
         uint instanceIndex;
-        for (;;)
+        uint j = 0;
+        for (; j < 10; j++)
         {
+            uint instanceFreeListOffset;
+            InterlockedAdd(instanceFreeList[0], -1, instanceFreeListOffset);
+            if (instanceFreeListOffset < 1) return;
             int instanceFreeListIndex = instanceFreeListOffset;
             instanceIndex = instanceFreeList[instanceFreeListIndex];
 
+            //printf("%u %u %u\n", instanceIndex, i, partition);
+
             if (gpuInstances[instanceIndex].flags & GPU_INSTANCE_FLAG_FREED) break;
         }
+        if (j == 10) continue;
 
         uint allocatedInstanceIndex;
         InterlockedAdd(globals[GLOBALS_ALLOCATED_INSTANCE_COUNT_INDEX], 1, allocatedInstanceIndex);
+
         allocatedInstancesBuffer[allocatedInstanceIndex] = instanceIndex;
 
         uint resourceID = partitionResourceIDs[info.transformOffset + (uint)i];

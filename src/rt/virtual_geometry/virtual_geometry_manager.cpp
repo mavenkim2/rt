@@ -486,7 +486,8 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
 
     freedInstancesBuffer = rg->CreateBufferResource(
         "freed instances", VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        sizeof(u32) * maxInstancesPerPartition * MAX_PARTITIONS_FREED_PER_FRAME);
+        sizeof(u32) *
+            maxInstances); // maxInstancesPerPartition * MAX_PARTITIONS_FREED_PER_FRAME);
 
     instancesBuffer       = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                                      VK_BUFFER_USAGE_TRANSFER_DST_BIT |
@@ -950,7 +951,7 @@ void VirtualGeometryManager::ReprojectDepth(u32 targetWidth, u32 targetHeight,
 }
 
 void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, ResourceHandle sceneBuffer,
-                                              bool ptlas)
+                                              bool ptlas, GPUBuffer *debug)
 {
     RenderGraph *rg = GetRenderGraph();
     MergedInstancesPushConstant pc;
@@ -963,14 +964,20 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, ResourceHandle
               mergedInstancesTestPipeline, mergedInstancesTestLayout, 7,
               [maxPartitions = this->maxPartitions, &infos = this->partitionInfosBuffer,
                sceneBuffer, visiblePartitions              = this->visiblePartitionsBuffer,
-               freePartitions = this->evictedPartitionsBuffer](CommandBuffer *cmd) {
+               freePartitions           = this->evictedPartitionsBuffer,
+               allocatedInstancesBuffer = this->allocatedInstancesBuffer,
+               debug](CommandBuffer *cmd) {
                   device->BeginEvent(cmd, "Merged Instances Test");
                   cmd->Dispatch((maxPartitions + 31) / 32, 1, 1);
+
                   cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                   VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                                VK_ACCESS_2_SHADER_WRITE_BIT,
-                               VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
+                               VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT |
+                                   VK_ACCESS_2_TRANSFER_READ_BIT);
                   cmd->FlushBarriers();
+
                   device->EndEvent(cmd);
               },
               &mergedInstancesTestPush, &pc)
@@ -1012,26 +1019,32 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, ResourceHandle
 
         rg->StartComputePass(
               allocateInstancesPipeline, allocateInstancesLayout, 10,
-              [maxPartitions      = this->maxPartitions,
-               &clasGlobalsBuffer = this->clasGlobalsBuffer](CommandBuffer *cmd) {
+              [maxPartitions            = this->maxPartitions,
+               &clasGlobalsBuffer       = this->clasGlobalsBuffer,
+               allocatedInstancesBuffer = this->allocatedInstancesBuffer,
+               debug](CommandBuffer *cmd) {
                   device->BeginEvent(cmd, "Allocate instances");
                   cmd->Dispatch((maxPartitions + 31) / 32, 1, 1);
                   cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
                   cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                               VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                   VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                               VK_ACCESS_2_SHADER_WRITE_BIT,
+                               VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_TRANSFER_READ_BIT);
                   cmd->FlushBarriers();
+
+                  GPUBuffer *buffer = GetRenderGraph()->GetBuffer(allocatedInstancesBuffer);
+                  cmd->CopyBuffer(debug, buffer);
                   device->EndEvent(cmd);
 
                   // if (debug) // numBlas - 1)
                   // {
                   //     // RenderGraph *rg   = GetRenderGraph();
-                  //     GPUBuffer readback0 =
-                  //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                  //                              clasGlobalsBuffer.size,
-                  //                              MemoryUsage::GPU_TO_CPU);
+                  //     GPUBuffer readback0 = device->CreateBuffer(
+                  //         VK_BUFFER_USAGE_TRANSFER_DST_BIT, clasGlobalsBuffer.size,
+                  //         MemoryUsage::GPU_TO_CPU);
                   //     cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                   //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                   //                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
@@ -1116,9 +1129,11 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *debug)
           clasGlobalsBufferHandle, sizeof(u32) * GLOBALS_ALLOCATE_INSTANCE_INDIRECT_X,
           [&clasGlobalsBuffer = this->clasGlobalsBuffer, debug](CommandBuffer *cmd) {
               cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                               VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                            VK_ACCESS_2_SHADER_WRITE_BIT,
-                           VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
+                           VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT |
+                               VK_ACCESS_2_TRANSFER_READ_BIT);
               cmd->FlushBarriers();
 
               cmd->CopyBuffer(debug, &clasGlobalsBuffer);
@@ -1358,7 +1373,7 @@ bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
 
     instanceBitVectorHandle = GetRenderGraph()->CreateBufferResource(
         "instance bit vector", VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        (inputInstances.Length() + 7) / 8);
+        AlignPow2((inputInstances.Length() + 7) / 8, 4u));
 
     StaticArray<PrimRef> refs(scratch.temp.arena, inputInstances.Length());
 

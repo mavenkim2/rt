@@ -54,6 +54,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
 
             useProxies = cull;
 
+#if 0
             if (!cull)
             {
                 uint lod;
@@ -62,6 +63,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
                 //partitionInfos[partitionIndex].debug0 = aabb;
                 //partitionInfos[partitionIndex].debug1 = lod;
             }
+#endif
             if (!useProxies)
             {
                 Translate(renderFromObject, -gpuScene.cameraP);

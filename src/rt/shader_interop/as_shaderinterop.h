@@ -380,6 +380,7 @@ float3x4 ConvertGPUMatrix(GPUTransform transform, float3 anchor, float3 scale)
 #define GPU_INSTANCE_FLAG_INDIV           (1u << 4u)
 #define GPU_INSTANCE_FLAG_SHARED_INSTANCE (1u << 5u)
 #define GPU_INSTANCE_FLAG_MERGED_INSTANCE (1u << 6u)
+#define GPU_INSTANCE_FLAG_IN_FREE_LIST    (1u << 7u)
 
 struct GPUInstance
 {
@@ -496,10 +497,11 @@ struct VoxelAddressTableEntry
 
 #define GLOBALS_INSTANCE_UNUSED_COUNT 37
 #define GLOBALS_DEBUG2                38
+#define GLOBALS_DEBUG3                39
 
-#define GLOBALS_ALLOCATE_FROM_FREED_COUNT 39
+#define GLOBALS_ALLOCATE_FROM_FREED_COUNT 40
 
-#define GLOBALS_SIZE 40
+#define GLOBALS_SIZE 41
 
 #ifdef __cplusplus
 }

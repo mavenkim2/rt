@@ -25,17 +25,17 @@ void main(uint3 dtID : SV_DispatchThreadID)
 
         if (instance.partitionIndex == partition && (instance.flags & flags))
         {
-            InterlockedAdd(globals[GLOBALS_DEBUG], 1);
+            //InterlockedAdd(globals[GLOBALS_DEBUG], 1);
         }
 
-        //if (instance.partitionIndex == partition && ((instance.flags & GPU_INSTANCE_FLAG_FREED) == 0)
-            //&& (instance.flags & flags))
-        if (instance.partitionIndex == partition && (instance.flags & flags))
+        if (instance.partitionIndex == partition && ((instance.flags & GPU_INSTANCE_FLAG_FREED) == 0)
+            && ((instance.flags & GPU_INSTANCE_FLAG_IN_FREE_LIST) == 0) && (instance.flags & flags))
         {
             uint instanceFreeListIndex;
             InterlockedAdd(instanceFreeList[0], 1, instanceFreeListIndex);
             instanceFreeList[instanceFreeListIndex + 1] = instanceIndex;
             instances[instanceIndex].flags |= GPU_INSTANCE_FLAG_FREED;
+            instances[instanceIndex].flags |= GPU_INSTANCE_FLAG_IN_FREE_LIST;
 
             uint freedIndexIndex;
             InterlockedAdd(globals[GLOBALS_FREED_INSTANCE_COUNT_INDEX], 1, freedIndexIndex);
@@ -49,6 +49,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
         if (instance.partitionIndex == partition)
         {
             instances[instanceIndex].flags &= ~GPU_INSTANCE_FLAG_FREED;
+            InterlockedAdd(globals[GLOBALS_DEBUG], 1);
 
             uint transformOffset = instances[instanceIndex].transformIndex;
             InterlockedOr(instanceBitVector[transformOffset >> 5u], 1u << (transformOffset & 31u));

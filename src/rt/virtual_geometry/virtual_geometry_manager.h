@@ -381,7 +381,8 @@ struct VirtualGeometryManager
     void ProcessRequests(CommandBuffer *cmd, bool test);
     u32 AddNewMesh(Arena *arena, CommandBuffer *cmd, string filename, bool debug);
     void FinalizeResources(CommandBuffer *cmd);
-    void PrepareInstances(CommandBuffer *cmd, ResourceHandle sceneBuffer, bool ptlas);
+    void PrepareInstances(CommandBuffer *cmd, ResourceHandle sceneBuffer, bool ptlas,
+                          GPUBuffer *debug);
     void BuildPTLAS(CommandBuffer *cmd, GPUBuffer *debug);
     void UnlinkLRU(int pageIndex);
     void LinkLRU(int index);
