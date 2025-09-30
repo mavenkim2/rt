@@ -3,13 +3,14 @@
 RWStructuredBuffer<GPUInstance> gpuInstances : register(u0);
 RWStructuredBuffer<uint> globals : register(u1);
 RWStructuredBuffer<PTLAS_WRITE_INSTANCE_INFO> ptlasWriteInstanceInfos : register(u2);
+RWStructuredBuffer<uint> freedInstances : register(u3);
 
-[numthreads(64, 1, 1)]
+[numthreads(32, 1, 1)]
 void main(uint dtID : SV_DispatchThreadID)
 {
-    uint instanceIndex = dtID.x;
-    if (instanceIndex >= 1u << 21u) return;
+    if (dtID.x >= globals[GLOBALS_FREED_INSTANCE_COUNT_INDEX]) return;
 
+    uint instanceIndex = freedInstances[dtID.x];
     GPUInstance instance = gpuInstances[instanceIndex];
     if ((instance.flags & GPU_INSTANCE_FLAG_FREED) && (instance.flags & GPU_INSTANCE_FLAG_WAS_RENDERED))
     {

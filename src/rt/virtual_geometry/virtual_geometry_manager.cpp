@@ -25,17 +25,11 @@ static_assert(sizeof(PTLAS_UPDATE_INSTANCE_INFO) ==
 
 VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u32 targetHeight,
                                                u32 numBlas)
-    : physicalPages(arena, maxPages + 2), virtualTable(arena, maxVirtualPages),
-      meshInfos(arena, maxInstances), numInstances(0), numAllocatedPartitions(0),
+    : meshInfos(arena, maxInstances), numInstances(0), numAllocatedPartitions(0),
       virtualInstanceOffset(0), voxelAddressOffset(0), clusterLookupTableOffset(0),
       currentClusterTotal(0), currentGeoMemoryTotal(0), totalNumVirtualPages(0),
       totalNumNodes(0), lruHead(-1), lruTail(-1), resourceSharingInfoOffset(0)
 {
-    for (u32 i = 0; i < maxVirtualPages; i++)
-    {
-        virtualTable.Push(VirtualPage{0, PageFlag::NonResident, -1});
-    }
-
     string decodeDgfClustersName   = "../src/shaders/decode_dgf_clusters.spv";
     string decodeDgfClustersData   = OS_ReadFile(arena, decodeDgfClustersName);
     Shader decodeDgfClustersShader = device->CreateShader(
@@ -294,7 +288,7 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
         &ptlasWriteInstancesShader, &ptlasWriteInstancesLayout, 0, "ptlas write instances");
 
     // ptlas update unused instances
-    for (int i = 0; i <= 2; i++)
+    for (int i = 0; i <= 3; i++)
     {
         ptlasUpdateUnusedInstancesLayout.AddBinding(i, DescriptorType::StorageBuffer,
                                                     VK_SHADER_STAGE_COMPUTE_BIT);
@@ -357,13 +351,17 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
                                       &mergedInstancesTestPush, "merged instances pipeline");
 
     // free instances
-    for (int i = 0; i <= 3; i++)
+    freeInstancesPush.size   = sizeof(NumPushConstant);
+    freeInstancesPush.offset = 0;
+    freeInstancesPush.stage  = ShaderStage::Compute;
+    for (int i = 0; i <= 4; i++)
     {
         freeInstancesLayout.AddBinding(i, DescriptorType::StorageBuffer,
                                        VK_SHADER_STAGE_COMPUTE_BIT);
     }
-    freeInstancesPipeline = device->CreateComputePipeline(
-        &freeInstancesShader, &freeInstancesLayout, 0, "free instances pipeline");
+    freeInstancesPipeline =
+        device->CreateComputePipeline(&freeInstancesShader, &freeInstancesLayout,
+                                      &freeInstancesPush, "free instances pipeline");
 
     // allocate instances
     for (int i = 0; i <= 7; i++)
@@ -427,15 +425,10 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
         &reprojectDepthShader, &reprojectDepthLayout, 0, "reproject depth pipeline");
 
     RenderGraph *rg = GetRenderGraph();
-    // Buffers
 
+    // Buffers
     pageUploadBuffer = {};
     blasUploadBuffer = {};
-
-    evictedPagesBuffer = rg->CreateBufferResource("evicted pages buffer",
-                                                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                      VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                                  sizeof(u32) * maxPageInstallsPerFrame);
 
     clusterPageDataBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, megabytes(800));
@@ -469,7 +462,6 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
         sizeof(Vec3f) * 2 * 22000000);
-    // maxNumVertices * sizeof(Vec3f));
 
     clasGlobalsBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
@@ -559,9 +551,10 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
 
     instanceFreeListBufferHandle =
         rg->RegisterExternalResource("instance free list buffer", &instanceFreeListBuffer);
-    // debugBuffer =
-    //     device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(Vec2f) * (1u <<
-    //     21u));
+
+    freedInstancesBuffer = rg->CreateBufferResource(
+        "freed instances", VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        sizeof(u32) * maxInstancesPerPartition * MAX_PARTITIONS_FREED_PER_FRAME);
 
     instancesBuffer       = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                                      VK_BUFFER_USAGE_TRANSFER_DST_BIT |
@@ -1102,27 +1095,31 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, ResourceHandle
         .AddHandle(sceneBuffer, ResourceUsageType::Read)
         .AddHandle(depthPyramid, ResourceUsageType::Read);
 
-    rg->StartComputePass(freeInstancesPipeline, freeInstancesLayout, 4,
-                         [maxInstances = this->maxInstances](CommandBuffer *cmd) {
-                             device->BeginEvent(cmd, "Free instances");
-                             cmd->Dispatch(maxInstances / 64, 1, 1);
-                             cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                          VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
-                                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                          VK_ACCESS_2_SHADER_WRITE_BIT,
-                                          VK_ACCESS_2_SHADER_READ_BIT |
-                                              VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
-                             cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                          VK_ACCESS_2_SHADER_WRITE_BIT,
-                                          VK_ACCESS_2_SHADER_WRITE_BIT);
-                             cmd->FlushBarriers();
-                             device->EndEvent(cmd);
-                         })
+    NumPushConstant freeInstancesPc;
+    freeInstancesPc.num = maxInstances;
+    rg->StartComputePass(
+          freeInstancesPipeline, freeInstancesLayout, 5,
+          [maxInstances = this->maxInstances](CommandBuffer *cmd) {
+              device->BeginEvent(cmd, "Free instances");
+              cmd->Dispatch(maxInstances / 64, 1, 1);
+              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
+                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_2_SHADER_WRITE_BIT,
+                           VK_ACCESS_2_SHADER_READ_BIT |
+                               VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+              cmd->FlushBarriers();
+              device->EndEvent(cmd);
+          },
+          &freeInstancesPush, &freeInstancesPc)
         .AddHandle(instancesBufferHandle, ResourceUsageType::RW)
         .AddHandle(evictedPartitionsBuffer, ResourceUsageType::Read)
-        .AddHandle(clasGlobalsBufferHandle, ResourceUsageType::Read)
-        .AddHandle(instanceFreeListBufferHandle, ResourceUsageType::RW);
+        .AddHandle(clasGlobalsBufferHandle, ResourceUsageType::RW)
+        .AddHandle(instanceFreeListBufferHandle, ResourceUsageType::RW)
+        .AddHandle(freedInstancesBuffer, ResourceUsageType::RW);
 
     rg->StartComputePass(
           allocateInstancesPipeline, allocateInstancesLayout, 8,
@@ -1242,20 +1239,20 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *debug)
     //     cmd->FlushBarriers();
     // }
 
-    rg->StartComputePass(
-          ptlasUpdateUnusedInstancesPipeline, ptlasUpdateUnusedInstancesLayout, 3,
+    rg->StartIndirectComputePass(
+          "PTLAS Update Unused Instances", ptlasUpdateUnusedInstancesPipeline,
+          ptlasUpdateUnusedInstancesLayout, 4, clasGlobalsBufferHandle,
+          sizeof(u32) * GLOBALS_FREED_INSTANCE_INDIRECT_X,
           [maxInstances = this->maxInstances](CommandBuffer *cmd) {
-              device->BeginEvent(cmd, "PTLAS Update Unused Instances");
-              cmd->Dispatch(maxInstances / 64, 1, 1);
               cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                            VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
               cmd->FlushBarriers();
-              device->EndEvent(cmd);
           })
         .AddHandle(instancesBufferHandle, ResourceUsageType::Read)
         .AddHandle(clasGlobalsBufferHandle, ResourceUsageType::Write)
-        .AddHandle(ptlasWriteInfosBuffer, ResourceUsageType::Write);
+        .AddHandle(ptlasWriteInfosBuffer, ResourceUsageType::Write)
+        .AddHandle(freedInstancesBuffer, ResourceUsageType::Write);
 
     // Update command infos
     rg->StartComputePass(
@@ -1299,6 +1296,7 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *debug)
                    ptlasIndirect      = this->ptlasIndirectCommandBuffer,
                    &clasGlobalsBuffer = this->clasGlobalsBuffer,
                    maxPartitions = this->maxPartitions, maxInstances = this->maxInstances,
+                   maxInstancesPerPartition = this->maxInstancesPerPartition,
                    ptlasWriteInfosBuffer = this->ptlasWriteInfosBuffer](CommandBuffer *cmd) {
                       RenderGraph *rg = GetRenderGraph();
 
@@ -1317,7 +1315,7 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *debug)
 
                       device->BeginEvent(cmd, "Build PTLAS");
                       cmd->BuildPTLAS(accel, scratch, indirect, srcInfosCount, maxInstances,
-                                      1024, maxPartitions, 0);
+                                      maxInstancesPerPartition, maxPartitions, 0);
                       device->EndEvent(cmd);
                   })
         .AddHandle(tlasAccelHandle, ResourceUsageType::Write)
@@ -1354,7 +1352,7 @@ void VirtualGeometryManager::BuildHierarchy(PrimRef *refs, RecordAOSSplits &reco
 
     Split split = heuristic.Bin(record);
 
-    if (record.count <= 1024)
+    if (record.count <= maxInstancesPerPartition)
     {
         u32 threadIndex = GetThreadIndex();
         heuristic.FlushState(split);
@@ -1829,11 +1827,8 @@ bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
                                                        sizeof(Vec2u) * finalNumPartitions);
 
     u32 tlasScratchSize, tlasAccelSize;
-    device->GetPTLASBuildSizes(maxInstances, 1024, maxPartitions, 0, tlasScratchSize,
-                               tlasAccelSize);
-
-    // u32 test, test2;
-    // device->GetPTLASBuildSizes(1u << 22u, 1024, 4096, 0, test, test2);
+    device->GetPTLASBuildSizes(maxInstances, maxInstancesPerPartition, maxPartitions, 0,
+                               tlasScratchSize, tlasAccelSize);
 
     tlasAccelBuffer =
         device->CreateBuffer(VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |

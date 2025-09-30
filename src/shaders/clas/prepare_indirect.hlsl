@@ -13,5 +13,9 @@ void main(uint3 dtID : SV_DispatchThreadID)
         clasGlobalsBuffer[GLOBALS_BLAS_INDIRECT_X] = (clasGlobalsBuffer[GLOBALS_BLAS_COUNT_INDEX] + 128u) >> 7u;;
         clasGlobalsBuffer[GLOBALS_BLAS_INDIRECT_Y] = 1;
         clasGlobalsBuffer[GLOBALS_BLAS_INDIRECT_Z] = 1;
+
+        clasGlobalsBuffer[GLOBALS_VISIBLE_PARTITION_INDIRECT_X] = (clasGlobalsBuffer[GLOBALS_FREED_INSTANCE_COUNT_INDEX] + 31u) >> 5u;
+        clasGlobalsBuffer[GLOBALS_VISIBLE_PARTITION_INDIRECT_Y] = 1;
+        clasGlobalsBuffer[GLOBALS_VISIBLE_PARTITION_INDIRECT_Z] = 1;
     }
 }

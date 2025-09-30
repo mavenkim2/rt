@@ -112,28 +112,8 @@ struct alignas(16) TempHierarchyNode
 
 struct VirtualGeometryManager
 {
-    const u32 streamingPoolSize = megabytes(512);
-    const u32 maxPages          = 4096; // streamingPoolSize >> CLUSTER_PAGE_SIZE_BITS;
-    const u32 maxVirtualPages   = maxPages << 8u;
-
-    const u32 instanceIDStart = maxPages * MAX_CLUSTERS_PER_PAGE;
-
-    const u32 maxNodes                     = 1u << 17u;
-    const u32 maxStreamingRequestsPerFrame = (1u << 18u);
-    const u32 maxPageInstallsPerFrame      = 128;
-    const u32 maxQueueBatches              = 4;
-
-    const u32 maxNumTriangles =
-        maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE * MAX_CLUSTER_TRIANGLES;
-    const u32 maxNumVertices =
-        maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE * MAX_CLUSTER_TRIANGLE_VERTICES;
-    const u32 maxNumClusters = maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE;
-
-    const u32 maxInstances         = 1u << 22;
-    const u32 maxTotalClusterCount = 8 * 1024 * 1024; // MAX_CLUSTERS_PER_BLAS * maxInstances;
-    const u32 maxClusterCountPerAccelerationStructure = MAX_CLUSTERS_PER_BLAS;
-
-    const u32 maxClusterFixupsPerFrame = 2 * maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE;
+    const u32 maxInstances             = 1u << 22;
+    const u32 maxInstancesPerPartition = 1024u;
 
     enum class PageFlag
     {
@@ -264,6 +244,7 @@ struct VirtualGeometryManager
     DescriptorSetLayout mergedInstancesTestLayout = {};
     VkPipeline mergedInstancesTestPipeline;
 
+    PushConstant freeInstancesPush;
     DescriptorSetLayout freeInstancesLayout = {};
     VkPipeline freeInstancesPipeline;
 
@@ -283,7 +264,6 @@ struct VirtualGeometryManager
     DescriptorSetLayout reprojectDepthLayout = {};
     VkPipeline reprojectDepthPipeline        = {};
 
-    ResourceHandle evictedPagesBuffer;
     GPUBuffer clusterPageDataBuffer;
     ResourceHandle clusterPageDataBufferHandle;
 
@@ -380,6 +360,7 @@ struct VirtualGeometryManager
 
     GPUBuffer instanceFreeListBuffer;
     ResourceHandle instanceFreeListBufferHandle;
+    ResourceHandle freedInstancesBuffer;
     ResourceHandle visiblePartitionsBuffer;
     ResourceHandle evictedPartitionsBuffer;
 
@@ -398,8 +379,6 @@ struct VirtualGeometryManager
     StaticArray<MeshInfo> meshInfos;
     // StaticArray<InstanceRef> instanceRefs;
 
-    StaticArray<VirtualPage> virtualTable;
-    StaticArray<Page> physicalPages;
     u32 virtualInstanceOffset;
     u32 voxelAddressOffset;
     u32 clusterLookupTableOffset;

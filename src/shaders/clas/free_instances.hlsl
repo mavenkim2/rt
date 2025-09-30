@@ -2,21 +2,17 @@
 
 RWStructuredBuffer<GPUInstance> instances : register(u0);
 StructuredBuffer<uint2> freedPartitions : register(t1);
-StructuredBuffer<uint> globals : register(t2);
+RWStructuredBuffer<uint> globals : register(u2);
 RWStructuredBuffer<uint> instanceFreeList : register(u3);
+RWStructuredBuffer<uint> freedInstances : register(u4);
+
+[[vk::push_constant]] NumPushConstant pc;
 
 [numthreads(64, 1, 1)]
 void main(uint3 dtID : SV_DispatchThreadID)
 {
     uint instanceIndex = dtID.x;
-#if 0
-    if (dtID.x == 0)
-    {
-        globals[GLOBALS_VISIBLE_PARTITION_INDIRECT_X] = (globals[GLOBALS_VISIBLE_PARTITION_COUNT] + 31) / 32;
-    }
-#endif
-
-    if (instanceIndex >= 1u << 21u) return;
+    if (instanceIndex >= pc.num) return;
 
     GPUInstance instance = instances[instanceIndex];
     for (uint i = 0; i < globals[GLOBALS_FREED_PARTITION_COUNT]; i++)
@@ -30,6 +26,10 @@ void main(uint3 dtID : SV_DispatchThreadID)
             InterlockedAdd(instanceFreeList[0], 1, instanceFreeListIndex);
             instanceFreeList[instanceFreeListIndex + 1] = instanceIndex;
             instances[instanceIndex].flags |= GPU_INSTANCE_FLAG_FREED;
+
+            uint freedIndexIndex;
+            InterlockedAdd(globals[GLOBALS_FREED_INSTANCE_COUNT_INDEX], 1, freedIndexIndex);
+            freedInstances[freedIndexIndex] = instanceIndex;
             return;
         }
     }

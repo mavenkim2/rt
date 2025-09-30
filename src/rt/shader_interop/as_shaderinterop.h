@@ -35,6 +35,8 @@ namespace rt
 
 #define CLUSTER_STREAMING_LEAF_FLAG 0x1
 
+#define MAX_PARTITIONS_FREED_PER_FRAME 256
+
 static const uint32_t kFillInstanceDescsThreads = 32;
 
 struct ClusterPageHeader
@@ -480,7 +482,7 @@ struct VoxelAddressTableEntry
 
 #define GLOBALS_DEBUG 20
 
-#define GLOBALS_UNUSED_CHECK_INDEX 21
+#define GLOBALS_FREED_INSTANCE_COUNT_INDEX 21
 
 #define GLOBALS_PTLAS_UPDATE_COUNT_INDEX 22
 #define GLOBALS_PTLAS_WRITE_COUNT_INDEX  23
@@ -492,7 +494,11 @@ struct VoxelAddressTableEntry
 #define GLOBALS_VISIBLE_PARTITION_INDIRECT_Y 28
 #define GLOBALS_VISIBLE_PARTITION_INDIRECT_Z 29
 
-#define GLOBALS_SIZE 30
+#define GLOBALS_FREED_INSTANCE_INDIRECT_X 30
+#define GLOBALS_FREED_INSTANCE_INDIRECT_Y 31
+#define GLOBALS_FREED_INSTANCE_INDIRECT_Z 32
+
+#define GLOBALS_SIZE 33
 
 #ifdef __cplusplus
 }
