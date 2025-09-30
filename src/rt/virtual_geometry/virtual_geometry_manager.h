@@ -202,9 +202,6 @@ struct VirtualGeometryManager
     DescriptorSetLayout writeClasDefragLayout = {};
     VkPipeline writeClasDefragPipeline;
 
-    DescriptorSetLayout fillBlasAddressArrayLayout = {};
-    VkPipeline fillBlasAddressArrayPipeline;
-
     PushConstant computeBlasAddressesPush;
     DescriptorSetLayout computeBlasAddressesLayout = {};
     VkPipeline computeBlasAddressesPipeline;

@@ -60,11 +60,6 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
     Shader writeClasDefragAddressesShader = device->CreateShader(
         ShaderStage::Compute, "write clas defrag addresses", writeClasDefragAddressesData);
 
-    string fillBlasAddressArrayName   = "../src/shaders/fill_blas_address_array.spv";
-    string fillBlasAddressArrayData   = OS_ReadFile(arena, fillBlasAddressArrayName);
-    Shader fillBlasAddressArrayShader = device->CreateShader(
-        ShaderStage::Compute, "fill blas address array", fillBlasAddressArrayData);
-
     string computeBlasAddressesName   = "../src/shaders/compute_blas_addresses.spv";
     string computeBlasAddressesData   = OS_ReadFile(arena, computeBlasAddressesName);
     Shader computeBlasAddressesShader = device->CreateShader(
@@ -236,19 +231,6 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
     }
     writeClasDefragPipeline =
         device->CreateComputePipeline(&writeClasDefragAddressesShader, &writeClasDefragLayout);
-
-    // fill blas address array
-    for (int i = 0; i <= 5; i++)
-    {
-        fillBlasAddressArrayLayout.AddBinding(i, DescriptorType::StorageBuffer,
-                                              VK_SHADER_STAGE_COMPUTE_BIT);
-    }
-    fillBlasAddressArrayLayout.AddBinding(16, DescriptorType::StorageBuffer,
-                                          VK_SHADER_STAGE_COMPUTE_BIT);
-
-    fillBlasAddressArrayPipeline =
-        device->CreateComputePipeline(&fillBlasAddressArrayShader, &fillBlasAddressArrayLayout,
-                                      0, "fill blas address array");
 
     // compute blas addresses
     computeBlasAddressesPush.size   = sizeof(ComputeBLASAddressesPushConstant);
@@ -787,52 +769,6 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, string 
                  VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
     cmd->FlushBarriers();
 
-    // if (debug) // numBlas - 1)
-    // {
-    //     // RenderGraph *rg   = GetRenderGraph();
-    //     GPUBuffer readback0 =
-    //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-    //         totalAccelSizesBuffer.size,
-    //                              MemoryUsage::GPU_TO_CPU);
-    //     cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-    //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-    //                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-    //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-    //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-    //     VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-    //                  VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-    //     // cmd->Barrier(
-    //     //     img, VK_IMAGE_LAYOUT_GENERAL,
-    //     //     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-    //     //     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-    //     // VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-    //     //     VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-    //     //     QueueType_Ignored, QueueType_Ignored, level, 1);
-    //
-    //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-    //     //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-    //     //     // VK_ACCESS_2_SHADER_WRITE_BIT,
-    //     //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-    //     cmd->FlushBarriers();
-    //
-    //     // BufferImageCopy copy = {};
-    //     // copy.mipLevel        = level;
-    //     // copy.extent          = Vec3u(width, height, 1);
-    //
-    //     cmd->CopyBuffer(&readback0, &totalAccelSizesBuffer);
-    //     // cmd->CopyBuffer(&readback2, buffer1);
-    //     // cmd->CopyImageToBuffer(&readback0, img, &copy, 1);
-    //     Semaphore testSemaphore   = device->CreateSemaphore();
-    //     testSemaphore.signalValue = 1;
-    //     cmd->SignalOutsideFrame(testSemaphore);
-    //     device->SubmitCommandBuffer(cmd);
-    //     device->Wait(testSemaphore);
-    //
-    //     u32 *data = (u32 *)readback0.mappedPtr;
-    //
-    //     int stop = 5;
-    // }
-
     cmd->BuildClusterBLAS(CLASOpMode::ExplicitDestinations, &clasBlasImplicitBuffer,
                           &blasScratchBuffer, &buildClusterBottomLevelInfoBuffer,
                           &blasAccelAddresses, &blasAccelSizes, &clasGlobalsBuffer,
@@ -1053,7 +989,7 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, ResourceHandle
           freeInstancesPipeline, freeInstancesLayout, 5,
           [maxInstances = this->maxInstances](CommandBuffer *cmd) {
               device->BeginEvent(cmd, "Free instances");
-              cmd->Dispatch(maxInstances / 64, 1, 1);
+              cmd->Dispatch(maxInstances / 128, 1, 1);
               cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                            VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -1075,7 +1011,8 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, ResourceHandle
 
     rg->StartComputePass(
           allocateInstancesPipeline, allocateInstancesLayout, 9,
-          [maxPartitions = this->maxPartitions](CommandBuffer *cmd) {
+          [maxPartitions      = this->maxPartitions,
+           &clasGlobalsBuffer = this->clasGlobalsBuffer](CommandBuffer *cmd) {
               device->BeginEvent(cmd, "Allocate instances");
               cmd->Dispatch((maxPartitions + 31) / 32, 1, 1);
               cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -1086,6 +1023,52 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, ResourceHandle
                            VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
               cmd->FlushBarriers();
               device->EndEvent(cmd);
+
+              // if (debug) // numBlas - 1)
+              // {
+              //     // RenderGraph *rg   = GetRenderGraph();
+              //     GPUBuffer readback0 =
+              //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+              //                              clasGlobalsBuffer.size, MemoryUsage::GPU_TO_CPU);
+              //     cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+              //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+              //                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+              //                  VK_ACCESS_2_TRANSFER_READ_BIT);
+              //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+              //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+              //                  VK_ACCESS_2_TRANSFER_READ_BIT);
+              //     // cmd->Barrier(
+              //     //     img, VK_IMAGE_LAYOUT_GENERAL,
+              //     //     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+              //     //     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+              //     // VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+              //     //     VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+              //     //     QueueType_Ignored, QueueType_Ignored, level, 1);
+              //
+              //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+              //     //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+              //     //     // VK_ACCESS_2_SHADER_WRITE_BIT,
+              //     //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
+              //     cmd->FlushBarriers();
+              //
+              //     // BufferImageCopy copy = {};
+              //     // copy.mipLevel        = level;
+              //     // copy.extent          = Vec3u(width, height, 1);
+              //
+              //     cmd->CopyBuffer(&readback0, &clasGlobalsBuffer);
+              //     // cmd->CopyBuffer(&readback2, buffer1);
+              //     // cmd->CopyImageToBuffer(&readback0, img, &copy, 1);
+              //     Semaphore testSemaphore   = device->CreateSemaphore();
+              //     testSemaphore.signalValue = 1;
+              //     cmd->SignalOutsideFrame(testSemaphore);
+              //     device->SubmitCommandBuffer(cmd);
+              //     device->Wait(testSemaphore);
+              //
+              //     u32 *data = (u32 *)readback0.mappedPtr;
+              //     Print("%u\n", data[GLOBALS_ALLOCATED_INSTANCE_COUNT_INDEX]);
+              //
+              //     int stop = 5;
+              // }
           })
         .AddHandle(visiblePartitionsBuffer, ResourceUsageType::Read)
         .AddHandle(clasGlobalsBufferHandle, ResourceUsageType::RW)
@@ -1556,7 +1539,7 @@ bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
         Vec4f lodBounds = Vec4f(0);
         if (sphereCount)
         {
-            ConstructSphereFromSpheres(spheres, sphereCount);
+            lodBounds = ConstructSphereFromSpheres(spheres, sphereCount);
         }
 
         PartitionInfo info   = {};

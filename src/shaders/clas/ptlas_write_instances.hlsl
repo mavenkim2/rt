@@ -17,19 +17,20 @@ StructuredBuffer<PartitionInfo> partitionInfos : register(t8);
 #include "ptlas_write_instances.hlsli"
 
 [numthreads(32, 1, 1)] 
-void main(uint3 dtID : SV_DispatchThreadID)
+void main(uint3 dtID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
 {
-    if (dtID.x >= globals[GLOBALS_ALLOCATED_INSTANCE_COUNT_INDEX]) return;
+    uint threadID = 32 * (groupID.x + groupID.y * 65536) + groupIndex;
+    if (threadID >= globals[GLOBALS_ALLOCATED_INSTANCE_COUNT_INDEX]) return;
 
-    uint instanceIndex = allocatedInstances[dtID.x];
+    uint instanceIndex = allocatedInstances[threadID];
     GPUInstance instance = gpuInstances[instanceIndex];
 
     uint64_t address = 0;
     float3x4 worldFromObject;
 
     PartitionInfo info = partitionInfos[instance.partitionIndex];
-    bool update = true;
-    uint flags = 0x10u;
+    bool update = false;
+    uint flags = 0x0u;
     AABB aabb;
 
     if (0)//instance.flags & GPU_INSTANCE_FLAG_MERGED)

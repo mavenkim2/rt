@@ -8,7 +8,7 @@ RWStructuredBuffer<uint> freedInstances : register(u4);
 
 [[vk::push_constant]] NumPushConstant pc;
 
-[numthreads(64, 1, 1)]
+[numthreads(128, 1, 1)]
 void main(uint3 dtID : SV_DispatchThreadID)
 {
     uint instanceIndex = dtID.x;

@@ -152,7 +152,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     NvAPI_Status status      = NvAPI_Initialize();
     Assert(status == NVAPI_OK);
     // Compile shaders
-    Shader fillInstanceShader;
     Shader prepareIndirectShader;
 
     Shader testShader;
@@ -186,11 +185,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         groups[2].numShaders = 1;
         groups[2].type       = RayTracingShaderGroupType::Triangle;
 
-        string fillInstanceShaderName = "../src/shaders/fill_instance_descs.spv";
-        string fillInstanceShaderData = OS_ReadFile(arena, fillInstanceShaderName);
-        fillInstanceShader = device->CreateShader(ShaderStage::Compute, "fill instance descs",
-                                                  fillInstanceShaderData);
-
         string prepareIndirectName = "../src/shaders/prepare_indirect.spv";
         string prepareIndirectData = OS_ReadFile(arena, prepareIndirectName);
         prepareIndirectShader = device->CreateShader(ShaderStage::Compute, "prepare indirect",
@@ -206,18 +200,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     }
 
     // Compile pipelines
-
-    // fill instance descs
-    DescriptorSetLayout fillInstanceLayout = {};
-    for (int i = 0; i <= 5; i++)
-    {
-        fillInstanceLayout.AddBinding(i, DescriptorType::StorageBuffer,
-                                      VK_SHADER_STAGE_COMPUTE_BIT);
-    }
-    fillInstanceLayout.AddBinding(6, DescriptorType::UniformBuffer,
-                                  VK_SHADER_STAGE_COMPUTE_BIT);
-    VkPipeline fillInstancePipeline = device->CreateComputePipeline(
-        &fillInstanceShader, &fillInstanceLayout, 0, "fill instance descs");
 
     // prepare indirect
     DescriptorSetLayout prepareIndirectLayout = {};

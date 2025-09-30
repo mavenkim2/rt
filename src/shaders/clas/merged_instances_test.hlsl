@@ -37,8 +37,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
 
     if ((flags & PARTITION_FLAG_HAS_PROXIES))
     {
-        useProxies = true;
-#if 0
+        //useProxies = true;
         float3 minP = lodBounds.xyz - lodBounds.w;
         float3 maxP = lodBounds.xyz + lodBounds.w;
 
@@ -50,6 +49,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
 
         useProxies = cull;
 
+#if 0
         if (!cull && !pc.firstFrame)
         {
             uint lod;
@@ -59,6 +59,13 @@ void main(uint3 dtID : SV_DispatchThreadID)
             partitionInfos[partitionIndex].debug1 = lod;
         }
 #endif
+        Translate(renderFromObject, -gpuScene.cameraP);
+        if (!useProxies)
+        {
+            float test;
+            float2 edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, 1.f, test, false);
+            useProxies = error * gpuScene.lodScale < edgeScales.x;
+        }
     }
 #if 0
     else if ((flags & PARTITION_FLAG_HAS_PROXIES) && pc.firstFrame)
@@ -66,18 +73,8 @@ void main(uint3 dtID : SV_DispatchThreadID)
         useProxies = true;
     }
 
-    Translate(renderFromObject, -gpuScene.cameraP);
-
-    if (!useProxies && (flags & PARTITION_FLAG_HAS_PROXIES))
-    {
-        float test;
-        float2 edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, 1.f, test, false);
-        useProxies = error * gpuScene.lodScale < edgeScales.x;
-    }
 #endif
-    //useProxies = false;
 
-    partitionInfos[partitionIndex].test = useProxies;
     if (useProxies)
     {
         if (info.flags & PARTITION_FLAG_INSTANCES_RENDERED)

@@ -90,15 +90,6 @@ struct VoxelPageDecodeData
     int pageIndex;
 };
 
-struct BLASData
-{
-    uint instanceID;
-    uint clusterStartIndex;
-    uint clusterCount;
-
-    uint addressIndex;
-};
-
 struct BLASVoxelInfo
 {
     uint64_t address;
