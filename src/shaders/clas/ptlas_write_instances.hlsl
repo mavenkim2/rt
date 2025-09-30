@@ -19,10 +19,21 @@ StructuredBuffer<PartitionInfo> partitionInfos : register(t8);
 [numthreads(32, 1, 1)] 
 void main(uint3 dtID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
 {
-    uint threadID = 32 * (groupID.x + groupID.y * 65536) + groupIndex;
+    uint threadID = 32 * (groupID.x + groupID.y * globals[GLOBALS_ALLOCATE_INSTANCE_INDIRECT_X]) + groupIndex;
     if (threadID >= globals[GLOBALS_ALLOCATED_INSTANCE_COUNT_INDEX]) return;
 
     uint instanceIndex = allocatedInstances[threadID];
+
+#if 0
+    if (groupID.y == 1)
+    {
+        if (gpuInstances[instanceIndex].flags & GPU_INSTANCE_FLAG_WAS_RENDERED)
+        {
+            globals[GLOBALS_DEBUG] = 10;
+        }
+    }
+#endif
+
     GPUInstance instance = gpuInstances[instanceIndex];
 
     uint64_t address = 0;

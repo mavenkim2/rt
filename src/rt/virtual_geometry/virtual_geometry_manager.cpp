@@ -25,10 +25,10 @@ static_assert(sizeof(PTLAS_UPDATE_INSTANCE_INFO) ==
 
 VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u32 targetHeight,
                                                u32 numBlas)
-    : meshInfos(arena, maxInstances), numInstances(0), numAllocatedPartitions(0),
-      virtualInstanceOffset(0), voxelAddressOffset(0), clusterLookupTableOffset(0),
-      currentClusterTotal(0), currentGeoMemoryTotal(0), totalNumVirtualPages(0),
-      totalNumNodes(0), lruHead(-1), lruTail(-1), resourceSharingInfoOffset(0)
+    : meshInfos(arena, maxInstances), virtualInstanceOffset(0), voxelAddressOffset(0),
+      clusterLookupTableOffset(0), currentClusterTotal(0), currentGeoMemoryTotal(0),
+      totalNumVirtualPages(0), totalNumNodes(0), lruHead(-1), lruTail(-1),
+      resourceSharingInfoOffset(0)
 {
     string decodeDgfClustersName   = "../src/shaders/decode_dgf_clusters.spv";
     string decodeDgfClustersData   = OS_ReadFile(arena, decodeDgfClustersName);
@@ -130,7 +130,8 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
     string reprojectDepthShaderData = OS_ReadFile(arena, reprojectDepthShaderName);
     Shader reprojectDepthShader = device->CreateShader(ShaderStage::Compute, "reproject depth",
                                                        reprojectDepthShaderData);
-    // string generateMipsShaderName = "../src/shaders/generate_mips_naive.spv";
+
+    ScratchArena scratch;
 
     // initialize instance free list
     for (int i = 0; i <= 1; i++)
@@ -143,7 +144,7 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
         "initialize instance free list");
 
     // update partitions
-    for (int i = 0; i <= 0; i++)
+    for (int i = 0; i <= 1; i++)
     {
         ptlasUpdatePartitionsLayout.AddBinding(i, DescriptorType::StorageBuffer,
                                                VK_SHADER_STAGE_COMPUTE_BIT);
@@ -309,7 +310,7 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
     freeInstancesPush.size   = sizeof(NumPushConstant);
     freeInstancesPush.offset = 0;
     freeInstancesPush.stage  = ShaderStage::Compute;
-    for (int i = 0; i <= 4; i++)
+    for (int i = 0; i <= 6; i++)
     {
         freeInstancesLayout.AddBinding(i, DescriptorType::StorageBuffer,
                                        VK_SHADER_STAGE_COMPUTE_BIT);
@@ -319,7 +320,7 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
                                       &freeInstancesPush, "free instances pipeline");
 
     // allocate instances
-    for (int i = 0; i <= 8; i++)
+    for (int i = 0; i <= 9; i++)
     {
         allocateInstancesLayout.AddBinding(i, DescriptorType::StorageBuffer,
                                            VK_SHADER_STAGE_COMPUTE_BIT);
@@ -456,9 +457,6 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
         sizeof(u32) * numBlas);
 
-    resourceBitVector = rg->CreateBufferResource("resource bit vector buffer",
-                                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1024);
-
     ptlasIndirectCommandBuffer = rg->CreateBufferResource(
         "ptlas indirect buffer",
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
@@ -520,7 +518,6 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
                                  VK_IMAGE_TILING_OPTIMAL);
     depthPyramid     = rg->CreateImageResource("depth pyramid", depthPyramidDesc);
 
-    ScratchArena scratch;
     StaticArray<Subresource> subresources(scratch.temp.arena, numLevels);
     for (u32 i = 0; i < numLevels; i++)
     {
@@ -957,128 +954,151 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, ResourceHandle
 {
     RenderGraph *rg = GetRenderGraph();
     MergedInstancesPushConstant pc;
-    pc.num        = maxPartitions;
-    pc.firstFrame = device->frameCount == 0;
+    pc.num   = maxPartitions;
+    pc.frame = device->frameCount;
 
-    rg->StartComputePass(
-          mergedInstancesTestPipeline, mergedInstancesTestLayout, 7,
-          [maxPartitions = this->maxPartitions, &infos = this->partitionInfosBuffer,
-           sceneBuffer, visiblePartitions              = this->visiblePartitionsBuffer,
-           freePartitions = this->evictedPartitionsBuffer](CommandBuffer *cmd) {
-              device->BeginEvent(cmd, "Merged Instances Test");
-              cmd->Dispatch((maxPartitions + 31) / 32, 1, 1);
-              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                           VK_ACCESS_2_SHADER_WRITE_BIT,
-                           VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
-              cmd->FlushBarriers();
-              device->EndEvent(cmd);
-          },
-          &mergedInstancesTestPush, &pc)
-        .AddHandle(partitionInfosBufferHandle, ResourceUsageType::RW)
-        .AddHandle(clasGlobalsBufferHandle, ResourceUsageType::Write)
-        .AddHandle(visiblePartitionsBuffer, ResourceUsageType::Write)
-        .AddHandle(evictedPartitionsBuffer, ResourceUsageType::Write)
-        .AddHandle(instanceFreeListBufferHandle, ResourceUsageType::RW)
-        .AddHandle(sceneBuffer, ResourceUsageType::Read)
-        .AddHandle(depthPyramid, ResourceUsageType::Read);
-
-    NumPushConstant freeInstancesPc;
-    freeInstancesPc.num = maxInstances;
-    rg->StartComputePass(
-          freeInstancesPipeline, freeInstancesLayout, 5,
-          [maxInstances = this->maxInstances](CommandBuffer *cmd) {
-              device->BeginEvent(cmd, "Free instances");
-              cmd->Dispatch(maxInstances / 128, 1, 1);
-              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                           VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
+    if (1)
+    {
+        rg->StartComputePass(
+              mergedInstancesTestPipeline, mergedInstancesTestLayout, 7,
+              [maxPartitions = this->maxPartitions, &infos = this->partitionInfosBuffer,
+               sceneBuffer, visiblePartitions              = this->visiblePartitionsBuffer,
+               freePartitions = this->evictedPartitionsBuffer](CommandBuffer *cmd) {
+                  device->BeginEvent(cmd, "Merged Instances Test");
+                  cmd->Dispatch((maxPartitions + 31) / 32, 1, 1);
+                  cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                           VK_ACCESS_2_SHADER_WRITE_BIT,
-                           VK_ACCESS_2_SHADER_READ_BIT |
-                               VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
-              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                           VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-              cmd->FlushBarriers();
-              device->EndEvent(cmd);
-          },
-          &freeInstancesPush, &freeInstancesPc)
-        .AddHandle(instancesBufferHandle, ResourceUsageType::RW)
-        .AddHandle(evictedPartitionsBuffer, ResourceUsageType::Read)
-        .AddHandle(clasGlobalsBufferHandle, ResourceUsageType::RW)
-        .AddHandle(instanceFreeListBufferHandle, ResourceUsageType::RW)
-        .AddHandle(freedInstancesBuffer, ResourceUsageType::RW);
+                               VK_ACCESS_2_SHADER_WRITE_BIT,
+                               VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
+                  cmd->FlushBarriers();
+                  device->EndEvent(cmd);
+              },
+              &mergedInstancesTestPush, &pc)
+            .AddHandle(partitionInfosBufferHandle, ResourceUsageType::RW)
+            .AddHandle(clasGlobalsBufferHandle, ResourceUsageType::Write)
+            .AddHandle(visiblePartitionsBuffer, ResourceUsageType::Write)
+            .AddHandle(evictedPartitionsBuffer, ResourceUsageType::Write)
+            .AddHandle(instanceFreeListBufferHandle, ResourceUsageType::RW)
+            .AddHandle(sceneBuffer, ResourceUsageType::Read)
+            .AddHandle(depthPyramid, ResourceUsageType::Read);
 
-    rg->StartComputePass(
-          allocateInstancesPipeline, allocateInstancesLayout, 9,
-          [maxPartitions      = this->maxPartitions,
-           &clasGlobalsBuffer = this->clasGlobalsBuffer](CommandBuffer *cmd) {
-              device->BeginEvent(cmd, "Allocate instances");
-              cmd->Dispatch((maxPartitions + 31) / 32, 1, 1);
-              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                           VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                           VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-              cmd->FlushBarriers();
-              device->EndEvent(cmd);
+        NumPushConstant freeInstancesPc;
+        freeInstancesPc.num = maxInstances;
+        rg->StartComputePass(
+              freeInstancesPipeline, freeInstancesLayout, 7,
+              [maxInstances = this->maxInstances](CommandBuffer *cmd) {
+                  device->BeginEvent(cmd, "Free instances");
+                  cmd->Dispatch(maxInstances / 128, 1, 1);
+                  cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                               VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
+                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                               VK_ACCESS_2_SHADER_WRITE_BIT,
+                               VK_ACCESS_2_SHADER_READ_BIT |
+                                   VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+                  cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                               VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+                  cmd->FlushBarriers();
+                  device->EndEvent(cmd);
+              },
+              &freeInstancesPush, &freeInstancesPc)
+            .AddHandle(instancesBufferHandle, ResourceUsageType::RW)
+            .AddHandle(evictedPartitionsBuffer, ResourceUsageType::Read)
+            .AddHandle(clasGlobalsBufferHandle, ResourceUsageType::RW)
+            .AddHandle(instanceFreeListBufferHandle, ResourceUsageType::RW)
+            .AddHandle(freedInstancesBuffer, ResourceUsageType::RW)
+            .AddHandle(instanceBitVectorHandle, ResourceUsageType::Write)
+            .AddHandle(visiblePartitionsBuffer, ResourceUsageType::Read);
 
-              // if (debug) // numBlas - 1)
-              // {
-              //     // RenderGraph *rg   = GetRenderGraph();
-              //     GPUBuffer readback0 =
-              //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-              //                              clasGlobalsBuffer.size, MemoryUsage::GPU_TO_CPU);
-              //     cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-              //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-              //                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-              //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-              //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-              //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-              //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-              //     // cmd->Barrier(
-              //     //     img, VK_IMAGE_LAYOUT_GENERAL,
-              //     //     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-              //     //     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-              //     // VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-              //     //     VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-              //     //     QueueType_Ignored, QueueType_Ignored, level, 1);
-              //
-              //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-              //     //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-              //     //     // VK_ACCESS_2_SHADER_WRITE_BIT,
-              //     //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-              //     cmd->FlushBarriers();
-              //
-              //     // BufferImageCopy copy = {};
-              //     // copy.mipLevel        = level;
-              //     // copy.extent          = Vec3u(width, height, 1);
-              //
-              //     cmd->CopyBuffer(&readback0, &clasGlobalsBuffer);
-              //     // cmd->CopyBuffer(&readback2, buffer1);
-              //     // cmd->CopyImageToBuffer(&readback0, img, &copy, 1);
-              //     Semaphore testSemaphore   = device->CreateSemaphore();
-              //     testSemaphore.signalValue = 1;
-              //     cmd->SignalOutsideFrame(testSemaphore);
-              //     device->SubmitCommandBuffer(cmd);
-              //     device->Wait(testSemaphore);
-              //
-              //     u32 *data = (u32 *)readback0.mappedPtr;
-              //     Print("%u\n", data[GLOBALS_ALLOCATED_INSTANCE_COUNT_INDEX]);
-              //
-              //     int stop = 5;
-              // }
-          })
-        .AddHandle(visiblePartitionsBuffer, ResourceUsageType::Read)
-        .AddHandle(clasGlobalsBufferHandle, ResourceUsageType::RW)
-        .AddHandle(instanceTransformsBufferHandle, ResourceUsageType::Read)
-        .AddHandle(partitionInfosBufferHandle, ResourceUsageType::Read)
-        .AddHandle(instanceFreeListBufferHandle, ResourceUsageType::RW)
-        .AddHandle(instancesBufferHandle, ResourceUsageType::Write)
-        .AddHandle(resourceBufferHandle, ResourceUsageType::Read)
-        .AddHandle(instanceResourceIDsBufferHandle, ResourceUsageType::Read)
-        .AddHandle(allocatedInstancesBuffer, ResourceUsageType::Write);
+        rg->StartComputePass(
+              allocateInstancesPipeline, allocateInstancesLayout, 10,
+              [maxPartitions      = this->maxPartitions,
+               &clasGlobalsBuffer = this->clasGlobalsBuffer](CommandBuffer *cmd) {
+                  device->BeginEvent(cmd, "Allocate instances");
+                  cmd->Dispatch((maxPartitions + 31) / 32, 1, 1);
+                  cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                               VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+                  cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                               VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+                  cmd->FlushBarriers();
+                  device->EndEvent(cmd);
+
+                  // if (debug) // numBlas - 1)
+                  // {
+                  //     // RenderGraph *rg   = GetRenderGraph();
+                  //     GPUBuffer readback0 =
+                  //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                  //                              clasGlobalsBuffer.size,
+                  //                              MemoryUsage::GPU_TO_CPU);
+                  //     cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                  //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                  //                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                  //                  VK_ACCESS_2_TRANSFER_READ_BIT);
+                  //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                  //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                  //                  VK_ACCESS_2_SHADER_WRITE_BIT,
+                  //                  VK_ACCESS_2_TRANSFER_READ_BIT);
+                  //     // cmd->Barrier(
+                  //     //     img, VK_IMAGE_LAYOUT_GENERAL,
+                  //     //     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                  //     //     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                  //     // VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                  //     //     VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                  //     //     QueueType_Ignored, QueueType_Ignored, level, 1);
+                  //
+                  //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                  //     //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                  //     //     // VK_ACCESS_2_SHADER_WRITE_BIT,
+                  //     //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
+                  //     cmd->FlushBarriers();
+                  //
+                  //     // BufferImageCopy copy = {};
+                  //     // copy.mipLevel        = level;
+                  //     // copy.extent          = Vec3u(width, height, 1);
+                  //
+                  //     cmd->CopyBuffer(&readback0, &clasGlobalsBuffer);
+                  //     // cmd->CopyBuffer(&readback2, buffer1);
+                  //     // cmd->CopyImageToBuffer(&readback0, img, &copy, 1);
+                  //     Semaphore testSemaphore   = device->CreateSemaphore();
+                  //     testSemaphore.signalValue = 1;
+                  //     cmd->SignalOutsideFrame(testSemaphore);
+                  //     device->SubmitCommandBuffer(cmd);
+                  //     device->Wait(testSemaphore);
+                  //
+                  //     u32 *data = (u32 *)readback0.mappedPtr;
+                  //     Print("%u\n", data[GLOBALS_ALLOCATED_INSTANCE_COUNT_INDEX]);
+                  //
+                  //     int stop = 5;
+                  // }
+              })
+            .AddHandle(visiblePartitionsBuffer, ResourceUsageType::Read)
+            .AddHandle(clasGlobalsBufferHandle, ResourceUsageType::RW)
+            .AddHandle(instanceTransformsBufferHandle, ResourceUsageType::Read)
+            .AddHandle(partitionInfosBufferHandle, ResourceUsageType::RW)
+            .AddHandle(instanceFreeListBufferHandle, ResourceUsageType::RW)
+            .AddHandle(instancesBufferHandle, ResourceUsageType::Write)
+            .AddHandle(resourceBufferHandle, ResourceUsageType::Read)
+            .AddHandle(instanceResourceIDsBufferHandle, ResourceUsageType::Read)
+            .AddHandle(allocatedInstancesBuffer, ResourceUsageType::Write)
+            .AddHandle(instanceBitVectorHandle, ResourceUsageType::Read);
+
+        // Reset free list counts to 0 if they're negative
+        rg->StartComputePass(ptlasUpdatePartitionsPipeline, ptlasUpdatePartitionsLayout, 2,
+                             [](CommandBuffer *cmd) {
+                                 cmd->Dispatch(1, 1, 1);
+
+                                 cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                              VK_ACCESS_2_SHADER_WRITE_BIT,
+                                              VK_ACCESS_2_SHADER_WRITE_BIT |
+                                                  VK_ACCESS_2_SHADER_READ_BIT);
+                                 cmd->FlushBarriers();
+                             })
+            .AddHandle(instanceFreeListBufferHandle, ResourceUsageType::RW)
+            .AddHandle(clasGlobalsBufferHandle, ResourceUsageType::Write);
+    }
 }
 
 void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *debug)
@@ -1113,35 +1133,20 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *debug)
         .AddHandle(instanceTransformsBufferHandle, ResourceUsageType::Read)
         .AddHandle(partitionInfosBufferHandle, ResourceUsageType::Read);
 
-    // Reset free list counts to 0 if they're negative
-    // {
-    //     cmd->StartBindingCompute(ptlasUpdatePartitionsPipeline,
-    //     &ptlasUpdatePartitionsLayout)
-    //         .Bind(&instanceIDFreeListBuffer)
-    //         .End();
-    //     cmd->Dispatch(1, 1, 1);
-    //
-    //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-    //                  VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-    //                  VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_WRITE_BIT |
-    //                  VK_ACCESS_2_SHADER_READ_BIT);
-    //     cmd->FlushBarriers();
-    // }
-
-    rg->StartIndirectComputePass(
-          "PTLAS Update Unused Instances", ptlasUpdateUnusedInstancesPipeline,
-          ptlasUpdateUnusedInstancesLayout, 4, clasGlobalsBufferHandle,
-          sizeof(u32) * GLOBALS_FREED_INSTANCE_INDIRECT_X,
-          [maxInstances = this->maxInstances](CommandBuffer *cmd) {
-              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                           VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-              cmd->FlushBarriers();
-          })
-        .AddHandle(instancesBufferHandle, ResourceUsageType::Read)
-        .AddHandle(clasGlobalsBufferHandle, ResourceUsageType::Write)
-        .AddHandle(ptlasWriteInfosBuffer, ResourceUsageType::Write)
-        .AddHandle(freedInstancesBuffer, ResourceUsageType::Write);
+    // rg->StartIndirectComputePass(
+    //       "PTLAS Update Unused Instances", ptlasUpdateUnusedInstancesPipeline,
+    //       ptlasUpdateUnusedInstancesLayout, 4, clasGlobalsBufferHandle,
+    //       sizeof(u32) * GLOBALS_FREED_INSTANCE_INDIRECT_X,
+    //       [maxInstances = this->maxInstances](CommandBuffer *cmd) {
+    //           cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+    //                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+    //                        VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+    //           cmd->FlushBarriers();
+    //       })
+    //     .AddHandle(instancesBufferHandle, ResourceUsageType::Read)
+    //     .AddHandle(clasGlobalsBufferHandle, ResourceUsageType::Write)
+    //     .AddHandle(ptlasWriteInfosBuffer, ResourceUsageType::Write)
+    //     .AddHandle(freedInstancesBuffer, ResourceUsageType::Write);
 
     // Update command infos
     rg->StartComputePass(
@@ -1345,10 +1350,15 @@ static Vec4f MatrixToQuat(AffineSpace &m)
 
 bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
                                           StaticArray<Instance> &inputInstances,
-                                          StaticArray<AffineSpace> &transforms)
+                                          StaticArray<AffineSpace> &transforms,
+                                          string filename)
 {
     ScratchArena scratch(&arena, 1);
     scratch.temp.arena->align = 16;
+
+    instanceBitVectorHandle = GetRenderGraph()->CreateBufferResource(
+        "instance bit vector", VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        (inputInstances.Length() + 7) / 8);
 
     StaticArray<PrimRef> refs(scratch.temp.arena, inputInstances.Length());
 
@@ -1356,110 +1366,190 @@ bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
     Bounds cent;
     RecordAOSSplits record;
 
-    for (int i = 0; i < inputInstances.Length(); i++)
+    string outFilename =
+        PushStr8F(scratch.temp.arena, "%S.instances", RemoveFileExtension(filename));
+    Print("%S\n", outFilename);
+
+    if (0) // OS_FileExists(outFilename))
     {
-        Instance &instance = inputInstances[i];
+        string instanceData = OS_ReadFile(arena, outFilename);
+        Tokenizer tokenizer;
+        tokenizer.input  = instanceData;
+        tokenizer.cursor = instanceData.str;
 
-        MeshInfo &meshInfo = meshInfos[instance.id];
-        if (meshInfo.ellipsoid.sphere.w == 0.f) continue;
+        u32 numInstances;
+        GetPointerValue(&tokenizer, &numInstances);
 
-        u32 resourceIndex = instance.id;
+        if (numInstances != inputInstances.Length())
+        {
+            ErrorExit(0, "Instance file is out of date\n");
+        }
 
-        Bounds bounds(meshInfos[resourceIndex].boundsMin, meshInfos[resourceIndex].boundsMax);
-        AffineSpace &transform = transforms[instance.transformIndex];
+        u32 numPartitions, numTransforms;
+        GetPointerValue(&tokenizer, &numPartitions);
+        maxPartitions = numPartitions;
 
-        bounds = Transform(transform, bounds);
+        GetPointerValue(&tokenizer, &numTransforms);
+        numTransforms = transforms.Length();
 
-        PrimRef ref;
-        ref.minX   = -bounds.minP[0];
-        ref.minY   = -bounds.minP[1];
-        ref.minZ   = -bounds.minP[2];
-        ref.maxX   = bounds.maxP[0];
-        ref.maxY   = bounds.maxP[1];
-        ref.maxZ   = bounds.maxP[2];
-        ref.primID = i;
+        if (numTransforms != transforms.Length())
+        {
+            ErrorExit(0, "Instance file is out of date\n");
+        }
 
-        refs.Push(ref);
+        partitionInstanceGraph.offsets = PushArray(arena, u32, numPartitions + 1);
+        partitionInstanceGraph.data =
+            PushArrayNoZero(arena, Instance, partitionInstanceGraph.offsets[numPartitions]);
 
-        geom.Extend(bounds);
-        cent.Extend(bounds.minP + bounds.maxP);
+        MemoryCopy(partitionInstanceGraph.offsets, tokenizer.cursor,
+                   sizeof(u32) * (numPartitions + 1));
+        Advance(&tokenizer, sizeof(u32) * (numPartitions + 1));
+        MemoryCopy(partitionInstanceGraph.data, tokenizer.cursor,
+                   sizeof(Instance) * partitionInstanceGraph.offsets[numPartitions]);
+        Advance(&tokenizer, sizeof(Instance) * partitionInstanceGraph.offsets[numPartitions]);
+
+        MemoryCopy(transforms.data, tokenizer.cursor, sizeof(AffineSpace) * numTransforms);
     }
-    record.geomBounds = Lane8F32(-geom.minP, geom.maxP);
-    record.centBounds = Lane8F32(-cent.minP, cent.maxP);
-    record.SetRange(0, refs.Length());
-
-    std::atomic<u32> numPartitions = 0;
-    StaticArray<u32> partitionIndices(scratch.temp.arena, inputInstances.Length(),
-                                      inputInstances.Length());
-    StaticArray<RecordAOSSplits> records(scratch.temp.arena, inputInstances.Length(),
-                                         inputInstances.Length());
-
-    bool parallel = inputInstances.Length() >= BUILD_PARALLEL_THRESHOLD;
-
-    if (refs.Length())
+    else
     {
-        BuildHierarchy(refs.data, record, numPartitions, partitionIndices, records, parallel);
+        StringBuilderMapped builder(outFilename);
+
+        for (int i = 0; i < inputInstances.Length(); i++)
+        {
+            Instance &instance = inputInstances[i];
+
+            MeshInfo &meshInfo = meshInfos[instance.id];
+            if (meshInfo.ellipsoid.sphere.w == 0.f) continue;
+
+            u32 resourceIndex = instance.id;
+
+            Bounds bounds(meshInfos[resourceIndex].boundsMin,
+                          meshInfos[resourceIndex].boundsMax);
+            AffineSpace &transform = transforms[instance.transformIndex];
+
+            bounds = Transform(transform, bounds);
+
+            PrimRef ref;
+            ref.minX   = -bounds.minP[0];
+            ref.minY   = -bounds.minP[1];
+            ref.minZ   = -bounds.minP[2];
+            ref.maxX   = bounds.maxP[0];
+            ref.maxY   = bounds.maxP[1];
+            ref.maxZ   = bounds.maxP[2];
+            ref.primID = i;
+
+            refs.Push(ref);
+
+            geom.Extend(bounds);
+            cent.Extend(bounds.minP + bounds.maxP);
+        }
+        record.geomBounds = Lane8F32(-geom.minP, geom.maxP);
+        record.centBounds = Lane8F32(-cent.minP, cent.maxP);
+        record.SetRange(0, refs.Length());
+
+        std::atomic<u32> numPartitions = 0;
+        StaticArray<u32> partitionIndices(scratch.temp.arena, inputInstances.Length(),
+                                          inputInstances.Length());
+        StaticArray<RecordAOSSplits> records(scratch.temp.arena, inputInstances.Length(),
+                                             inputInstances.Length());
+
+        bool parallel = inputInstances.Length() >= BUILD_PARALLEL_THRESHOLD;
+
+        if (refs.Length())
+        {
+            BuildHierarchy(refs.data, record, numPartitions, partitionIndices, records,
+                           parallel);
+        }
+
+        // Repeat with non ellipsoid instances
+        refs.Clear();
+        geom   = Bounds();
+        cent   = Bounds();
+        record = RecordAOSSplits();
+        for (int i = 0; i < inputInstances.Length(); i++)
+        {
+            Instance &instance = inputInstances[i];
+
+            MeshInfo &meshInfo = meshInfos[instance.id];
+            if (meshInfo.ellipsoid.sphere.w != 0.f) continue;
+
+            u32 resourceIndex = instance.id;
+
+            Bounds bounds(meshInfos[resourceIndex].boundsMin,
+                          meshInfos[resourceIndex].boundsMax);
+            AffineSpace &transform = transforms[instance.transformIndex];
+
+            bounds = Transform(transform, bounds);
+
+            PrimRef ref;
+            ref.minX   = -bounds.minP[0];
+            ref.minY   = -bounds.minP[1];
+            ref.minZ   = -bounds.minP[2];
+            ref.maxX   = bounds.maxP[0];
+            ref.maxY   = bounds.maxP[1];
+            ref.maxZ   = bounds.maxP[2];
+            ref.primID = i;
+
+            refs.Push(ref);
+
+            geom.Extend(bounds);
+            cent.Extend(bounds.minP + bounds.maxP);
+        }
+        record.geomBounds = Lane8F32(-geom.minP, geom.maxP);
+        record.centBounds = Lane8F32(-cent.minP, cent.maxP);
+        record.SetRange(0, refs.Length());
+
+        if (refs.Length())
+        {
+            BuildHierarchy(refs.data, record, numPartitions, partitionIndices, records,
+                           parallel);
+        }
+
+        partitionInstanceGraph.InitializeStatic(
+            arena, inputInstances.Length(), numPartitions.load(),
+            [&](u32 instanceIndex, u32 *offsets, Instance *data = 0) {
+                u32 partition = partitionIndices[instanceIndex];
+                u32 dataIndex = offsets[partition]++;
+                if (data)
+                {
+                    data[dataIndex] = inputInstances[instanceIndex];
+                }
+                return 1;
+            });
+
+        maxPartitions = numPartitions.load();
+
+#if 0
+        u64 numInstanceOffset = AllocateSpace(&builder, sizeof(Vec3u));
+        u32 numInstances      = inputInstances.Length();
+        u32 numTransforms     = transforms.Length();
+        void *ptr             = GetMappedPtr(&builder, numInstanceOffset);
+        MemoryCopy(ptr, &numInstances, sizeof(u32));
+        MemoryCopy((u32 *)ptr + 1, &maxPartitions, sizeof(u32));
+        MemoryCopy((u32 *)ptr + 2, &numTransforms, sizeof(u32));
+
+        u64 offsetsOffset = AllocateSpace(&builder, sizeof(u32) * (maxPartitions + 1));
+        ptr               = GetMappedPtr(&builder, offsetsOffset);
+        MemoryCopy(ptr, partitionInstanceGraph.offsets, sizeof(u32) * (maxPartitions + 1));
+
+        u64 dataOffset = AllocateSpace(
+            &builder, sizeof(Instance) * partitionInstanceGraph.offsets[maxPartitions]);
+        ptr = GetMappedPtr(&builder, dataOffset);
+        MemoryCopy(ptr, partitionInstanceGraph.data,
+                   sizeof(Instance) * partitionInstanceGraph.offsets[maxPartitions]);
+
+        u64 transformOffset =
+            AllocateSpace(&builder, sizeof(AffineSpace) * transforms.Length());
+        ptr = GetMappedPtr(&builder, transformOffset);
+        MemoryCopy(ptr, transforms.data, sizeof(AffineSpace) * transforms.Length());
+
+        OS_UnmapFile(builder.ptr);
+        OS_ResizeFile(builder.filename, builder.totalSize);
+#endif
     }
 
-    // Repeat with non ellipsoid instances
-    refs.Clear();
-    geom   = Bounds();
-    cent   = Bounds();
-    record = RecordAOSSplits();
-    for (int i = 0; i < inputInstances.Length(); i++)
-    {
-        Instance &instance = inputInstances[i];
-
-        MeshInfo &meshInfo = meshInfos[instance.id];
-        if (meshInfo.ellipsoid.sphere.w != 0.f) continue;
-
-        u32 resourceIndex = instance.id;
-
-        Bounds bounds(meshInfos[resourceIndex].boundsMin, meshInfos[resourceIndex].boundsMax);
-        AffineSpace &transform = transforms[instance.transformIndex];
-
-        bounds = Transform(transform, bounds);
-
-        PrimRef ref;
-        ref.minX   = -bounds.minP[0];
-        ref.minY   = -bounds.minP[1];
-        ref.minZ   = -bounds.minP[2];
-        ref.maxX   = bounds.maxP[0];
-        ref.maxY   = bounds.maxP[1];
-        ref.maxZ   = bounds.maxP[2];
-        ref.primID = i;
-
-        refs.Push(ref);
-
-        geom.Extend(bounds);
-        cent.Extend(bounds.minP + bounds.maxP);
-    }
-    record.geomBounds = Lane8F32(-geom.minP, geom.maxP);
-    record.centBounds = Lane8F32(-cent.minP, cent.maxP);
-    record.SetRange(0, refs.Length());
-
-    if (refs.Length())
-    {
-        BuildHierarchy(refs.data, record, numPartitions, partitionIndices, records, parallel);
-    }
-
-    partitionInstanceGraph.InitializeStatic(
-        arena, inputInstances.Length(), numPartitions.load(),
-        [&](u32 instanceIndex, u32 *offsets, Instance *data = 0) {
-            u32 partition = partitionIndices[instanceIndex];
-            u32 dataIndex = offsets[partition]++;
-            if (data)
-            {
-                data[dataIndex] = inputInstances[instanceIndex];
-            }
-            return 1;
-        });
-
-    u32 finalNumPartitions = numPartitions.load();
-    maxPartitions          = finalNumPartitions;
-
-    allocatedPartitionIndices =
-        StaticArray<u32>(arena, finalNumPartitions, finalNumPartitions);
+    u32 finalNumPartitions    = maxPartitions;
+    allocatedPartitionIndices = StaticArray<u32>(arena, maxPartitions, finalNumPartitions);
     MemorySet(allocatedPartitionIndices.data, 0xff, sizeof(u32) * finalNumPartitions);
 
     StaticArray<AccelBuildInfo> accelBuildInfos(scratch.temp.arena, finalNumPartitions);
@@ -1523,7 +1613,7 @@ bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
                 float maxScale = Sqrt(Max(scaleX, Max(scaleY, scaleZ)));
 
                 float error         = Max(extent.x, Max(extent.y, extent.z));
-                float instanceError = error * maxScale;
+                float instanceError = error * minScale;
 
                 maxError = Max(maxError, instanceError);
 

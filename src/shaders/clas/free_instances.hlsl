@@ -6,6 +6,9 @@ RWStructuredBuffer<uint> globals : register(u2);
 RWStructuredBuffer<uint> instanceFreeList : register(u3);
 RWStructuredBuffer<uint> freedInstances : register(u4);
 
+RWStructuredBuffer<uint> instanceBitVector : register(u5);
+StructuredBuffer<uint> visiblePartitions : register(t6);
+
 [[vk::push_constant]] NumPushConstant pc;
 
 [numthreads(128, 1, 1)]
@@ -19,8 +22,15 @@ void main(uint3 dtID : SV_DispatchThreadID)
     {
         uint partition = freedPartitions[i].x;
         uint flags = freedPartitions[i].y;
-        if (instance.partitionIndex == partition && ((instance.flags & GPU_INSTANCE_FLAG_FREED) == 0)
-            && (instance.flags & flags))
+
+        if (instance.partitionIndex == partition && (instance.flags & flags))
+        {
+            InterlockedAdd(globals[GLOBALS_DEBUG], 1);
+        }
+
+        //if (instance.partitionIndex == partition && ((instance.flags & GPU_INSTANCE_FLAG_FREED) == 0)
+            //&& (instance.flags & flags))
+        if (instance.partitionIndex == partition && (instance.flags & flags))
         {
             uint instanceFreeListIndex;
             InterlockedAdd(instanceFreeList[0], 1, instanceFreeListIndex);
@@ -31,6 +41,17 @@ void main(uint3 dtID : SV_DispatchThreadID)
             InterlockedAdd(globals[GLOBALS_FREED_INSTANCE_COUNT_INDEX], 1, freedIndexIndex);
             freedInstances[freedIndexIndex] = instanceIndex;
             return;
+        }
+    }
+    for (uint i = 0; i < globals[GLOBALS_VISIBLE_PARTITION_COUNT]; i++)
+    {
+        uint partition = visiblePartitions[i];
+        if (instance.partitionIndex == partition)
+        {
+            instances[instanceIndex].flags &= ~GPU_INSTANCE_FLAG_FREED;
+
+            uint transformOffset = instances[instanceIndex].transformIndex;
+            InterlockedOr(instanceBitVector[transformOffset >> 5u], 1u << (transformOffset & 31u));
         }
     }
 }

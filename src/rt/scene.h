@@ -630,6 +630,7 @@ struct MaterialNode
 struct RenderParams2
 {
     string directory;
+    string filename;
     Vec3f pCamera;
     Vec3f look;
     Vec3f up;

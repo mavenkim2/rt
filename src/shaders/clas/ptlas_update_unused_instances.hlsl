@@ -17,6 +17,7 @@ void main(uint dtID : SV_DispatchThreadID)
         uint descriptorIndex;
 
         InterlockedAdd(globals[GLOBALS_PTLAS_WRITE_COUNT_INDEX], 1, descriptorIndex);
+        InterlockedAdd(globals[GLOBALS_INSTANCE_UNUSED_COUNT], 1);
 
         gpuInstances[instanceIndex].flags &= ~GPU_INSTANCE_FLAG_WAS_RENDERED;
         PTLAS_WRITE_INSTANCE_INFO instanceInfo = (PTLAS_WRITE_INSTANCE_INFO)0;

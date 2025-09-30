@@ -35,45 +35,42 @@ void main(uint3 dtID : SV_DispatchThreadID)
     float error = info.lodError;
     float4 lodBounds = info.lodBounds;
 
-    if ((flags & PARTITION_FLAG_HAS_PROXIES))
+    if (flags & PARTITION_FLAG_HAS_PROXIES)
     {
-        //useProxies = true;
-        float3 minP = lodBounds.xyz - lodBounds.w;
-        float3 maxP = lodBounds.xyz + lodBounds.w;
-
-        float4 aabb;
-        float maxZ;
-        float test;
-        bool cull = FrustumCull(gpuScene.clipFromRender, renderFromObject, 
-                minP, maxP, gpuScene.p22, gpuScene.p23, aabb, maxZ, test);
-
-        useProxies = cull;
-
-#if 0
-        if (!cull && !pc.firstFrame)
+        if (pc.frame == 0)
         {
-            uint lod;
-            bool occluded = HZBOcclusionTest(aabb, maxZ, int2(gpuScene.width, gpuScene.height), lod);
-            useProxies = occluded;
-            partitionInfos[partitionIndex].debug0 = aabb;
-            partitionInfos[partitionIndex].debug1 = lod;
+            useProxies = true;
         }
-#endif
-        Translate(renderFromObject, -gpuScene.cameraP);
-        if (!useProxies)
+        else 
         {
+            float3 minP = lodBounds.xyz - lodBounds.w;
+            float3 maxP = lodBounds.xyz + lodBounds.w;
+
+            float4 aabb;
+            float maxZ;
             float test;
-            float2 edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, 1.f, test, false);
-            useProxies = error * gpuScene.lodScale < edgeScales.x;
+            bool cull = FrustumCull(gpuScene.clipFromRender, renderFromObject, 
+                    minP, maxP, gpuScene.p22, gpuScene.p23, aabb, maxZ, test);
+
+            useProxies = cull;
+
+            if (!cull)
+            {
+                uint lod;
+                bool occluded = HZBOcclusionTest(aabb, maxZ, int2(gpuScene.width, gpuScene.height), lod);
+                useProxies = occluded;
+                //partitionInfos[partitionIndex].debug0 = aabb;
+                //partitionInfos[partitionIndex].debug1 = lod;
+            }
+            if (!useProxies)
+            {
+                Translate(renderFromObject, -gpuScene.cameraP);
+                float test;
+                float2 edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, 1.f, test, false);
+                useProxies = error * gpuScene.lodScale < edgeScales.x;
+            }
         }
     }
-#if 0
-    else if ((flags & PARTITION_FLAG_HAS_PROXIES) && pc.firstFrame)
-    {
-        useProxies = true;
-    }
-
-#endif
 
     if (useProxies)
     {

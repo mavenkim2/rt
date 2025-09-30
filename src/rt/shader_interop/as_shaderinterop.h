@@ -253,7 +253,7 @@ struct DecodePushConstant
 struct MergedInstancesPushConstant
 {
     uint num;
-    uint firstFrame;
+    uint64_t frame;
 };
 
 struct FillClusterTriangleInfoPushConstant
@@ -494,7 +494,12 @@ struct VoxelAddressTableEntry
 #define GLOBALS_ALLOCATE_INSTANCE_INDIRECT_Y   35
 #define GLOBALS_ALLOCATE_INSTANCE_INDIRECT_Z   36
 
-#define GLOBALS_SIZE 37
+#define GLOBALS_INSTANCE_UNUSED_COUNT 37
+#define GLOBALS_DEBUG2                38
+
+#define GLOBALS_ALLOCATE_FROM_FREED_COUNT 39
+
+#define GLOBALS_SIZE 40
 
 #ifdef __cplusplus
 }

@@ -297,7 +297,8 @@ struct VirtualGeometryManager
 
     GPUBuffer resourceBuffer;
     ResourceHandle resourceBufferHandle;
-    ResourceHandle resourceBitVector;
+
+    ResourceHandle instanceBitVectorHandle;
 
     // ResourceHandle ptlasInstanceBitVectorBuffer;
     // ResourceHandle ptlasInstanceFrameBitVectorBuffer0;
@@ -371,8 +372,6 @@ struct VirtualGeometryManager
     u32 resourceSharingInfoOffset;
 
     u32 maxPartitions;
-    u32 numAllocatedPartitions;
-    u32 numInstances;
 
     VirtualGeometryManager(Arena *arena, u32 targetWidth, u32 targetHeight, u32 numBlas);
     void UpdateHZB();
@@ -388,7 +387,7 @@ struct VirtualGeometryManager
     void LinkLRU(int index);
 
     bool AddInstances(Arena *arena, CommandBuffer *cmd, StaticArray<Instance> &inputInstances,
-                      StaticArray<AffineSpace> &transforms);
+                      StaticArray<AffineSpace> &transforms, string filename);
     void BuildHierarchy(PrimRef *refs, RecordAOSSplits &record,
                         std::atomic<u32> &numPartitions, StaticArray<u32> &partitionIndices,
                         StaticArray<RecordAOSSplits> &records, bool parallel);

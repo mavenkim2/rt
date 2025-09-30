@@ -274,6 +274,7 @@ void TestRender(Arena *arena, Options *options = 0)
     params.dyCamera         = dyCamera;
     params.width            = width;
     params.height           = height;
+    params.filename         = options->filename;
     if (options)
     {
         if (options->pixelX != -1 && options->pixelY != -1)

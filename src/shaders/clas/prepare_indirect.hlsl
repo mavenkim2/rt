@@ -19,8 +19,8 @@ void main(uint3 dtID : SV_DispatchThreadID)
         clasGlobalsBuffer[GLOBALS_FREED_INSTANCE_INDIRECT_Z] = 1;
 
         uint numGroups = (clasGlobalsBuffer[GLOBALS_ALLOCATED_INSTANCE_COUNT_INDEX] + 31u) >> 5u;
-        uint numGroupsX = numGroups & 65535;
-        uint numGroupsY = (numGroups + 65535) / 65536;
+        uint numGroupsY = uint(ceil(numGroups / float(65535)));
+        uint numGroupsX = uint(ceil(numGroups / float(numGroupsY)));
         clasGlobalsBuffer[GLOBALS_ALLOCATE_INSTANCE_INDIRECT_X] = numGroupsX;
         clasGlobalsBuffer[GLOBALS_ALLOCATE_INSTANCE_INDIRECT_Y] = numGroupsY;
         clasGlobalsBuffer[GLOBALS_ALLOCATE_INSTANCE_INDIRECT_Z] = 1;
