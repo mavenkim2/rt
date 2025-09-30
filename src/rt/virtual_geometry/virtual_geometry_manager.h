@@ -244,6 +244,9 @@ struct VirtualGeometryManager
     DescriptorSetLayout allocateInstancesLayout = {};
     VkPipeline allocateInstancesPipeline;
 
+    DescriptorSetLayout compactFreeListLayout = {};
+    VkPipeline compactFreeListPipeline;
+
     DescriptorSetLayout generateMipsLayout = {};
     VkPipeline generateMipsPipeline        = {};
 
@@ -346,7 +349,9 @@ struct VirtualGeometryManager
     u32 numStreamedInstances;
 
     GPUBuffer instanceFreeListBuffer;
+    GPUBuffer instanceFreeListBuffer2;
     ResourceHandle instanceFreeListBufferHandle;
+    ResourceHandle instanceFreeListBuffer2Handle;
     ResourceHandle freedInstancesBuffer;
     ResourceHandle visiblePartitionsBuffer;
     ResourceHandle evictedPartitionsBuffer;

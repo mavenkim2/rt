@@ -944,7 +944,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     GPUBuffer readback = device->CreateBuffer(
         VK_BUFFER_USAGE_TRANSFER_DST_BIT, sizeof(u32) * GLOBALS_SIZE, MemoryUsage::GPU_TO_CPU);
     GPUBuffer readback2 = device->CreateBuffer(
-        VK_BUFFER_USAGE_TRANSFER_DST_BIT, sizeof(u32) * virtualGeometryManager.maxInstances,
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT, sizeof(u32) * (virtualGeometryManager.maxInstances),
         MemoryUsage::GPU_TO_CPU);
 
     Semaphore transferSem   = device->CreateSemaphore();
@@ -1085,26 +1085,29 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         gpuScene.dispatchDimX = dispatchDimX;
         gpuScene.dispatchDimY = dispatchDimY;
 
-        u32 *data = (u32 *)readback.mappedPtr;
+        u32 *data  = (u32 *)readback.mappedPtr;
+        u32 *data2 = (u32 *)readback2.mappedPtr;
         if (!device->BeginFrame(false))
         {
             ScratchArena scratch;
             BitVector bits(scratch.temp.arena, virtualGeometryManager.maxInstances);
-            u32 *data2 = (u32 *)readback2.mappedPtr;
             for (u32 i = 0; i < data[GLOBALS_ALLOCATED_INSTANCE_COUNT_INDEX]; i++)
             {
-                ErrorExit(data2[i] < virtualGeometryManager.maxInstances, "%u %u\n", data2[i],
-                          i);
                 if (bits.GetBit(data2[i]))
                 {
                     Print("duplicate: %u\n", data2[i]);
                 }
                 bits.SetBit(data2[i]);
             }
+            // Print("%u\n", data2[0]);
+            // for (u32 i = 0; i < data2[0]; i++)
+            // {
+            //     Print("%u ", data2[i + 1]);
+            // }
             Print("freed partition count: %u visible count: %u, writes: %u updates %u, "
                   "allocate: "
                   "%u freed: %u unused: %u debug: %u, free list count: %u, x: %u, y: %u, z: "
-                  "%u, leftover: %u\n",
+                  "%u, skipped: %u\n",
                   data[GLOBALS_FREED_PARTITION_COUNT], data[GLOBALS_VISIBLE_PARTITION_COUNT],
                   data[GLOBALS_PTLAS_WRITE_COUNT_INDEX],
                   data[GLOBALS_PTLAS_UPDATE_COUNT_INDEX],
@@ -1128,10 +1131,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         // data[GLOBALS_BLAS_CLAS_COUNT_INDEX],
         //       data[GLOBALS_VISIBLE_CLUSTER_COUNT_INDEX],
         //       data[GLOBALS_FREED_PARTITION_COUNT]);
+        // Print("%u\n", data2[0]);
         Print("freed partition count: %u visible count: %u, writes: %u updates %u, "
               "allocate: "
               "%u freed: %u unused: %u debug: %u, free list count: %u, x: %u, y: %u, z: "
-              "%u, leftover: %u\n",
+              "%u, skipped: %u\n",
               data[GLOBALS_FREED_PARTITION_COUNT], data[GLOBALS_VISIBLE_PARTITION_COUNT],
               data[GLOBALS_PTLAS_WRITE_COUNT_INDEX], data[GLOBALS_PTLAS_UPDATE_COUNT_INDEX],
               data[GLOBALS_ALLOCATED_INSTANCE_COUNT_INDEX],

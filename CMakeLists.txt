@@ -264,6 +264,7 @@ if (USE_GPU)
         "${SHADER_SRC_DIR}/clas/task.hlsl"
         "${SHADER_SRC_DIR}/clas/reproject_depth.hlsl"
         "${SHADER_SRC_DIR}/tex/generate_mips_naive.hlsl"
+        "${SHADER_SRC_DIR}/clas/compact_freelist.hlsl"
     )
     set_property(SOURCE 
         "${SHADER_SRC_DIR}/clas/task.hlsl"
@@ -299,6 +300,7 @@ if (USE_GPU)
         "${SHADER_SRC_DIR}/calculate_motion_vectors.hlsl"
         "${SHADER_SRC_DIR}/clas/reproject_depth.hlsl"
         "${SHADER_SRC_DIR}/tex/generate_mips_naive.hlsl"
+        "${SHADER_SRC_DIR}/clas/compact_freelist.hlsl"
         PROPERTY name "cs")
     
     file(GLOB_RECURSE SHADER_INCLUDES "${SHADER_SRC_DIR}/*.hlsl" "${SHADER_SRC_DIR}/*.hlsli")

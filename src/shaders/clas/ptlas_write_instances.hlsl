@@ -24,16 +24,6 @@ void main(uint3 dtID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint gro
 
     uint instanceIndex = allocatedInstances[threadID];
 
-#if 0
-    if (groupID.y == 1)
-    {
-        if (gpuInstances[instanceIndex].flags & GPU_INSTANCE_FLAG_WAS_RENDERED)
-        {
-            globals[GLOBALS_DEBUG] = 10;
-        }
-    }
-#endif
-
     GPUInstance instance = gpuInstances[instanceIndex];
 
     uint64_t address = 0;

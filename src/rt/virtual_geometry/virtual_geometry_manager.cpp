@@ -121,6 +121,11 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
     Shader allocateInstancesShader = device->CreateShader(
         ShaderStage::Compute, "allocate instances", allocateInstancesData);
 
+    string compactFreeListName = "../src/shaders/compact_freelist.spv";
+    string compactFreeListData = OS_ReadFile(arena, compactFreeListName);
+    Shader compactFreeListShader =
+        device->CreateShader(ShaderStage::Compute, "compact free list", compactFreeListData);
+
     string generateMipsShaderName = "../src/shaders/generate_mips_naive.spv";
     string generateMipsShaderData = OS_ReadFile(arena, generateMipsShaderName);
     Shader generateMipsShader =
@@ -310,7 +315,7 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
     freeInstancesPush.size   = sizeof(NumPushConstant);
     freeInstancesPush.offset = 0;
     freeInstancesPush.stage  = ShaderStage::Compute;
-    for (int i = 0; i <= 6; i++)
+    for (int i = 0; i <= 7; i++)
     {
         freeInstancesLayout.AddBinding(i, DescriptorType::StorageBuffer,
                                        VK_SHADER_STAGE_COMPUTE_BIT);
@@ -327,6 +332,15 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
     }
     allocateInstancesPipeline = device->CreateComputePipeline(
         &allocateInstancesShader, &allocateInstancesLayout, 0, "allocate instance pipeline");
+
+    //
+    for (int i = 0; i <= 2; i++)
+    {
+        compactFreeListLayout.AddBinding(i, DescriptorType::StorageBuffer,
+                                         VK_SHADER_STAGE_COMPUTE_BIT);
+    }
+    compactFreeListPipeline = device->CreateComputePipeline(
+        &compactFreeListShader, &compactFreeListLayout, 0, "compact free list pipeline");
 
     // cluster fixup
     clusterFixupPush.size   = sizeof(NumPushConstant);
@@ -481,8 +495,14 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
                                                       VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                                   sizeof(u32) * (maxInstances + 1));
 
+    instanceFreeListBuffer2 = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                       VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                                   sizeof(u32) * (maxInstances + 1));
+
     instanceFreeListBufferHandle =
-        rg->RegisterExternalResource("instance free list buffer", &instanceFreeListBuffer);
+        rg->RegisterExternalResource("instance free list buffer 1", &instanceFreeListBuffer);
+    instanceFreeListBuffer2Handle =
+        rg->RegisterExternalResource("instance free list buffer 2", &instanceFreeListBuffer2);
 
     freedInstancesBuffer = rg->CreateBufferResource(
         "freed instances", VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -958,6 +978,12 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, ResourceHandle
     pc.num   = maxPartitions;
     pc.frame = device->frameCount;
 
+    ResourceHandle instanceFreeList0 = (device->frameCount & 1) ? instanceFreeListBuffer2Handle
+                                                                : instanceFreeListBufferHandle;
+    ResourceHandle instanceFreeList1 = (device->frameCount & 1)
+                                           ? instanceFreeListBufferHandle
+                                           : instanceFreeListBuffer2Handle;
+
     if (1)
     {
         rg->StartComputePass(
@@ -985,14 +1011,14 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, ResourceHandle
             .AddHandle(clasGlobalsBufferHandle, ResourceUsageType::Write)
             .AddHandle(visiblePartitionsBuffer, ResourceUsageType::Write)
             .AddHandle(evictedPartitionsBuffer, ResourceUsageType::Write)
-            .AddHandle(instanceFreeListBufferHandle, ResourceUsageType::RW)
+            .AddHandle(instanceFreeList0, ResourceUsageType::RW)
             .AddHandle(sceneBuffer, ResourceUsageType::Read)
             .AddHandle(depthPyramid, ResourceUsageType::Read);
 
         NumPushConstant freeInstancesPc;
         freeInstancesPc.num = maxInstances;
         rg->StartComputePass(
-              freeInstancesPipeline, freeInstancesLayout, 7,
+              freeInstancesPipeline, freeInstancesLayout, 8,
               [maxInstances = this->maxInstances](CommandBuffer *cmd) {
                   device->BeginEvent(cmd, "Free instances");
                   cmd->Dispatch(maxInstances / 128, 1, 1);
@@ -1012,10 +1038,39 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, ResourceHandle
             .AddHandle(instancesBufferHandle, ResourceUsageType::RW)
             .AddHandle(evictedPartitionsBuffer, ResourceUsageType::Read)
             .AddHandle(clasGlobalsBufferHandle, ResourceUsageType::RW)
-            .AddHandle(instanceFreeListBufferHandle, ResourceUsageType::RW)
+            .AddHandle(instanceFreeList0, ResourceUsageType::RW)
             .AddHandle(freedInstancesBuffer, ResourceUsageType::RW)
             .AddHandle(instanceBitVectorHandle, ResourceUsageType::Write)
-            .AddHandle(visiblePartitionsBuffer, ResourceUsageType::Read);
+            .AddHandle(visiblePartitionsBuffer, ResourceUsageType::Read)
+            .AddHandle(instanceFreeList1, ResourceUsageType::Write);
+
+        rg->StartComputePass(
+              compactFreeListPipeline, compactFreeListLayout, 3,
+              [maxInstances = this->maxInstances, instanceFreeList0,
+               debug](CommandBuffer *cmd) {
+                  device->BeginEvent(cmd, "Compact free list");
+                  cmd->Dispatch(maxInstances / 128, 1, 1);
+                  cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                               VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
+                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                               VK_ACCESS_2_SHADER_WRITE_BIT,
+                               VK_ACCESS_2_SHADER_READ_BIT |
+                                   VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+                  cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                               VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+                  cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                               VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                               VK_ACCESS_2_TRANSFER_READ_BIT);
+                  cmd->FlushBarriers();
+
+                  // GPUBuffer *buffer = GetRenderGraph()->GetBuffer(instanceFreeList0);
+                  // cmd->CopyBuffer(debug, buffer);
+                  device->EndEvent(cmd);
+              })
+            .AddHandle(instanceFreeList0, ResourceUsageType::Read)
+            .AddHandle(instanceFreeList1, ResourceUsageType::Write)
+            .AddHandle(instancesBufferHandle, ResourceUsageType::Read);
 
         rg->StartComputePass(
               allocateInstancesPipeline, allocateInstancesLayout, 10,
@@ -1090,7 +1145,7 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, ResourceHandle
             .AddHandle(clasGlobalsBufferHandle, ResourceUsageType::RW)
             .AddHandle(instanceTransformsBufferHandle, ResourceUsageType::Read)
             .AddHandle(partitionInfosBufferHandle, ResourceUsageType::RW)
-            .AddHandle(instanceFreeListBufferHandle, ResourceUsageType::RW)
+            .AddHandle(instanceFreeList1, ResourceUsageType::RW)
             .AddHandle(instancesBufferHandle, ResourceUsageType::Write)
             .AddHandle(resourceBufferHandle, ResourceUsageType::Read)
             .AddHandle(instanceResourceIDsBufferHandle, ResourceUsageType::Read)
@@ -1109,7 +1164,7 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, ResourceHandle
                                                   VK_ACCESS_2_SHADER_READ_BIT);
                                  cmd->FlushBarriers();
                              })
-            .AddHandle(instanceFreeListBufferHandle, ResourceUsageType::RW)
+            .AddHandle(instanceFreeList1, ResourceUsageType::RW)
             .AddHandle(clasGlobalsBufferHandle, ResourceUsageType::Write);
     }
 }

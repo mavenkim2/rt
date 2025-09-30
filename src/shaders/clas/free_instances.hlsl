@@ -8,6 +8,7 @@ RWStructuredBuffer<uint> freedInstances : register(u4);
 
 RWStructuredBuffer<uint> instanceBitVector : register(u5);
 StructuredBuffer<uint> visiblePartitions : register(t6);
+RWStructuredBuffer<uint> nextInstanceFreeList : register(u7);
 
 [[vk::push_constant]] NumPushConstant pc;
 
@@ -15,6 +16,10 @@ StructuredBuffer<uint> visiblePartitions : register(t6);
 void main(uint3 dtID : SV_DispatchThreadID)
 {
     uint instanceIndex = dtID.x;
+    if (dtID.x == 0)
+    {
+        nextInstanceFreeList[0] = 0;
+    }
     if (instanceIndex >= pc.num) return;
 
     GPUInstance instance = instances[instanceIndex];
@@ -25,11 +30,12 @@ void main(uint3 dtID : SV_DispatchThreadID)
 
         if (instance.partitionIndex == partition && (instance.flags & flags))
         {
-            //InterlockedAdd(globals[GLOBALS_DEBUG], 1);
+            InterlockedAdd(globals[GLOBALS_DEBUG3], 1);
         }
 
         if (instance.partitionIndex == partition && ((instance.flags & GPU_INSTANCE_FLAG_FREED) == 0)
-            && ((instance.flags & GPU_INSTANCE_FLAG_IN_FREE_LIST) == 0) && (instance.flags & flags))
+            //&& ((instance.flags & GPU_INSTANCE_FLAG_IN_FREE_LIST) == 0) 
+            && (instance.flags & flags))
         {
             uint instanceFreeListIndex;
             InterlockedAdd(instanceFreeList[0], 1, instanceFreeListIndex);
@@ -49,7 +55,6 @@ void main(uint3 dtID : SV_DispatchThreadID)
         if (instance.partitionIndex == partition)
         {
             instances[instanceIndex].flags &= ~GPU_INSTANCE_FLAG_FREED;
-            InterlockedAdd(globals[GLOBALS_DEBUG], 1);
 
             uint transformOffset = instances[instanceIndex].transformIndex;
             InterlockedOr(instanceBitVector[transformOffset >> 5u], 1u << (transformOffset & 31u));
