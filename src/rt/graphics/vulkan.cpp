@@ -66,7 +66,10 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
     slPreference.logLevel           = sl::LogLevel::eVerbose;
     slPreference.logMessageCallback = SLDebugMessengerCallback;
     slPreference.flags              = sl::PreferenceFlags::eUseFrameBasedResourceTagging;
-    slPreference.engine             = sl::EngineType::eCustom;
+    slPreference.applicationId      = 231313132;
+    // slPreference.engine             = sl::EngineType::eCustom;
+    // slPreference.engineVersion      = "RT";
+    // slPreference.projectId          = "real_time_moana";
 
     sl::Feature slFeatures[]       = {sl::kFeatureDLSS_RR};
     slPreference.featuresToLoad    = slFeatures;
@@ -75,7 +78,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
 
     // TODO don't hardcode
     HMODULE module =
-        LoadLibraryA("../../src/third_party/streamline/bin/x64/development/sl.interposer.dll");
+        LoadLibraryA("../../src/third_party/streamline/bin/x64/sl.interposer.dll");
     Assert(module);
 
     // note: function pointer is cast through void function pointer to silence
@@ -83,6 +86,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
 
     PFun_slInit *slInit_p = (PFun_slInit *)GetProcAddress(module, "slInit");
     sl::Result result     = slInit_p(slPreference, sl::kSDKVersion);
+    Assert(result == sl::Result::eOk);
     PFN_vkGetInstanceProcAddr slvkGetInstanceProcAddr =
         (PFN_vkGetInstanceProcAddr)(void (*)(void))GetProcAddress(module,
                                                                   "vkGetInstanceProcAddr");

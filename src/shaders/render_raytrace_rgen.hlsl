@@ -305,7 +305,7 @@ void main()
             uint baseAddress = resources[instanceID].baseAddress;
             DenseGeometry dg = GetDenseGeometryHeader2(clusterID, baseAddress);
 
-            uint materialID = dg.DecodeMaterialID(triangleIndex);
+            uint materialID = dg.DecodeMaterialID(triangleIndex) + 1;
             uint3 vids = dg.DecodeTriangle(triangleIndex);
 
 #if 0
@@ -334,14 +334,12 @@ void main()
             //}
 
             float3 n0, n1, n2;
-#if 0
             if (dg.HasNormals())
             {
                 n0 = dg.DecodeNormal(vids[0]);
                 n1 = dg.DecodeNormal(vids[1]);
                 n2 = dg.DecodeNormal(vids[2]);
             }
-#endif
             //else 
             {
                 n0 = gn;

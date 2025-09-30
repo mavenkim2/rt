@@ -1819,6 +1819,8 @@ bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
         sizeof(PartitionInfo) * (partitionInfos.Length()));
     partitionInfosBufferHandle =
         rg->RegisterExternalResource("partition infos buffer", &partitionInfosBuffer);
+    partitionInfosUploadBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT, partitionInfosBuffer.size, MemoryUsage::CPU_TO_GPU);
     visiblePartitionsBuffer = rg->CreateBufferResource("visible partitions buffer",
                                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                                        sizeof(u32) * finalNumPartitions);
@@ -1846,13 +1848,6 @@ bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
         tlasScratchSize);
 
-    // partitionCountsBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-    //                                                  VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-    //                                              sizeof(u32) * finalNumPartitions);
-    // partitionReadbackBuffer =
-    //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-    //                          sizeof(u32) * finalNumPartitions, MemoryUsage::GPU_TO_CPU);
-
     u32 transformSize        = sizeof(instanceTransforms[0]) * instanceTransforms.Length();
     instanceTransformsBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, transformSize);
@@ -1864,6 +1859,9 @@ bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
     instanceResourceIDsBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         sizeof(u32) * partitionResourceIDs.Length());
+    resourceIDsUploadBuffer =
+        device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, instanceResourceIDsBuffer.size,
+                             MemoryUsage::CPU_TO_GPU);
     instanceResourceIDsBufferHandle = rg->RegisterExternalResource(
         "instance resource ids buffer", &instanceResourceIDsBuffer);
 
@@ -1878,12 +1876,13 @@ bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
 
     MemoryCopy(instanceTransformsUploadBuffer.mappedPtr, instanceTransforms.data,
                transformSize);
+    MemoryCopy(resourceIDsUploadBuffer.mappedPtr, partitionResourceIDs.data,
+               resourceIDsUploadBuffer.size);
+    MemoryCopy(partitionInfosUploadBuffer.mappedPtr, partitionInfos.data,
+               partitionInfosBuffer.size);
     cmd->CopyBuffer(&instanceTransformsBuffer, &instanceTransformsUploadBuffer);
-    cmd->SubmitBuffer(&instanceResourceIDsBuffer, partitionResourceIDs.data,
-                      instanceResourceIDsBuffer.size);
-
-    cmd->SubmitBuffer(&partitionInfosBuffer, partitionInfos.data,
-                      sizeof(PartitionInfo) * (finalNumPartitions));
+    cmd->CopyBuffer(&instanceResourceIDsBuffer, &resourceIDsUploadBuffer);
+    cmd->CopyBuffer(&partitionInfosBuffer, &partitionInfosUploadBuffer);
 
     cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                  VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);

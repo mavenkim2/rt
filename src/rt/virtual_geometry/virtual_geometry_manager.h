@@ -357,10 +357,12 @@ struct VirtualGeometryManager
     GPUBuffer resourceTruncatedEllipsoidsBuffer;
     ResourceHandle resourceTruncatedEllipsoidsBufferHandle;
     GPUBuffer partitionInfosBuffer;
+    GPUBuffer partitionInfosUploadBuffer;
     ResourceHandle partitionInfosBufferHandle;
     // ResourceHandle partitionReadbackBuffer;
     GPUBuffer instanceTransformsBuffer;
     GPUBuffer instanceTransformsUploadBuffer;
+    GPUBuffer resourceIDsUploadBuffer;
     ResourceHandle instanceTransformsBufferHandle;
     GPUBuffer instanceResourceIDsBuffer;
     ResourceHandle instanceResourceIDsBufferHandle;

@@ -396,9 +396,6 @@ struct GPUInstance
     // uint voxelAddressOffset;
     // uint clusterLookupTableOffset;
     uint flags;
-
-    uint minLodLevel;
-    uint maxLodLevel;
 };
 
 #define PARTITION_FLAG_INSTANCES_RENDERED (1u << 0)

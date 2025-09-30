@@ -810,6 +810,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     device->DestroyBuffer(&virtualGeometryManager.vertexBuffer);
     device->DestroyBuffer(&virtualGeometryManager.indexBuffer);
     device->DestroyBuffer(&virtualGeometryManager.clasScratchBuffer);
+    device->DestroyBuffer(&virtualGeometryManager.blasScratchBuffer);
     device->DestroyBuffer(&virtualGeometryManager.buildClusterTriangleInfoBuffer);
     device->DestroyBuffer(&virtualGeometryManager.decodeClusterDataBuffer);
     device->DestroyBuffer(&virtualGeometryManager.pageUploadBuffer);
@@ -900,6 +901,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     device->Wait(tlasSemaphore);
     device->DestroyBuffer(&virtualGeometryManager.instanceTransformsUploadBuffer);
+    device->DestroyBuffer(&virtualGeometryManager.resourceIDsUploadBuffer);
+    device->DestroyBuffer(&virtualGeometryManager.partitionInfosUploadBuffer);
     if (built)
     {
         device->DestroyBuffer(&virtualGeometryManager.blasProxyScratchBuffer);
