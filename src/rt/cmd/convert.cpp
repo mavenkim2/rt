@@ -34,6 +34,31 @@
 
 namespace rt
 {
+
+struct DisneyMaterial
+{
+    string colorMap;
+    float diffTrans;
+    Vec4f baseColor;
+    float specTrans;
+    float clearcoatGloss;
+    Vec3f scatterDistance;
+    float clearcoat;
+    float specularTint;
+    float ior;
+    float metallic;
+    float flatness;
+    float sheen;
+    float sheenTint;
+    float anisotropic;
+    float alpha;
+    float roughness;
+
+    bool thin;
+
+    Array<string> assignments;
+};
+
 struct Instance
 {
     u32 id;
@@ -48,7 +73,7 @@ struct ShapeType
     string materialName;
     int transformIndex;
 
-    Mesh *mesh;
+    Mesh mesh;
 };
 
 struct InstanceType
@@ -270,9 +295,9 @@ struct MeshHashNode
     Mesh *meshes;
     u32 numMeshes;
 
-    InstanceType *instances;
-    u32 numInstances;
-    AffineSpace *transforms;
+    // InstanceType *instances;
+    // u32 numInstances;
+    // AffineSpace *transforms;
 
     string idFilename;
 
@@ -442,27 +467,27 @@ struct MeshHashMap
 
         return false;
     }
-    u32 AddInstances(Arena *arena, InstanceType *instances, u32 numInstances,
-                     AffineSpace *transforms, string idFilename)
-    {
-        u32 fileHash  = Hash(idFilename);
-        u32 fileIndex = fileHash & (count - 1);
-        BeginWMutex(&mutexes[fileIndex]);
-        MeshHashNode **fileNode = &filenameMap[fileIndex];
-
-        while (*fileNode)
-        {
-            fileNode = &(*fileNode)->next;
-        }
-        *fileNode                 = PushStruct(arena, MeshHashNode);
-        (*fileNode)->idFilename   = PushStr8Copy(arena, idFilename);
-        (*fileNode)->transforms   = transforms;
-        (*fileNode)->instances    = instances;
-        (*fileNode)->numInstances = numInstances;
-        EndWMutex(&mutexes[fileIndex]);
-
-        return false;
-    }
+    // u32 AddInstances(Arena *arena, InstanceType *instances, u32 numInstances,
+    //                  AffineSpace *transforms, string idFilename)
+    // {
+    //     u32 fileHash  = Hash(idFilename);
+    //     u32 fileIndex = fileHash & (count - 1);
+    //     BeginWMutex(&mutexes[fileIndex]);
+    //     MeshHashNode **fileNode = &filenameMap[fileIndex];
+    //
+    //     while (*fileNode)
+    //     {
+    //         fileNode = &(*fileNode)->next;
+    //     }
+    //     *fileNode                 = PushStruct(arena, MeshHashNode);
+    //     (*fileNode)->idFilename   = PushStr8Copy(arena, idFilename);
+    //     (*fileNode)->transforms   = transforms;
+    //     (*fileNode)->instances    = instances;
+    //     (*fileNode)->numInstances = numInstances;
+    //     EndWMutex(&mutexes[fileIndex]);
+    //
+    //     return false;
+    // }
 
     MeshHashNode *Find(string filename)
     {
@@ -901,28 +926,31 @@ string ReplaceColons(Arena *arena, string str)
     return newString;
 }
 
-static string WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState *sls,
-                          string directory, string currentFilename)
+static string WriteNanite(PBRTFileInfo *state, SceneLoadState *sls, string directory,
+                          string currentFilename)
 {
 
 #ifdef USE_GPU
     if (state->shapes.Length())
     {
+        ScratchArena scratch;
         Print("%S, num: %i\n", currentFilename, state->shapes.Length());
         // Remove duplicate meshes
-        ShapeType *shapes = PushArrayNoZero(tempArena, ShapeType, state->shapes.Length());
+        ShapeType *shapes =
+            PushArrayNoZero(scratch.temp.arena, ShapeType, state->shapes.Length());
         state->shapes.Flatten(shapes);
 
-        StaticArray<Mesh> meshes(tempArena, state->shapes.Length(), state->shapes.Length());
-        StaticArray<u32> materialIndices(tempArena, meshes.Length(), meshes.Length());
+        StaticArray<Mesh> meshes(scratch.temp.arena, state->shapes.Length(),
+                                 state->shapes.Length());
+        StaticArray<u32> materialIndices(scratch.temp.arena, meshes.Length(), meshes.Length());
 
-        StaticArray<int> hashes(tempArena, meshes.Length(), meshes.Length());
-        BitVector shapeCulled(tempArena, meshes.Length());
+        StaticArray<int> hashes(scratch.temp.arena, meshes.Length(), meshes.Length());
+        BitVector shapeCulled(scratch.temp.arena, meshes.Length());
 
         u32 hashSize = NextPowerOfTwo(meshes.Length());
-        HashIndex meshHashMap(tempArena, hashSize, hashSize);
+        HashIndex meshHashMap(scratch.temp.arena, hashSize, hashSize);
 
-        Arena **arenas = GetArenaArray(tempArena);
+        Arena **arenas = GetArenaArray(scratch.temp.arena);
 
         ParallelFor(0, state->shapes.Length(), 32, 32, [&](int jobID, int start, int count) {
             Arena *arena = arenas[GetThreadIndex()];
@@ -936,7 +964,11 @@ static string WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState 
                 materialIndices[meshIndex] = materialIndex;
                 int posParameterIndex      = CheckForID(&shape.packet, "P"_sid);
                 Mesh mesh                  = {};
-                if (posParameterIndex != -1)
+                if (shape.mesh.numVertices)
+                {
+                    mesh = shape.mesh;
+                }
+                else if (posParameterIndex != -1)
                 {
                     mesh.numVertices = shape.packet.sizes[posParameterIndex] / sizeof(Vec3f);
                     mesh.p           = (Vec3f *)shape.packet.bytes[posParameterIndex];
@@ -1146,9 +1178,9 @@ static string WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState 
             }
         });
 
-        string virtualGeoFilename =
-            PushStr8F(tempArena, "%S%S.geo", directory, RemoveFileExtension(currentFilename));
-        string geoFilename = virtualGeoFilename;
+        string virtualGeoFilename = PushStr8F(state->arena, "%S%S.geo", directory,
+                                              RemoveFileExtension(currentFilename));
+        string geoFilename        = virtualGeoFilename;
 
         Arena *arena = sls->arenas[GetThreadIndex()];
         u32 size     = 0;
@@ -1166,7 +1198,7 @@ static string WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState 
                 size += sizeof(Vec2f) * mesh.numVertices;
             }
         }
-        u8 *buffer = PushArrayNoZero(tempArena, u8, size);
+        u8 *buffer = PushArrayNoZero(scratch.temp.arena, u8, size);
 
         u32 offset           = 0;
         u32 totalNumVertices = 0;
@@ -1296,29 +1328,29 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                     geoFilename = PushStr8F(tempArena, "%S_rtshape_tri.rtscene",
                                             RemoveFileExtension(state->filename));
                 }
-                state->virtualGeoFilename =
-                    WriteNanite(state, tempArena, sls, directory, geoFilename);
+                state->virtualGeoFilename = WriteNanite(state, sls, directory, geoFilename);
                 WriteFile(directory, state, originFile ? sls : 0);
 
-                if (state->fileInstances.totalCount)
-                {
-                    InstanceType instance;
-                    AffineSpace *transforms = PushArrayNoZero(threadArena, AffineSpace,
-                                                              state->transforms.totalCount);
-                    state->transforms.Flatten(transforms);
-                    InstanceType *instances = PushArrayNoZero(threadArena, InstanceType,
-                                                              state->fileInstances.totalCount);
-                    state->fileInstances.Flatten(instances);
-
-                    for (u32 i = 0; i < state->fileInstances.totalCount; i++)
-                    {
-                        InstanceType &instance = instances[i];
-                        instance.filename      = PushStr8Copy(threadArena, instance.filename);
-                    }
-                    sls->meshMap.AddInstances(threadArena, instances,
-                                              state->fileInstances.totalCount, transforms,
-                                              state->filename);
-                }
+                // if (state->fileInstances.totalCount)
+                // {
+                //     InstanceType instance;
+                //     AffineSpace *transforms = PushArrayNoZero(threadArena, AffineSpace,
+                //                                               state->transforms.totalCount);
+                //     state->transforms.Flatten(transforms);
+                //     InstanceType *instances = PushArrayNoZero(threadArena, InstanceType,
+                //                                               state->fileInstances.totalCount);
+                //     state->fileInstances.Flatten(instances);
+                //
+                //     for (u32 i = 0; i < state->fileInstances.totalCount; i++)
+                //     {
+                //         InstanceType &instance = instances[i];
+                //         instance.filename      = PushStr8Copy(threadArena,
+                //         instance.filename);
+                //     }
+                //     sls->meshMap.AddInstances(threadArena, instances,
+                //                               state->fileInstances.totalCount, transforms,
+                //                               state->filename);
+                // }
 #if 0
                 if (state->fileInstances.totalCount)
                 {
@@ -1716,7 +1748,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                     state->Merge(state->imports[i]);
                 }
                 state->virtualGeoFilename =
-                    WriteNanite(state, tempArena, sls, directory, state->filename);
+                    WriteNanite(state, sls, directory, state->filename);
                 WriteFile(directory, state);
                 ArenaRelease(state->arena);
                 for (u32 i = 0; i < state->numImports; i++)
@@ -2143,9 +2175,9 @@ void WriteMesh(Mesh &mesh, StringBuilder &builder, StringBuilderMapped &dataBuil
 int ComputeShapeSize(Arena *arena, ShapeType *shape, string directory)
 {
     // if (shape->cancelled) return 0;
-    if (shape->mesh)
+    if (shape->mesh.numVertices)
     {
-        Mesh &mesh = *shape->mesh;
+        Mesh &mesh = shape->mesh;
         int total  = mesh.numVertices * sizeof(Vec3f);
         total += mesh.n ? mesh.numVertices * sizeof(Vec3f) : 0;
         total += mesh.uv ? mesh.numVertices * sizeof(Vec2f) : 0;
@@ -2165,9 +2197,8 @@ int ComputeShapeSize(Arena *arena, ShapeType *shape, string directory)
                 GeometryType type = ConvertStringIDToGeometryType(shape->packet.type);
                 Assert(type == GeometryType::TriangleMesh);
 
-                Mesh mesh    = LoadPLY(arena, filename, type);
-                shape->mesh  = PushStruct(arena, Mesh);
-                *shape->mesh = mesh;
+                Mesh mesh   = LoadPLY(arena, filename, type);
+                shape->mesh = mesh;
 
                 return ComputeShapeSize(arena, shape, directory);
             }
@@ -2208,9 +2239,9 @@ i32 WriteData(ScenePacket *packet, StringBuilder *builder, StringBuilderMapped *
 void WriteMesh(StringBuilder &builder, StringBuilderMapped &dataBuilder, ShapeType *shape,
                string directory, GeometryType type, u64 *builderOffset = 0, u64 cap = 0)
 {
-    if (shape->mesh)
+    if (shape->mesh.numVertices)
     {
-        WriteMesh(*shape->mesh, builder, dataBuilder, builderOffset, cap);
+        WriteMesh(shape->mesh, builder, dataBuilder, builderOffset, cap);
         return;
     }
 
@@ -2679,6 +2710,716 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
     ScratchEnd(temp);
 }
 
+static void LoadMaterialJSON(SceneLoadState *sls, string directory, string filename)
+{
+    ScratchArena scratch;
+    Tokenizer tokenizer;
+    tokenizer.input =
+        OS_ReadFile(scratch.temp.arena, StrConcat(scratch.temp.arena, directory, filename));
+    tokenizer.cursor = tokenizer.input.str;
+
+    SkipToNextChar2(&tokenizer, '"');
+
+    Arena *arena = sls->arenas[GetThreadIndex()];
+
+    for (;;)
+    {
+        string materialName;
+        bool result = GetBetweenPair(materialName, &tokenizer, '"');
+        Assert(result);
+
+        materialName = PushStr8Copy(arena, materialName);
+
+        NamedPacket material;
+        StringId parameterNames[MAX_PARAMETER_COUNT];
+        u8 *bytes[MAX_PARAMETER_COUNT];
+        u32 sizes[MAX_PARAMETER_COUNT];
+        DataType dataTypes[MAX_PARAMETER_COUNT];
+        u32 parameterCount = 0;
+
+        for (;;)
+        {
+            SkipToNextChar2(&tokenizer, '"');
+            string parameterType;
+            result = GetBetweenPair(parameterType, &tokenizer, '"');
+
+            if (parameterType == "diffTrans")
+            {
+                SkipToNextDigit(&tokenizer);
+                f32 diffTrans      = ReadFloat(&tokenizer);
+                u32 parameterIndex = parameterCount++;
+                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(f32));
+                MemoryCopy(vals, &diffTrans, sizeof(f32));
+
+                parameterNames[parameterIndex] = "diffTrans"_sid;
+                bytes[parameterIndex]          = vals;
+                sizes[parameterIndex]          = sizeof(f32);
+                dataTypes[parameterIndex]      = DataType::Float;
+            }
+            else if (parameterType == "baseColor")
+            {
+                Vec4f baseColor;
+                for (u32 i = 0; i < 4; i++)
+                {
+                    SkipToNextDigit(&tokenizer);
+                    float f      = ReadFloat(&tokenizer);
+                    baseColor[i] = f;
+                }
+                u32 parameterIndex = parameterCount++;
+                u8 *vals           = PushArrayNoZero(arena, u8, 4 * sizeof(Vec4f));
+                MemoryCopy(vals, &baseColor, 4 * sizeof(f32));
+
+                parameterNames[parameterIndex] = "baseColor"_sid;
+                bytes[parameterIndex]          = vals;
+                sizes[parameterIndex]          = sizeof(Vec4f);
+                dataTypes[parameterIndex]      = DataType::Vec4;
+            }
+            else if (parameterType == "specTrans")
+            {
+                SkipToNextDigit(&tokenizer);
+                f32 specTrans      = ReadFloat(&tokenizer);
+                u32 parameterIndex = parameterCount++;
+                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(f32));
+                MemoryCopy(vals, &specTrans, sizeof(f32));
+
+                parameterNames[parameterIndex] = "specTrans"_sid;
+                bytes[parameterIndex]          = vals;
+                sizes[parameterIndex]          = sizeof(f32);
+                dataTypes[parameterIndex]      = DataType::Float;
+            }
+            else if (parameterType == "colorMap")
+            {
+                string colorMapFilename;
+                SkipToNextChar2(&tokenizer, '"');
+                bool success = GetBetweenPair(colorMapFilename, &tokenizer, '"');
+                Assert(success);
+
+                colorMapFilename   = PushStr8Copy(arena, colorMapFilename);
+                u32 parameterIndex = parameterCount++;
+
+                parameterNames[parameterIndex] = "colorMap"_sid;
+                bytes[parameterIndex]          = colorMapFilename.str;
+                sizes[parameterIndex]          = (u32)colorMapFilename.size;
+                dataTypes[parameterIndex]      = DataType::String;
+            }
+            else if (parameterType == "clearcoatGloss")
+            {
+                SkipToNextDigit(&tokenizer);
+                f32 clearcoatGloss = ReadFloat(&tokenizer);
+
+                u32 parameterIndex = parameterCount++;
+                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(f32));
+                MemoryCopy(vals, &clearcoatGloss, sizeof(f32));
+
+                parameterNames[parameterIndex] = "clearcoatGloss"_sid;
+                bytes[parameterIndex]          = vals;
+                sizes[parameterIndex]          = sizeof(f32);
+                dataTypes[parameterIndex]      = DataType::Float;
+            }
+            else if (parameterType == "scatterDistance")
+            {
+                Vec3f scatterDistance;
+                for (u32 i = 0; i < 3; i++)
+                {
+                    SkipToNextDigit(&tokenizer);
+                    scatterDistance[i] = ReadFloat(&tokenizer);
+                }
+                u32 parameterIndex = parameterCount++;
+                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(Vec3f));
+                MemoryCopy(vals, &scatterDistance, sizeof(Vec3f));
+
+                parameterNames[parameterIndex] = "scatterDistance"_sid;
+                bytes[parameterIndex]          = vals;
+                sizes[parameterIndex]          = sizeof(Vec3f);
+                dataTypes[parameterIndex]      = DataType::Vec3;
+            }
+            else if (parameterType == "assignment")
+            {
+                SkipToNextChar2(&tokenizer, ']');
+            }
+            else if (parameterType == "clearcoat")
+            {
+                SkipToNextDigit(&tokenizer);
+                f32 clearcoat      = ReadFloat(&tokenizer);
+                u32 parameterIndex = parameterCount++;
+                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(f32));
+                MemoryCopy(vals, &clearcoat, sizeof(f32));
+
+                parameterNames[parameterIndex] = "clearcoat"_sid;
+                bytes[parameterIndex]          = vals;
+                sizes[parameterIndex]          = sizeof(f32);
+                dataTypes[parameterIndex]      = DataType::Float;
+            }
+            else if (parameterType == "specularTint")
+            {
+                SkipToNextDigit(&tokenizer);
+                f32 specularTint = ReadFloat(&tokenizer);
+
+                u32 parameterIndex = parameterCount++;
+                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(f32));
+                MemoryCopy(vals, &specularTint, sizeof(f32));
+
+                parameterNames[parameterIndex] = "specularTint"_sid;
+                bytes[parameterIndex]          = vals;
+                sizes[parameterIndex]          = sizeof(f32);
+                dataTypes[parameterIndex]      = DataType::Float;
+            }
+            else if (parameterType == "ior")
+            {
+                SkipToNextDigit(&tokenizer);
+                f32 ior = ReadFloat(&tokenizer);
+
+                u32 parameterIndex = parameterCount++;
+                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(f32));
+                MemoryCopy(vals, &ior, sizeof(f32));
+
+                parameterNames[parameterIndex] = "ior"_sid;
+                bytes[parameterIndex]          = vals;
+                sizes[parameterIndex]          = sizeof(f32);
+                dataTypes[parameterIndex]      = DataType::Float;
+            }
+            else if (parameterType == "metallic")
+            {
+                SkipToNextDigit(&tokenizer);
+                f32 metallic = ReadFloat(&tokenizer);
+
+                u32 parameterIndex = parameterCount++;
+                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(f32));
+                MemoryCopy(vals, &metallic, sizeof(f32));
+
+                parameterNames[parameterIndex] = "metallic"_sid;
+                bytes[parameterIndex]          = vals;
+                sizes[parameterIndex]          = sizeof(f32);
+                dataTypes[parameterIndex]      = DataType::Float;
+            }
+            else if (parameterType == "flatness")
+            {
+                SkipToNextDigit(&tokenizer);
+                f32 flatness       = ReadFloat(&tokenizer);
+                u32 parameterIndex = parameterCount++;
+                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(f32));
+                MemoryCopy(vals, &flatness, sizeof(f32));
+
+                parameterNames[parameterIndex] = "flatness"_sid;
+                bytes[parameterIndex]          = vals;
+                sizes[parameterIndex]          = sizeof(f32);
+                dataTypes[parameterIndex]      = DataType::Float;
+            }
+            else if (parameterType == "sheen")
+            {
+                SkipToNextDigit(&tokenizer);
+                float sheen        = ReadFloat(&tokenizer);
+                u32 parameterIndex = parameterCount++;
+                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(f32));
+                MemoryCopy(vals, &sheen, sizeof(f32));
+
+                parameterNames[parameterIndex] = "sheen"_sid;
+                bytes[parameterIndex]          = vals;
+                sizes[parameterIndex]          = sizeof(f32);
+                dataTypes[parameterIndex]      = DataType::Float;
+            }
+            else if (parameterType == "sheenTint")
+            {
+                SkipToNextDigit(&tokenizer);
+                f32 sheenTint      = ReadFloat(&tokenizer);
+                u32 parameterIndex = parameterCount++;
+                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(f32));
+                MemoryCopy(vals, &sheenTint, sizeof(f32));
+
+                parameterNames[parameterIndex] = "sheenTint"_sid;
+                bytes[parameterIndex]          = vals;
+                sizes[parameterIndex]          = sizeof(f32);
+                dataTypes[parameterIndex]      = DataType::Float;
+            }
+            else if (parameterType == "anisotropic")
+            {
+                SkipToNextDigit(&tokenizer);
+                f32 anisotropic    = ReadFloat(&tokenizer);
+                u32 parameterIndex = parameterCount++;
+                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(f32));
+                MemoryCopy(vals, &anisotropic, sizeof(f32));
+
+                parameterNames[parameterIndex] = "anisotropic"_sid;
+                bytes[parameterIndex]          = vals;
+                sizes[parameterIndex]          = sizeof(f32);
+                dataTypes[parameterIndex]      = DataType::Float;
+            }
+            else if (parameterType == "alpha")
+            {
+                SkipToNextDigit(&tokenizer);
+                f32 alpha          = ReadFloat(&tokenizer);
+                u32 parameterIndex = parameterCount++;
+                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(f32));
+                MemoryCopy(vals, &alpha, sizeof(f32));
+
+                parameterNames[parameterIndex] = "alpha"_sid;
+                bytes[parameterIndex]          = vals;
+                sizes[parameterIndex]          = sizeof(f32);
+                dataTypes[parameterIndex]      = DataType::Float;
+            }
+            else if (parameterType == "roughness")
+            {
+                SkipToNextDigit(&tokenizer);
+                f32 roughness      = ReadFloat(&tokenizer);
+                u32 parameterIndex = parameterCount++;
+                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(f32));
+                MemoryCopy(vals, &roughness, sizeof(f32));
+
+                parameterNames[parameterIndex] = "roughness"_sid;
+                bytes[parameterIndex]          = vals;
+                sizes[parameterIndex]          = sizeof(f32);
+                dataTypes[parameterIndex]      = DataType::Float;
+            }
+            else if (parameterType == "type")
+            {
+                string type;
+                SkipToNextChar2(&tokenizer, '"');
+                bool success = GetBetweenPair(type, &tokenizer, '"');
+                Assert(success);
+                bool thin = false;
+                if (type == "thin")
+                {
+                    thin = true;
+                }
+                u32 parameterIndex = parameterCount++;
+                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(bool));
+                MemoryCopy(vals, &thin, sizeof(bool));
+
+                parameterNames[parameterIndex] = "type"_sid;
+                bytes[parameterIndex]          = vals;
+                sizes[parameterIndex]          = sizeof(bool);
+                dataTypes[parameterIndex]      = DataType::Bool;
+            }
+            else if (parameterType == "displacementMap")
+            {
+                string displacementMapFilename;
+                GetBetweenPair(displacementMapFilename, &tokenizer, '"');
+                SkipToNextChar2(&tokenizer, '"');
+                break;
+            }
+            else
+            {
+                Assert(0);
+            }
+        }
+
+        material.name = materialName;
+        sls->materialMap.FindOrAdd(arena, materialName, sls->materialCounter);
+        sls->materials[GetThreadIndex()].Push(material);
+    }
+}
+
+static Mesh *LoadObj(Arena *arena, string filename, string *&outMaterialNames,
+                     string *&outGroupNames, int &numMeshes)
+{
+    TempArena temp = ScratchStart(0, 0);
+    string buffer  = OS_MapFileRead(filename);
+    Tokenizer tokenizer;
+    tokenizer.input  = buffer;
+    tokenizer.cursor = buffer.str;
+
+    std::vector<Vec3f> vertices;
+    vertices.reserve(128);
+    std::vector<Vec3f> normals;
+    normals.reserve(128);
+    std::vector<Vec3i> indices;
+    indices.reserve(128);
+
+    std::vector<Mesh> meshes;
+    int vertexOffset = 1;
+    int normalOffset = 1;
+
+    std::unordered_set<string> meshHashSet;
+    bool repeatedMesh   = false;
+    bool processingMesh = false;
+
+    std::vector<string> materialNames;
+    std::vector<string> groupNames;
+    string materialName  = {};
+    string meshGroupName = {};
+
+    auto Skip = [&]() { SkipToNextChar(&tokenizer, '#'); };
+
+    for (;;)
+    {
+        Skip();
+
+        string word = ReadWord(&tokenizer);
+
+        bool isEndOfBuffer = EndOfBuffer(&tokenizer);
+        if (word == "g" || isEndOfBuffer)
+        {
+            Skip();
+            string groupName = ReadWord(&tokenizer);
+            if (groupName == "default" || isEndOfBuffer)
+            {
+                if (processingMesh)
+                {
+                    materialNames.push_back(materialName);
+                    groupNames.push_back(meshGroupName);
+                    materialName     = {};
+                    meshGroupName    = {};
+                    Mesh mesh        = {};
+                    mesh.numVertices = (u32)vertices.size();
+                    mesh.numIndices  = (u32)indices.size();
+
+                    mesh.p = PushArrayNoZero(arena, Vec3f, vertices.size());
+                    MemoryCopy(mesh.p, vertices.data(), sizeof(Vec3f) * vertices.size());
+
+                    threadLocalStatistics[GetThreadIndex()].misc2 += mesh.numVertices;
+                    threadLocalStatistics[GetThreadIndex()].misc3 += mesh.numIndices;
+
+                    int *normalIndices = PushArray(temp.arena, int, mesh.numVertices);
+                    MemorySet(normalIndices, 0xff, sizeof(int) * mesh.numVertices);
+
+                    mesh.n       = PushArrayNoZero(arena, Vec3f, vertices.size());
+                    mesh.indices = PushArrayNoZero(arena, u32, indices.size());
+                    // Ensure that vertex index and normal index pairings are
+                    // consistent
+                    for (u32 i = 0; i < mesh.numIndices; i++)
+                    {
+                        i32 vertexIndex = indices[i][0];
+                        i32 normalIndex = indices[i][2];
+
+                        if (normalIndices[vertexIndex] != 0xffffffff)
+                        {
+                            ErrorExit(normalIndices[vertexIndex] == normalIndex,
+                                      "Face-varying normals currently unsupported. "
+                                      "file: %S\n",
+                                      filename);
+                        }
+
+                        Assert(normalIndex < (int)normals.size());
+                        Assert(vertexIndex < (int)vertices.size());
+                        normalIndices[vertexIndex] = normalIndex;
+                        mesh.n[vertexIndex]        = normals[normalIndex];
+                        mesh.indices[i]            = vertexIndex;
+                    }
+
+                    meshes.push_back(mesh);
+
+                    vertexOffset += (int)vertices.size();
+                    normalOffset += (int)normals.size();
+                    vertices.clear();
+                    normals.clear();
+                    indices.clear();
+                }
+                processingMesh = false;
+            }
+            else
+            {
+                meshGroupName  = PushStr8Copy(arena, groupName);
+                processingMesh = true;
+            }
+            if (isEndOfBuffer) break;
+        }
+        else if (word == "mtllib")
+        {
+            SkipToNextLine(&tokenizer);
+        }
+        else if (word == "usemtl")
+        {
+            Skip();
+            string s     = ReadWord(&tokenizer);
+            materialName = PushStr8Copy(arena, s);
+        }
+        else if (word == "s")
+        {
+            SkipToNextLine(&tokenizer);
+        }
+        else if (word == "v")
+        {
+            Skip();
+            f32 x = ReadFloat(&tokenizer);
+            f32 y = ReadFloat(&tokenizer);
+            f32 z = ReadFloat(&tokenizer);
+            vertices.push_back(Vec3f(x, y, z));
+        }
+        else if (word == "vn")
+        {
+            Skip();
+            f32 x = ReadFloat(&tokenizer);
+            f32 y = ReadFloat(&tokenizer);
+            f32 z = ReadFloat(&tokenizer);
+            normals.push_back(Vec3f(x, y, z));
+        }
+        else if (word == "f")
+        {
+            Skip();
+            u32 faceVertexCount = 0;
+            while (CharIsDigit(tokenizer.cursor[0]))
+            {
+                faceVertexCount++;
+
+                u32 vertexIndex = ReadUint(&tokenizer);
+                bool result     = Advance(&tokenizer, "/");
+                Assert(result);
+                u32 texIndex = ReadUint(&tokenizer);
+                result       = Advance(&tokenizer, "/");
+                Assert(result);
+                u32 normalIndex = ReadUint(&tokenizer);
+                Assert(vertexIndex - vertexOffset >= 0 && normalIndex - normalOffset >= 0);
+                indices.push_back(Vec3i(vertexIndex - vertexOffset, texIndex - 1,
+                                        normalIndex - normalOffset));
+                Skip();
+            }
+            // Assert(faceVertexCount == 4)
+        }
+        else
+        {
+            Assert(0);
+        }
+    }
+
+    ScratchEnd(temp);
+    Assert(materialNames.size() == meshes.size());
+    outMaterialNames = PushArrayNoZero(arena, string, materialNames.size());
+    MemoryCopy(outMaterialNames, materialNames.data(), sizeof(string) * materialNames.size());
+    outGroupNames = PushArrayNoZero(arena, string, groupNames.size());
+    MemoryCopy(outGroupNames, groupNames.data(), sizeof(string) * groupNames.size());
+    numMeshes          = (int)meshes.size();
+    Mesh *outputMeshes = PushArrayNoZero(arena, Mesh, numMeshes);
+    MemoryCopy(outputMeshes, meshes.data(), sizeof(Mesh) * numMeshes);
+    return outputMeshes;
+}
+
+static void LoadMoanaOBJ(PBRTFileInfo *info, string filePath)
+{
+    int numMeshes;
+    string *materials, *groupNames;
+    Mesh *meshes = LoadObj(info->arena, filePath, materials, groupNames, numMeshes);
+
+    ShapeType *shapes = PushArrayNoZero(info->arena, ShapeType, numMeshes);
+    for (int i = 0; i < numMeshes; i++)
+    {
+        ShapeType &shape   = info->shapes.AddBack();
+        shape.packet.type  = "trianglemesh"_sid;
+        meshes[i].numFaces = meshes[i].numIndices / 4;
+        shape.mesh         = ConvertQuadToTriangleMesh(info->arena, meshes[i]);
+        shape.materialName = materials[i];
+    }
+}
+
+static void LoadMoanaTransforms(PBRTFileInfo *info, string directory, string filePath)
+{
+    ScratchArena scratch;
+    Tokenizer tokenizer;
+    tokenizer.input  = OS_MapFileRead(filePath);
+    tokenizer.cursor = tokenizer.input.str;
+
+    for (;;)
+    {
+        SkipToNextChar2(&tokenizer, '"');
+        if (EndOfBuffer(&tokenizer)) break;
+
+        string objFile;
+        bool success = GetBetweenPair(objFile, &tokenizer, '"');
+        Assert(success);
+
+        string objectFileName =
+            PushStr8F(scratch.temp.arena, "%S%S.rtscene", directory, objFile);
+
+        InstanceType &inst       = info->fileInstances.AddBack();
+        inst.filename            = objectFileName;
+        inst.transformIndexStart = info->transforms.Length();
+
+        for (;;)
+        {
+            SkipToNextChar(&tokenizer);
+            if (*tokenizer.cursor == '}') break;
+
+            SkipToNextChar2(&tokenizer, '[');
+            AffineSpace transform;
+            for (u32 c = 0; c < 4; c++)
+            {
+                for (u32 r = 0; r < 4; r++)
+                {
+                    SkipToNextDigit(&tokenizer);
+                    float value = ReadFloat(&tokenizer);
+                    if (r < 3)
+                    {
+                        transform[c][r] = value;
+                    }
+                }
+            }
+            SkipToNextChar2(&tokenizer, ']');
+            Advance(&tokenizer, "]");
+            info->transforms.Push(transform);
+        }
+    }
+}
+
+static void LoadMoanaJSON(Arena *arena, SceneLoadState *sls, string directory, string filePath)
+{
+    ScratchArena scratch(&arena, 1);
+    Tokenizer tokenizer;
+    tokenizer.input  = OS_MapFileRead(filePath);
+    tokenizer.cursor = tokenizer.input.str;
+
+    bool baseMesh = false;
+
+    ChunkedLinkedList<PBRTFileInfo> fileInfos(scratch.temp.arena, 16);
+    Scheduler::Counter counter = {};
+
+    AffineSpace baseTransform;
+    string name;
+    for (;;)
+    {
+        SkipToNextChar2(&tokenizer, '"');
+        if (EndOfBuffer(&tokenizer)) break;
+        string parameterType;
+        bool success = GetBetweenPair(parameterType, &tokenizer, '"');
+        Assert(success);
+
+        if (parameterType == "transformMatrix")
+        {
+            for (u32 c = 0; c < 4; c++)
+            {
+                for (u32 r = 0; r < 4; r++)
+                {
+                    SkipToNextDigit(&tokenizer);
+                    float value = ReadFloat(&tokenizer);
+                    if (r < 3)
+                    {
+                        baseTransform[c][r] = value;
+                    }
+                }
+            }
+        }
+        else if (parameterType == "geomObjFile")
+        {
+            baseMesh = true;
+            SkipToNextChar2(&tokenizer, '"');
+            string objFileName;
+            success = GetBetweenPair(objFileName, &tokenizer, '"');
+            Assert(success);
+
+            string fullObjFilename = StrConcat(scratch.temp.arena, directory, objFileName);
+
+            string objectFileName     = PushStr8F(scratch.temp.arena, "%S.rtscene",
+                                                  RemoveFileExtension(fullObjFilename));
+            PBRTFileInfo *objFileInfo = &fileInfos.AddBack();
+            objFileInfo->Init(objectFileName);
+
+            LoadMoanaOBJ(objFileInfo, fullObjFilename);
+            // WriteFile(directory, objFileInfo);
+        }
+        else if (parameterType == "matFile")
+        {
+            SkipToNextChar2(&tokenizer, '"');
+            string matFilename;
+            success = GetBetweenPair(matFilename, &tokenizer, '"');
+            Assert(success);
+            LoadMaterialJSON(sls, directory, matFilename);
+        }
+        else if (parameterType == "name")
+        {
+            SkipToNextChar2(&tokenizer, '"');
+            success = GetBetweenPair(name, &tokenizer, '"');
+            Assert(success);
+        }
+        else if (parameterType == "instancedPrimitiveJsonFiles")
+        {
+            for (;;)
+            {
+                SkipToNextChar2(&tokenizer, '"');
+                string name;
+                success = GetBetweenPair(name, &tokenizer, '"');
+                Assert(success);
+
+                SkipToNextChar2(&tokenizer, '"');
+                string type;
+                success = GetBetweenPair(type, &tokenizer, '"');
+                Assert(success);
+
+                if (type == "curve")
+                {
+                    SkipToNextChar2(&tokenizer, '}');
+                }
+                else if (type == "archive")
+                {
+                    SkipToNextChar2(&tokenizer, '"');
+                    success = Advance(&tokenizer, "jsonFile");
+                    Assert(success);
+                    SkipToNextChar2(&tokenizer, '"');
+                    string jsonFile;
+                    success = GetBetweenPair(type, &tokenizer, '"');
+                    Assert(success);
+
+                    PBRTFileInfo *transformsInfo = &fileInfos.AddBack();
+                    string transformsFilename =
+                        StrConcat(scratch.temp.arena, directory, jsonFile);
+                    transformsInfo->Init(transformsFilename);
+
+                    // scheduler.Schedule(&counter, [=](u32 jobID) {
+                    LoadMoanaTransforms(transformsInfo, directory, transformsFilename);
+                    // });
+
+                    SkipToNextChar2(&tokenizer, '"');
+                    success = Advance(&tokenizer, "archives");
+                    Assert(success);
+
+                    for (;;)
+                    {
+                        if (*tokenizer.cursor == ']') break;
+
+                        SkipToNextChar2(&tokenizer, '"');
+                        PBRTFileInfo *archiveInfo = &fileInfos.AddBack();
+                        string archiveFilename;
+                        success = GetBetweenPair(type, &tokenizer, '"');
+                        Assert(success);
+                        archiveInfo->Init(archiveFilename);
+
+                        string archiveFilepath =
+                            StrConcat(scratch.temp.arena, directory, archiveFilename);
+
+                        // scheduler.Schedule(&counter, [=](u32 jobID) {
+                        LoadMoanaOBJ(archiveInfo, archiveFilepath);
+                        // });
+
+                        SkipToNextChar(&tokenizer);
+                    }
+                }
+                else
+                {
+                    Assert(0);
+                }
+                // load transforms
+            }
+        }
+        else if (parameterType == "variants")
+        {
+            Assert(0);
+        }
+    }
+
+    PBRTFileInfo base;
+    base.Init(StrConcat(scratch.temp.arena, directory, name));
+    scheduler.Wait(&counter);
+
+    for (auto *node = fileInfos.first; node != 0; node = node->next)
+    {
+        for (u32 fileInfoIndex = 0; fileInfoIndex < fileInfos.Length(); fileInfoIndex++)
+        {
+            PBRTFileInfo *info = &node->values[fileInfoIndex];
+            if (info->transforms.Length())
+            {
+                base.Merge(info);
+            }
+            else
+            {
+                // scheduler.Schedule(&counter, [&, info](u32 jobID) {
+                info->shapes.Clear();
+                info->virtualGeoFilename = WriteNanite(info, sls, directory, info->filename);
+                WriteFile(directory, info);
+                ArenaRelease(info->arena);
+            }
+        }
+    }
+    WriteFile(directory, &base);
+    scheduler.Wait(&counter);
+}
+
 void LoadPBRT(Arena *arena, string filename)
 {
     TempArena temp    = ScratchStart(0, 0);
@@ -2699,14 +3440,6 @@ void LoadPBRT(Arena *arena, string filename)
     printf("convert time: %fms\n", time);
 
     ScratchEnd(temp);
-}
-
-void RunMinistryOfFlat() {}
-
-void GenerateUVs(string filename)
-{
-    // First, write each group to its own file
-    StringBuilder builder;
 }
 
 } // namespace rt
@@ -2747,7 +3480,7 @@ int main(int argc, char **argv)
     Vulkan *v           = PushStructConstruct(arena, Vulkan)(mode);
     device              = v;
 
-#if 1
+#if 0
     LoadPBRT(arena, filename);
     // string directory = Str8PathChopPastLastSlash(filename);
     // string baseFile  = PathSkipLastSlash(filename);
@@ -2755,7 +3488,13 @@ int main(int argc, char **argv)
     // string rtSceneFilename = PushStr8F(arena, "%S.rtscene", RemoveFileExtension(filename));
     // SimplifyScene(arena, directory, rtSceneFilename);
 #else
-    ConvolveDisneyDiffuse();
+    string testFilename = "../../data/island/pbrt-v4/json/isMountainB/isMountainB.json";
+    string directory    = "../../data/island/pbrt-v4/";
+    string baseFile     = PathSkipLastSlash(testFilename);
+    SceneLoadState sls;
+    sls.Init(arena);
+    LoadMoanaJSON(arena, &sls, directory, testFilename);
+
     // int numMeshes, actualNumMeshes;
     // // string testFilename = "../../data/island/pbrt-v4/obj/isMountainB/archives/"
     // //                       "xgFoliageA_treeMadronaBaked_canopyOnly_lo.obj";

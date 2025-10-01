@@ -30,6 +30,7 @@ enum class DataType
     Floats,
     Vec2,
     Vec3,
+    Vec4,
     Int,
     Bool,
     String,

@@ -2772,8 +2772,7 @@ static GraphPartitionResult PartitionTriangles(Arena *arena, Mesh &mesh, u32 max
 }
 
 static bool GenerateValidTriClusters(Arena *arena, Mesh &mesh, u32 maxNumTriangles,
-                                     u32 maxNumClusters, const StaticArray<u32> &geomIDs,
-                                     GraphPartitionResult &out)
+                                     u32 maxNumClusters, GraphPartitionResult &out)
 {
     GraphPartitionResult result = PartitionTriangles(arena, mesh, maxNumTriangles);
 
@@ -2798,7 +2797,6 @@ static bool GenerateValidTriClusters(Arena *arena, Mesh &mesh, u32 maxNumTriangl
         for (int i = clusterStart; i < clusterStart + clusterNumTriangles; i++)
         {
             u32 tri    = result.clusterIndices[i];
-            u32 geomID = geomIDs[tri];
             for (int vertexIndex = 0; vertexIndex < 3; vertexIndex++)
             {
                 u32 index      = mesh.indices[3 * tri + vertexIndex];
@@ -4388,9 +4386,8 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
     u32 maxNumTriangles = MAX_CLUSTER_TRIANGLES;
     for (;;)
     {
-        bool success =
-            GenerateValidTriClusters(scratch.temp.arena, combinedMesh, maxNumTriangles, ~0u,
-                                     triangleGeomIDs, partitionResult);
+        bool success = GenerateValidTriClusters(scratch.temp.arena, combinedMesh,
+                                                maxNumTriangles, ~0u, partitionResult);
         if (success)
         {
             break;
@@ -5406,8 +5403,6 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
                             bool success = GenerateValidTriClusters(
                                 scratch.temp.arena, groupData.simplifiedMesh,
                                 MAX_CLUSTER_TRIANGLES, range.end - range.begin,
-                                StaticArray<u32>(groupData.simplifiedGeomIDs,
-                                                 groupData.simplifiedMesh.numFaces),
                                 clusterGroupPartitionResult);
 
                             if (!success)
@@ -5788,16 +5783,6 @@ void CreateClusters2(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndi
         arenas[i]->align = 16;
     }
 
-    PrimitiveIndices *primIndices =
-        PushArrayNoZero(scratch.temp.arena, PrimitiveIndices, numMeshes);
-    for (int i = 0; i < numMeshes; i++)
-    {
-        PrimitiveIndices ind = {};
-        ind.materialID       = MaterialHandle(materialIndices[i]);
-        ind.alphaTexture     = 0;
-        primIndices[i]       = ind;
-    }
-
     StaticArray<u32> triangleGeomIDs(scratch.temp.arena, totalNumTriangles);
 
     u32 currentMesh = 0;
@@ -5816,9 +5801,8 @@ void CreateClusters2(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndi
     u32 maxNumTriangles = MAX_CLUSTER_TRIANGLES;
     for (;;)
     {
-        bool success =
-            GenerateValidTriClusters(scratch.temp.arena, combinedMesh, maxNumTriangles, ~0u,
-                                     triangleGeomIDs, partitionResult);
+        bool success = GenerateValidTriClusters(scratch.temp.arena, combinedMesh,
+                                                maxNumTriangles, ~0u, partitionResult);
         if (success)
         {
             break;

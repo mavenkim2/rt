@@ -169,6 +169,7 @@ string ReadBytes(Tokenizer *tokenizer, u64 numBytes);
 void SkipToNextLine(Tokenizer *iter);
 void SkipToNextChar(Tokenizer *tokenizer);
 void SkipToNextChar(Tokenizer *tokenizer, char token);
+void SkipToNextChar2(Tokenizer *tokenizer, char token);
 void SkipToNextDigit(Tokenizer *tokenizer);
 u8 *GetCursor_(Tokenizer *tokenizer);
 b32 EndOfBuffer(Tokenizer *tokenizer);

@@ -649,6 +649,14 @@ void SkipToNextChar(Tokenizer *tokenizer, char token)
     }
 }
 
+void SkipToNextChar2(Tokenizer *tokenizer, char token)
+{
+    while (!EndOfBuffer(tokenizer) && *tokenizer->cursor != token)
+    {
+        tokenizer->cursor++;
+    }
+}
+
 void SkipToNextWord(Tokenizer *iter)
 {
     bool findChar = false;

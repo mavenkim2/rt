@@ -951,6 +951,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     transferSem.signalValue = 1;
 
     u32 testCount = 0;
+    u32 maxUnused = 0;
+    f32 speed     = 5000.f;
     for (;;)
     {
         ScratchArena frameScratch;
@@ -981,6 +983,14 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 {
                     dMouseP[0] = node->values[i].mouseMoveX;
                     dMouseP[1] = node->values[i].mouseMoveY;
+                }
+                else if (node->values[i].key == OS_Key_L)
+                {
+                    speed *= 2.f;
+                }
+                else if (node->values[i].key == OS_Key_K)
+                {
+                    speed /= 2.f;
                 }
                 for (int keyIndex = 0; keyIndex < ArrayLength(keys); keyIndex++)
                 {
@@ -1016,7 +1026,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         // Input
         {
-            f32 speed = 5000.f;
 
             f32 rotationSpeed = 0.001f * PI;
             camera.RotateCamera(dMouseP, rotationSpeed);
@@ -1107,7 +1116,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             Print("freed partition count: %u visible count: %u, writes: %u updates %u, "
                   "allocate: "
                   "%u freed: %u unused: %u debug: %u, free list count: %u, x: %u, y: %u, z: "
-                  "%u, skipped: %u\n",
+                  "%u, skipped: %u, max unused: %u\n",
                   data[GLOBALS_FREED_PARTITION_COUNT], data[GLOBALS_VISIBLE_PARTITION_COUNT],
                   data[GLOBALS_PTLAS_WRITE_COUNT_INDEX],
                   data[GLOBALS_PTLAS_UPDATE_COUNT_INDEX],
@@ -1116,26 +1125,17 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                   data[GLOBALS_INSTANCE_UNUSED_COUNT], data[GLOBALS_DEBUG],
                   data[GLOBALS_DEBUG2], data[GLOBALS_ALLOCATE_INSTANCE_INDIRECT_X],
                   data[GLOBALS_ALLOCATE_INSTANCE_INDIRECT_Y],
-                  data[GLOBALS_ALLOCATE_INSTANCE_INDIRECT_Z], data[GLOBALS_DEBUG3]);
+                  data[GLOBALS_ALLOCATE_INSTANCE_INDIRECT_Z], data[GLOBALS_DEBUG3], maxUnused);
             Assert(0);
         }
 
         Print("frame: %u\n", device->frameCount);
 
-        // for (int i = 0; i < 16; i++)
-        // {
-        //     Print("%u ", *((u32 *)readback2.mappedPtr + 131073 * i));
-        // }
-        // Print("\n");
-        // Print("%u %u %u %u\n", data[GLOBALS_BLAS_BYTES],
-        // data[GLOBALS_BLAS_CLAS_COUNT_INDEX],
-        //       data[GLOBALS_VISIBLE_CLUSTER_COUNT_INDEX],
-        //       data[GLOBALS_FREED_PARTITION_COUNT]);
-        // Print("%u\n", data2[0]);
+        maxUnused = Max(maxUnused, data[GLOBALS_DEBUG]);
         Print("freed partition count: %u visible count: %u, writes: %u updates %u, "
               "allocate: "
               "%u freed: %u unused: %u debug: %u, free list count: %u, x: %u, y: %u, z: "
-              "%u, skipped: %u\n",
+              "%u, skipped: %u, max unused: %u\n",
               data[GLOBALS_FREED_PARTITION_COUNT], data[GLOBALS_VISIBLE_PARTITION_COUNT],
               data[GLOBALS_PTLAS_WRITE_COUNT_INDEX], data[GLOBALS_PTLAS_UPDATE_COUNT_INDEX],
               data[GLOBALS_ALLOCATED_INSTANCE_COUNT_INDEX],
@@ -1143,7 +1143,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
               data[GLOBALS_DEBUG], data[GLOBALS_DEBUG2],
               data[GLOBALS_ALLOCATE_INSTANCE_INDIRECT_X],
               data[GLOBALS_ALLOCATE_INSTANCE_INDIRECT_Y],
-              data[GLOBALS_ALLOCATE_INSTANCE_INDIRECT_Z], data[GLOBALS_DEBUG3]);
+              data[GLOBALS_ALLOCATE_INSTANCE_INDIRECT_Z], data[GLOBALS_DEBUG3], maxUnused);
 
         string cmdBufferName =
             PushStr8F(frameScratch.temp.arena, "Graphics Cmd %u", device->frameCount);
