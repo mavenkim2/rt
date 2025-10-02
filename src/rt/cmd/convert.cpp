@@ -37,6 +37,7 @@ namespace rt
 
 struct DisneyMaterial
 {
+    string name;
     string colorMap;
     float diffTrans;
     Vec4f baseColor;
@@ -59,6 +60,46 @@ struct DisneyMaterial
     Array<string> assignments;
 };
 
+struct DiskDisneyMaterial
+{
+    float diffTrans;
+    Vec4f baseColor;
+    float specTrans;
+    float clearcoatGloss;
+    Vec3f scatterDistance;
+    float clearcoat;
+    float specularTint;
+    float ior;
+    float metallic;
+    float flatness;
+    float sheen;
+    float sheenTint;
+    float anisotropic;
+    float alpha;
+    float roughness;
+    bool thin;
+
+    DiskDisneyMaterial(DisneyMaterial &material)
+    {
+        diffTrans       = material.diffTrans;
+        baseColor       = material.baseColor;
+        specTrans       = material.specTrans;
+        clearcoatGloss  = material.clearcoatGloss;
+        scatterDistance = material.scatterDistance;
+        clearcoat       = material.clearcoat;
+        specularTint    = material.specularTint;
+        ior             = material.ior;
+        metallic        = material.metallic;
+        flatness        = material.flatness;
+        sheen           = material.sheen;
+        sheenTint       = material.sheenTint;
+        anisotropic     = material.anisotropic;
+        alpha           = material.alpha;
+        roughness       = material.roughness;
+        thin            = material.thin;
+    }
+};
+
 struct Instance
 {
     u32 id;
@@ -71,6 +112,7 @@ struct ShapeType
 
     ScenePacket *areaLight;
     string materialName;
+    string groupName;
     int transformIndex;
 
     Mesh mesh;
@@ -904,7 +946,8 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
     MemoryCopy(packet->types, dataTypes, sizeof(DataType) * packet->parameterCount);
 }
 
-void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state = 0);
+void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state = 0,
+               Array<DisneyMaterial> *disneyMaterials = 0);
 
 string ConvertPBRTToRTScene(Arena *arena, string file)
 {
@@ -1018,7 +1061,8 @@ static string WriteNanite(PBRTFileInfo *state, SceneLoadState *sls, string direc
             testVert += meshes[meshIndex].numVertices;
             testInd += meshes[meshIndex].numIndices;
         }
-        Print("stats for %S pre cull: vert %u ind %u \n", currentFilename, testVert, testInd);
+        Print("stats for %S pre cull: vert %u ind %u num %u\n", currentFilename, testVert,
+              testInd, meshes.Length());
 
         ParallelFor(0, meshes.Length(), 32, 32, [&](int jobID, int start, int count) {
             for (int meshIndex = start; meshIndex < start + count; meshIndex++)
@@ -1222,8 +1266,8 @@ static string WriteNanite(PBRTFileInfo *state, SceneLoadState *sls, string direc
                 offset += sizeof(Vec2f) * mesh.numVertices;
             }
         }
-        Print("stats for %S: vert %u ind %u \n", currentFilename, totalNumVertices,
-              totalNumIndices);
+        Print("stats for %S: vert %u ind %u num %u\n", currentFilename, totalNumVertices,
+              totalNumIndices, newNumMeshes);
 
         string str = {buffer, size};
         u64 hash   = MurmurHash64A(str.str, size, 0);
@@ -2416,7 +2460,8 @@ void WriteTransforms(PBRTFileInfo *info, StringBuilderMapped &dataBuilder)
     }
 }
 
-void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
+void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state,
+               Array<DisneyMaterial> *disneyMaterials)
 {
     TempArena temp = ScratchStart(0, 0);
     Assert(GetFileExtension(info->filename) == "rtscene");
@@ -2505,6 +2550,21 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
             WriteMaterials(&builder, textureHashMap, materials[handle.index],
                            state->hashMapSize - 1);
         }
+        Put(&builder, "MATERIALS_END ");
+    }
+    else if (disneyMaterials)
+    {
+        Put(&builder, "MATERIALS_START ");
+
+        for (DisneyMaterial &material : *disneyMaterials)
+        {
+            Put(&builder, "m %S ", material.name);
+            Put(&builder, "disney ");
+            DiskDisneyMaterial writeMaterial(material);
+            PutPointerValue(&builder, &writeMaterial);
+            Put(&builder, " ");
+        }
+
         Put(&builder, "MATERIALS_END ");
     }
 
@@ -2711,7 +2771,8 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
     ScratchEnd(temp);
 }
 
-static void LoadMaterialJSON(SceneLoadState *sls, string directory, string filename)
+static Array<DisneyMaterial> LoadMaterialJSON(SceneLoadState *sls, string directory,
+                                              string filename)
 {
     ScratchArena scratch;
     Tokenizer tokenizer;
@@ -2720,6 +2781,8 @@ static void LoadMaterialJSON(SceneLoadState *sls, string directory, string filen
     tokenizer.cursor = tokenizer.input.str;
 
     Arena *arena = sls->arenas[GetThreadIndex()];
+
+    Array<DisneyMaterial> disneyMaterials(arena, 8);
 
     for (;;)
     {
@@ -2734,13 +2797,8 @@ static void LoadMaterialJSON(SceneLoadState *sls, string directory, string filen
 
         materialName = PushStr8Copy(arena, materialName);
 
-        NamedPacket material;
-        material.type = PushStr8Copy(arena, "disney");
-        StringId parameterNames[MAX_PARAMETER_COUNT];
-        u8 *bytes[MAX_PARAMETER_COUNT];
-        u32 sizes[MAX_PARAMETER_COUNT];
-        DataType dataTypes[MAX_PARAMETER_COUNT];
-        u32 parameterCount = 0;
+        DisneyMaterial material;
+        material.name = materialName;
 
         for (;;)
         {
@@ -2751,15 +2809,7 @@ static void LoadMaterialJSON(SceneLoadState *sls, string directory, string filen
             if (parameterType == "diffTrans")
             {
                 SkipToNextDigit(&tokenizer);
-                f32 diffTrans      = ReadFloat(&tokenizer);
-                u32 parameterIndex = parameterCount++;
-                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(f32));
-                MemoryCopy(vals, &diffTrans, sizeof(f32));
-
-                parameterNames[parameterIndex] = "diffTrans"_sid;
-                bytes[parameterIndex]          = vals;
-                sizes[parameterIndex]          = sizeof(f32);
-                dataTypes[parameterIndex]      = DataType::Float;
+                material.diffTrans = ReadFloat(&tokenizer);
             }
             else if (parameterType == "baseColor")
             {
@@ -2770,27 +2820,12 @@ static void LoadMaterialJSON(SceneLoadState *sls, string directory, string filen
                     float f      = ReadFloat(&tokenizer);
                     baseColor[i] = f;
                 }
-                u32 parameterIndex = parameterCount++;
-                u8 *vals           = PushArrayNoZero(arena, u8, 4 * sizeof(Vec4f));
-                MemoryCopy(vals, &baseColor, 4 * sizeof(f32));
-
-                parameterNames[parameterIndex] = "baseColor"_sid;
-                bytes[parameterIndex]          = vals;
-                sizes[parameterIndex]          = sizeof(Vec4f);
-                dataTypes[parameterIndex]      = DataType::Vec4;
+                material.baseColor = baseColor;
             }
             else if (parameterType == "specTrans")
             {
                 SkipToNextDigit(&tokenizer);
-                f32 specTrans      = ReadFloat(&tokenizer);
-                u32 parameterIndex = parameterCount++;
-                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(f32));
-                MemoryCopy(vals, &specTrans, sizeof(f32));
-
-                parameterNames[parameterIndex] = "specTrans"_sid;
-                bytes[parameterIndex]          = vals;
-                sizes[parameterIndex]          = sizeof(f32);
-                dataTypes[parameterIndex]      = DataType::Float;
+                material.specTrans = ReadFloat(&tokenizer);
             }
             else if (parameterType == "colorMap")
             {
@@ -2799,27 +2834,12 @@ static void LoadMaterialJSON(SceneLoadState *sls, string directory, string filen
                 bool success = GetBetweenPair(colorMapFilename, &tokenizer, '"');
                 Assert(success);
 
-                colorMapFilename   = PushStr8Copy(arena, colorMapFilename);
-                u32 parameterIndex = parameterCount++;
-
-                parameterNames[parameterIndex] = "colorMap"_sid;
-                bytes[parameterIndex]          = colorMapFilename.str;
-                sizes[parameterIndex]          = (u32)colorMapFilename.size;
-                dataTypes[parameterIndex]      = DataType::String;
+                material.colorMap = PushStr8Copy(arena, colorMapFilename);
             }
             else if (parameterType == "clearcoatGloss")
             {
                 SkipToNextDigit(&tokenizer);
-                f32 clearcoatGloss = ReadFloat(&tokenizer);
-
-                u32 parameterIndex = parameterCount++;
-                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(f32));
-                MemoryCopy(vals, &clearcoatGloss, sizeof(f32));
-
-                parameterNames[parameterIndex] = "clearcoatGloss"_sid;
-                bytes[parameterIndex]          = vals;
-                sizes[parameterIndex]          = sizeof(f32);
-                dataTypes[parameterIndex]      = DataType::Float;
+                material.clearcoatGloss = ReadFloat(&tokenizer);
             }
             else if (parameterType == "scatterDistance")
             {
@@ -2829,14 +2849,7 @@ static void LoadMaterialJSON(SceneLoadState *sls, string directory, string filen
                     SkipToNextDigit(&tokenizer);
                     scatterDistance[i] = ReadFloat(&tokenizer);
                 }
-                u32 parameterIndex = parameterCount++;
-                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(Vec3f));
-                MemoryCopy(vals, &scatterDistance, sizeof(Vec3f));
-
-                parameterNames[parameterIndex] = "scatterDistance"_sid;
-                bytes[parameterIndex]          = vals;
-                sizes[parameterIndex]          = sizeof(Vec3f);
-                dataTypes[parameterIndex]      = DataType::Vec3;
+                material.scatterDistance = scatterDistance;
             }
             else if (parameterType == "assignment")
             {
@@ -2845,135 +2858,52 @@ static void LoadMaterialJSON(SceneLoadState *sls, string directory, string filen
             else if (parameterType == "clearcoat")
             {
                 SkipToNextDigit(&tokenizer);
-                f32 clearcoat      = ReadFloat(&tokenizer);
-                u32 parameterIndex = parameterCount++;
-                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(f32));
-                MemoryCopy(vals, &clearcoat, sizeof(f32));
-
-                parameterNames[parameterIndex] = "clearcoat"_sid;
-                bytes[parameterIndex]          = vals;
-                sizes[parameterIndex]          = sizeof(f32);
-                dataTypes[parameterIndex]      = DataType::Float;
+                material.clearcoat = ReadFloat(&tokenizer);
             }
             else if (parameterType == "specularTint")
             {
                 SkipToNextDigit(&tokenizer);
-                f32 specularTint = ReadFloat(&tokenizer);
-
-                u32 parameterIndex = parameterCount++;
-                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(f32));
-                MemoryCopy(vals, &specularTint, sizeof(f32));
-
-                parameterNames[parameterIndex] = "specularTint"_sid;
-                bytes[parameterIndex]          = vals;
-                sizes[parameterIndex]          = sizeof(f32);
-                dataTypes[parameterIndex]      = DataType::Float;
+                material.specularTint = ReadFloat(&tokenizer);
             }
             else if (parameterType == "ior")
             {
                 SkipToNextDigit(&tokenizer);
-                f32 ior = ReadFloat(&tokenizer);
-
-                u32 parameterIndex = parameterCount++;
-                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(f32));
-                MemoryCopy(vals, &ior, sizeof(f32));
-
-                parameterNames[parameterIndex] = "ior"_sid;
-                bytes[parameterIndex]          = vals;
-                sizes[parameterIndex]          = sizeof(f32);
-                dataTypes[parameterIndex]      = DataType::Float;
+                material.ior = ReadFloat(&tokenizer);
             }
             else if (parameterType == "metallic")
             {
                 SkipToNextDigit(&tokenizer);
-                f32 metallic = ReadFloat(&tokenizer);
-
-                u32 parameterIndex = parameterCount++;
-                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(f32));
-                MemoryCopy(vals, &metallic, sizeof(f32));
-
-                parameterNames[parameterIndex] = "metallic"_sid;
-                bytes[parameterIndex]          = vals;
-                sizes[parameterIndex]          = sizeof(f32);
-                dataTypes[parameterIndex]      = DataType::Float;
+                material.metallic = ReadFloat(&tokenizer);
             }
             else if (parameterType == "flatness")
             {
                 SkipToNextDigit(&tokenizer);
-                f32 flatness       = ReadFloat(&tokenizer);
-                u32 parameterIndex = parameterCount++;
-                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(f32));
-                MemoryCopy(vals, &flatness, sizeof(f32));
-
-                parameterNames[parameterIndex] = "flatness"_sid;
-                bytes[parameterIndex]          = vals;
-                sizes[parameterIndex]          = sizeof(f32);
-                dataTypes[parameterIndex]      = DataType::Float;
+                material.flatness = ReadFloat(&tokenizer);
             }
             else if (parameterType == "sheen")
             {
                 SkipToNextDigit(&tokenizer);
-                float sheen        = ReadFloat(&tokenizer);
-                u32 parameterIndex = parameterCount++;
-                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(f32));
-                MemoryCopy(vals, &sheen, sizeof(f32));
-
-                parameterNames[parameterIndex] = "sheen"_sid;
-                bytes[parameterIndex]          = vals;
-                sizes[parameterIndex]          = sizeof(f32);
-                dataTypes[parameterIndex]      = DataType::Float;
+                material.sheen = ReadFloat(&tokenizer);
             }
             else if (parameterType == "sheenTint")
             {
                 SkipToNextDigit(&tokenizer);
-                f32 sheenTint      = ReadFloat(&tokenizer);
-                u32 parameterIndex = parameterCount++;
-                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(f32));
-                MemoryCopy(vals, &sheenTint, sizeof(f32));
-
-                parameterNames[parameterIndex] = "sheenTint"_sid;
-                bytes[parameterIndex]          = vals;
-                sizes[parameterIndex]          = sizeof(f32);
-                dataTypes[parameterIndex]      = DataType::Float;
+                material.sheenTint = ReadFloat(&tokenizer);
             }
             else if (parameterType == "anisotropic")
             {
                 SkipToNextDigit(&tokenizer);
-                f32 anisotropic    = ReadFloat(&tokenizer);
-                u32 parameterIndex = parameterCount++;
-                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(f32));
-                MemoryCopy(vals, &anisotropic, sizeof(f32));
-
-                parameterNames[parameterIndex] = "anisotropic"_sid;
-                bytes[parameterIndex]          = vals;
-                sizes[parameterIndex]          = sizeof(f32);
-                dataTypes[parameterIndex]      = DataType::Float;
+                material.anisotropic = ReadFloat(&tokenizer);
             }
             else if (parameterType == "alpha")
             {
                 SkipToNextDigit(&tokenizer);
-                f32 alpha          = ReadFloat(&tokenizer);
-                u32 parameterIndex = parameterCount++;
-                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(f32));
-                MemoryCopy(vals, &alpha, sizeof(f32));
-
-                parameterNames[parameterIndex] = "alpha"_sid;
-                bytes[parameterIndex]          = vals;
-                sizes[parameterIndex]          = sizeof(f32);
-                dataTypes[parameterIndex]      = DataType::Float;
+                material.alpha = ReadFloat(&tokenizer);
             }
             else if (parameterType == "roughness")
             {
                 SkipToNextDigit(&tokenizer);
-                f32 roughness      = ReadFloat(&tokenizer);
-                u32 parameterIndex = parameterCount++;
-                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(f32));
-                MemoryCopy(vals, &roughness, sizeof(f32));
-
-                parameterNames[parameterIndex] = "roughness"_sid;
-                bytes[parameterIndex]          = vals;
-                sizes[parameterIndex]          = sizeof(f32);
-                dataTypes[parameterIndex]      = DataType::Float;
+                material.roughness = ReadFloat(&tokenizer);
             }
             else if (parameterType == "type")
             {
@@ -2986,14 +2916,7 @@ static void LoadMaterialJSON(SceneLoadState *sls, string directory, string filen
                 {
                     thin = true;
                 }
-                u32 parameterIndex = parameterCount++;
-                u8 *vals           = PushArrayNoZero(arena, u8, sizeof(bool));
-                MemoryCopy(vals, &thin, sizeof(bool));
-
-                parameterNames[parameterIndex] = "type"_sid;
-                bytes[parameterIndex]          = vals;
-                sizes[parameterIndex]          = sizeof(bool);
-                dataTypes[parameterIndex]      = DataType::Bool;
+                material.thin = thin;
             }
             else if (parameterType == "displacementMap")
             {
@@ -3007,11 +2930,9 @@ static void LoadMaterialJSON(SceneLoadState *sls, string directory, string filen
                 Assert(0);
             }
         }
-
-        material.name = materialName;
-        sls->materialMap.FindOrAdd(arena, materialName, sls->materialCounter);
-        sls->materials[GetThreadIndex()].Push(material);
+        disneyMaterials.Push(material);
     }
+    return disneyMaterials;
 }
 
 static Mesh *LoadObj(Arena *arena, string filename, string *&outMaterialNames,
@@ -3194,7 +3115,6 @@ static void LoadMoanaOBJ(PBRTFileInfo *info, string filePath)
     string *materials, *groupNames;
     Mesh *meshes = LoadObj(info->arena, filePath, materials, groupNames, numMeshes);
 
-    ShapeType *shapes = PushArrayNoZero(info->arena, ShapeType, numMeshes);
     for (int i = 0; i < numMeshes; i++)
     {
         ShapeType &shape   = info->shapes.AddBack();
@@ -3202,6 +3122,7 @@ static void LoadMoanaOBJ(PBRTFileInfo *info, string filePath)
         meshes[i].numFaces = meshes[i].numIndices / 4;
         shape.mesh         = ConvertQuadToTriangleMesh(info->arena, meshes[i]);
         shape.materialName = materials[i];
+        shape.groupName    = groupNames[i];
     }
 }
 
@@ -3264,9 +3185,11 @@ static void LoadMoanaJSON(Arena *arena, SceneLoadState *sls, string directory, s
     bool baseMesh = false;
 
     ChunkedLinkedList<PBRTFileInfo> fileInfos(scratch.temp.arena, 16);
+
     Scheduler::Counter counter = {};
 
     ChunkedLinkedList<AffineSpace> instanceTransforms(scratch.temp.arena, 1024);
+    Array<DisneyMaterial> disneyMaterials;
     string name;
     for (;;)
     {
@@ -3317,7 +3240,7 @@ static void LoadMoanaJSON(Arena *arena, SceneLoadState *sls, string directory, s
             string matFilename;
             success = GetBetweenPair(matFilename, &tokenizer, '"');
             Assert(success);
-            LoadMaterialJSON(sls, directory, matFilename);
+            disneyMaterials = LoadMaterialJSON(sls, directory, matFilename);
         }
         else if (parameterType == "name")
         {
@@ -3451,6 +3374,23 @@ static void LoadMoanaJSON(Arena *arena, SceneLoadState *sls, string directory, s
         PushArrayNoZero(scratch.temp.arena, PBRTFileInfo, fileInfos.Length());
     fileInfos.Flatten(infos);
 
+    u32 hashSize = NextPowerOfTwo(disneyMaterials.Length());
+    HashIndex materialHash(scratch.temp.arena, hashSize, hashSize);
+    Array<DisneyMaterial> newDisneyMaterials(scratch.temp.arena, disneyMaterials.Length());
+    Array<string> colorMaps(scratch.temp.arena, disneyMaterials.Length());
+
+    for (u32 materialIndex = 0; materialIndex < disneyMaterials.Length(); materialIndex++)
+    {
+        DisneyMaterial &material = disneyMaterials[materialIndex];
+        u32 hash                 = Hash(material.name);
+        materialHash.AddInHash(hash, materialIndex);
+
+        if (material.colorMap.size == 0)
+        {
+            sls->materialMap.FindOrAdd(arena, material.name, sls->materialCounter);
+        }
+    }
+
     for (u32 fileInfoIndex = 0; fileInfoIndex < fileInfos.Length(); fileInfoIndex++)
     {
         PBRTFileInfo *info = &infos[fileInfoIndex];
@@ -3476,20 +3416,67 @@ static void LoadMoanaJSON(Arena *arena, SceneLoadState *sls, string directory, s
         }
         else
         {
+            for (auto *shapeNode = info->shapes.first; shapeNode != 0;
+                 shapeNode       = shapeNode->next)
+            {
+                for (u32 i = 0; i < shapeNode->count; i++)
+                {
+                    ShapeType &shape = shapeNode->values[i];
+                    u32 hash         = Hash(shape.materialName);
+                    bool found       = false;
+                    bool hasColorMap = false;
+                    DisneyMaterial material;
+                    for (int hashIndex = materialHash.FirstInHash(hash); hashIndex != -1;
+                         hashIndex     = materialHash.NextInHash(hashIndex))
+                    {
+                        if (disneyMaterials[hashIndex].name == shape.materialName)
+                        {
+                            found       = true;
+                            hasColorMap = disneyMaterials[hashIndex].colorMap.size != 0;
+                            material    = disneyMaterials[hashIndex];
+                            break;
+                        }
+                    }
+                    ErrorExit(found, "material not found\n");
+                    if (hasColorMap)
+                    {
+                        string newMaterialName =
+                            StrConcat(arena, shape.materialName, shape.groupName);
+                        string colorMapName =
+                            StrConcat(arena, material.colorMap, shape.groupName);
+                        sls->materialMap.FindOrAdd(arena, newMaterialName,
+                                                   sls->materialCounter);
+                        material.colorMap = colorMapName;
+                        newDisneyMaterials.Push(material);
+                        colorMaps.Push(colorMapName);
+                        shape.materialName = newMaterialName;
+                    }
+                }
+            }
+
             InstanceType instance;
             instance.filename            = PushStr8Copy(base.arena, info->filename);
             instance.transformIndexStart = 0;
             instance.transformIndexEnd   = base.transforms.Length() - 1;
+            base.fileInstances.Push(instance);
 
-            info->virtualGeoFilename = WriteNanite(info, sls, directory, info->filename);
 #ifdef USE_GPU
+            info->virtualGeoFilename = WriteNanite(info, sls, directory, info->filename);
             info->shapes.Clear();
 #endif
             WriteFile(directory, info);
             ArenaRelease(info->arena);
         }
     }
-    WriteFile(directory, &base);
+#ifdef USE_GPU
+    for (string colorMap : colorMaps)
+    {
+        string textureFilename = StrConcat(scratch.temp.arena, directory, colorMap);
+        Convert(textureFilename);
+    }
+#endif
+
+    WriteFile(directory, &base, 0, &newDisneyMaterials);
     scheduler.Wait(&counter);
 }
 
