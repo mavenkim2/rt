@@ -34,18 +34,13 @@ ConstantBuffer<GPUScene> scene : register(b2);
 StructuredBuffer<GPUMaterial> materials : register(t4);
 ConstantBuffer<ShaderDebugInfo> debugInfo: register(b7);
 
-//RWStructuredBuffer<uint> feedbackBuffer : register(u12);
-//StructuredBuffer<uint> clusterLookupTable : register(t13);
+RWStructuredBuffer<uint> feedbackBuffer : register(u12);
 StructuredBuffer<GPUInstance> gpuInstances : register(t14);
-//RWStructuredBuffer<uint> proxyCounts : register(u15);
 StructuredBuffer<GPUTruncatedEllipsoid> truncatedEllipsoids : register(t16);
 StructuredBuffer<GPUTransform> instanceTransforms : register(t17);
 StructuredBuffer<PartitionInfo> partitionInfos : register(t18);
 StructuredBuffer<uint> partitionResourceIDs : register(t19);
 StructuredBuffer<Resource> resources : register(t20);
-
-//RWStructuredBuffer<float2> debugBuffer : register(u19);
-//RWStructuredBuffer<uint> globals : register(u20);
 
 RWTexture2D<float> depthBuffer : register(u21);
 RWTexture2D<float4> normalRougnessBuffer : register(u22);
@@ -305,7 +300,7 @@ void main()
             uint baseAddress = resources[instanceID].baseAddress;
             DenseGeometry dg = GetDenseGeometryHeader2(clusterID, baseAddress);
 
-            uint materialID = dg.DecodeMaterialID(triangleIndex) + 1;
+            uint materialID = dg.DecodeMaterialID(triangleIndex);
             uint3 vids = dg.DecodeTriangle(triangleIndex);
 
             uint2 pageInformation = dg.DecodeFaceIDAndRotateInfo(triangleIndex);

@@ -363,7 +363,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     layout.AddBinding((u32)RTBindings::ShaderDebugInfo, DescriptorType::UniformBuffer, flags);
     layout.AddBinding((u32)RTBindings::ClusterPageData, DescriptorType::StorageBuffer, flags);
     layout.AddBinding((u32)RTBindings::PtexFaceData, DescriptorType::StorageBuffer, flags);
-    // layout.AddBinding((u32)RTBindings::Feedback, DescriptorType::StorageBuffer, flags);
     // layout.AddBinding(13, DescriptorType::StorageBuffer, flags);
     layout.AddBinding(14, DescriptorType::StorageBuffer, flags);
     // layout.AddBinding(15, DescriptorType::StorageBuffer, flags);
@@ -377,6 +376,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     layout.AddBinding(23, DescriptorType::StorageImage, flags);
     layout.AddBinding(24, DescriptorType::StorageImage, flags);
     layout.AddBinding(25, DescriptorType::StorageImage, flags);
+    layout.AddBinding((u32)RTBindings::Feedback, DescriptorType::StorageBuffer, flags);
 
     layout.AddImmutableSamplers();
 
@@ -385,33 +385,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     // VkPipeline pipeline = device->CreateComputePipeline(&shader, &layout, &pushConstant);
     // Build clusters
     ScratchArena sceneScratch;
-
-    Bounds *bounds = PushArrayNoZero(sceneScratch.temp.arena, Bounds, numScenes);
-
-    int maxDepth = 0;
-    for (int i = 0; i < numScenes; i++)
-    {
-        maxDepth = Max(maxDepth, scenes[i]->depth.load(std::memory_order_acquire));
-    }
-
-    for (int depth = maxDepth; depth >= 0; depth--)
-    {
-        ParallelFor(0, numScenes, 1, [&](int jobID, int start, int count) {
-            for (int i = start; i < start + count; i++)
-            {
-                if (scenes[i]->depth == depth)
-                {
-                    bounds[i] = scenes[i]->GetSceneBounds();
-                }
-            }
-        });
-    }
-
-    Bounds sceneBounds;
-    for (int i = 0; i < numScenes; i++)
-    {
-        sceneBounds.Extend(bounds[i]);
-    }
 
     StaticArray<ScenePrimitives *> blasScenes(arena, numScenes);
     StaticArray<ScenePrimitives *> tlasScenes(arena, numScenes);
@@ -601,7 +574,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         ptexFaceDataBytes += faceDataBitStreamSize;
     }
 
-    ptexFaceDataBytes      = 8;
+    Print("face data bytes: %u\n", ptexFaceDataBytes);
+
     u8 *faceDataByteBuffer = PushArrayNoZero(sceneScratch.temp.arena, u8, ptexFaceDataBytes);
     u32 ptexOffset         = 0;
 
@@ -667,20 +641,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_SHADER_READ_BIT);
     tileCmd->FlushBarriers();
     device->SubmitCommandBuffer(tileCmd);
+    device->Wait(tileSubmitSemaphore);
 
-    u32 numInstances = 0;
-    u32 numBlas      = blasScenes.Length();
-    if (tlasScenes.Length())
-    {
-        for (auto &tlas : tlasScenes)
-        {
-            numInstances += tlas->numPrimitives;
-        }
-    }
-    else
-    {
-        numInstances = 1;
-    }
+    u32 numBlas = blasScenes.Length();
 
     // Virtual geometry initialization
 
@@ -847,24 +810,12 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         AffineSpace identity = AffineSpace::Identity();
         instances.Push(instance);
         instanceTransforms.Push(identity);
-        Assert(numInstances == 1);
         Assert(numScenes == 1);
     }
 
     bool built =
         virtualGeometryManager.AddInstances(sceneScratch.temp.arena, allCommandBuffer,
                                             instances, instanceTransforms, params->filename);
-    // virtualGeometryManager.AllocateInstances(gpuInstances);
-
-    // TransferBuffer gpuInstancesBuffer =
-    //     allCommandBuffer->SubmitBuffer(gpuInstances.data,
-    //     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-    //                                    sizeof(GPUInstance) * gpuInstances.Length());
-
-    // allCommandBuffer->SubmitBuffer(
-    //     &virtualGeometryManager.instanceRefBuffer,
-    //     virtualGeometryManager.newInstanceRefs.data, sizeof(InstanceRef) *
-    //     virtualGeometryManager.newInstanceRefs.Length());
 
     tlasSemaphore.signalValue = 1;
     allCommandBuffer->SignalOutsideFrame(tlasSemaphore);
@@ -1415,7 +1366,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                imageHandle = image, imageOutHandle = imageOut, &depthBuffer,
                normalRoughnessHandle = normalRoughness, diffuseAlbedoHandle = diffuseAlbedo,
                specularAlbedoHandle      = specularAlbedo,
-               specularHitDistanceHandle = specularHitDistance](CommandBuffer *cmd) {
+               specularHitDistanceHandle = specularHitDistance,
+               currentBuffer](CommandBuffer *cmd) {
                   RenderGraph *rg               = GetRenderGraph();
                   GPUImage *image               = rg->GetImage(imageHandle);
                   GPUImage *imageOut            = rg->GetImage(imageOutHandle);
@@ -1478,7 +1430,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                       .Bind(diffuseAlbedo)
                       .Bind(specularAlbedo)
                       .Bind(specularHitDistance)
-                      // .Bind(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
+                      .Bind(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer)
                       .PushConstants(&pushConstant, &pc)
                       .End();
 
@@ -1601,22 +1553,15 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             .AddHandle(imageOut, ResourceUsageType::Write);
 #endif
 
-#if 0
         // Copy feedback from device to host
-        CommandBuffer *transferCmd =
-            device->BeginCommandBuffer(QueueType_Copy, "feedback copy cmd");
-        cmd->Signal(transferSem);
-        transferCmd->Wait(transferSem);
-        transferSem.signalValue++;
-        // transferCmd->CopyBuffer(
-        //     &virtualTextureManager.feedbackBuffers[currentBuffer].stagingBuffer,
-        //     &virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
-        transferCmd->CopyBuffer(&virtualGeometryManager.readbackBuffer,
-                                &virtualGeometryManager.streamingRequestsBuffer);
-        // transferCmd->CopyBuffer(&virtualGeometryManager.partitionReadbackBuffer,
-        //                         &virtualGeometryManager.partitionCountsBuffer);
-        device->SubmitCommandBuffer(transferCmd, true);
-#endif
+        rg->StartPass(0, [&virtualTextureManager, currentBuffer](CommandBuffer *cmd) {
+            cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                         VK_ACCESS_2_SHADER_READ_BIT);
+            cmd->CopyBuffer(
+                &virtualTextureManager.feedbackBuffers[currentBuffer].stagingBuffer,
+                &virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
+        });
 
         debugState.EndFrame(cmd);
 

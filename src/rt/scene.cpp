@@ -911,12 +911,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
 
             while (!Advance(&tokenizer, "SHAPE_END "))
             {
-                if (Advance(&tokenizer, "Geo Filename "))
-                {
-                    string geoFilename        = ReadWord(&tokenizer);
-                    scene->virtualGeoFilename = PushStr8Copy(arena, geoFilename);
-                }
-                else if (Advance(&tokenizer, "Quad "))
+                if (Advance(&tokenizer, "Quad "))
                 {
                     // MOANA: everything should be catclark
                     // Assert(0);
@@ -1008,6 +1003,13 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
             scene->primIndices = PushArrayNoZeroTagged(arena, PrimitiveIndices,
                                                        indices.totalCount, MemoryType_Shape);
             indices.Flatten(scene->primIndices);
+        }
+        else if (Advance(&tokenizer, "Geo Filename "))
+        {
+            string geoFilename        = ReadWord(&tokenizer);
+            type                      = GeometryType::TriangleMesh;
+            scene->virtualGeoFilename = PushStr8Copy(arena, geoFilename);
+            SkipToNextChar(&tokenizer);
         }
         else if (Advance(&tokenizer, "MATERIALS_START "))
         {

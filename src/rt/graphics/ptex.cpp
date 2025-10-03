@@ -322,7 +322,13 @@ void Convert(string filename)
     string outFilename =
         PushStr8F(scratch.temp.arena, "%S.tiles", RemoveFileExtension(filename));
 
-    // if (OS_FileExists(outFilename)) return;
+    Print("starting conversion for %S\n", filename);
+
+    if (OS_FileExists(outFilename))
+    {
+        Print("skipping conversion for %S\n", filename);
+        return;
+    }
 
     size_t maxMem = gigabytes(4);
 
@@ -1044,6 +1050,8 @@ void Convert(string filename)
     // Output to disk
     OS_UnmapFile(builder.ptr);
     OS_ResizeFile(builder.filename, builder.totalSize);
+
+    Print("conversion finished for %S\n", filename);
 }
 
 template <typename T>
@@ -1285,7 +1293,6 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
         uploadDeviceBuffers =
             FixedArray<GPUBuffer, numPendingSubmissions>(numPendingSubmissions);
 
-        // TODO: don't do a worst case allocation of this
         // uploadDeviceBuffers[0] = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         //                                               maxUploadSize,
         //                                               MemoryUsage::CPU_TO_GPU);
@@ -1308,10 +1315,10 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
 
         feedbackBuffers =
             FixedArray<TransferBuffer, numPendingSubmissions>(numPendingSubmissions);
-        // feedbackBuffers[0] =
-        //     device->GetReadbackBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, megabytes(8));
-        // feedbackBuffers[1] =
-        //     device->GetReadbackBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, megabytes(8));
+        feedbackBuffers[0] =
+            device->GetReadbackBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, megabytes(8));
+        feedbackBuffers[1] =
+            device->GetReadbackBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, megabytes(8));
 
         feedbackMutex.count.store(0);
     }
@@ -1475,7 +1482,6 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *tra
     transferCmd->SignalOutsideFrame(uploadSemaphores[currentBuffer]);
     computeCmd->Wait(uploadSemaphores[currentBuffer]);
 
-#if 0
     // Write last frame's feedback buffer
     if (device->frameCount >= 2)
     {
@@ -1566,6 +1572,17 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *tra
 
         // Copy data to staging buffer
         GPUBuffer *uploadDeviceBuffer = &uploadDeviceBuffers[currentBuffer];
+        if (uploadDeviceBuffer->size < uploadBuffer.size())
+        {
+            if (uploadDeviceBuffer->size)
+            {
+                device->DestroyBuffer(uploadDeviceBuffer);
+            }
+            *uploadDeviceBuffer =
+                device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, uploadBuffer.size(),
+                                     MemoryUsage::CPU_TO_GPU);
+        }
+
         MemoryCopy(uploadDeviceBuffer->mappedPtr, uploadBuffer.data, uploadBuffer.size());
         transferCmd->CopyImage(uploadDeviceBuffer, &gpuPhysicalPool, writtenCopyCommands.data,
                                numCopies);
@@ -1586,7 +1603,6 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *tra
 
     // Make sure all memory writes are visible
     readSubmission.store(readIndex + 1, std::memory_order_release);
-#endif
 }
 
 void VirtualTextureManager::UnlinkLRU(int pageIndex)
