@@ -429,9 +429,12 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     Semaphore tileSubmitSemaphore   = device->CreateSemaphore();
     tileSubmitSemaphore.signalValue = 1;
     tileCmd->TransferWriteBarrier(&virtualTextureManager.gpuPhysicalPool);
+    tileCmd->Barrier(&virtualTextureManager.pageTable, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                     VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    tileCmd->FlushBarriers();
+    virtualTextureManager.ClearTextures(tileCmd);
     tileCmd->UAVBarrier(&virtualTextureManager.pageTable);
     tileCmd->FlushBarriers();
-    // virtualTextureManager.ClearTextures(tileCmd);
 
     struct TextureTempData
     {
@@ -594,9 +597,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     for (int i = 0; i < rootScene->materials.Length(); i++)
     {
-        GPUMaterial material = rootScene->materials[i]->ConvertToGPU();
-        int index            = rootScene->materials[i]->ptexReflectanceIndex;
-        u32 materialID       = index;
+        GPUMaterial material  = rootScene->materials[i]->ConvertToGPU();
+        material.textureIndex = -1;
+        int index             = rootScene->materials[i]->ptexReflectanceIndex;
+        u32 materialID        = index;
         if (index != -1)
         {
             GPUTextureInfo &textureInfo = gpuTextureInfo[index];
@@ -1228,42 +1232,31 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         device->SubmitCommandBuffer(transitionCmd);
         device->SubmitCommandBuffer(virtualTextureCopyCmd);
 
-        // cmd->ClearBuffer(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
+        rg->StartPass(2,
+                      [&clasGlobals      = virtualGeometryManager.clasGlobalsBuffer,
+                       instanceBitVector = virtualGeometryManager.instanceBitVectorHandle,
+                       &virtualTextureManager, currentBuffer](CommandBuffer *cmd) {
+                          RenderGraph *rg = GetRenderGraph();
 
-        // Virtual geometry pass
+                          GPUBuffer *buffer = rg->GetBuffer(instanceBitVector);
+                          cmd->ClearBuffer(buffer);
 
-        // TODO: ????
-        // cmd->ClearBuffer(&virtualGeometryManager.workItemQueueBuffer, ~0u);
-        // cmd->ClearBuffer(&virtualGeometryManager.visibleClustersBuffer, ~0u);
-        // cmd->ClearBuffer(&virtualGeometryManager.partitionCountsBuffer);
+                          cmd->ClearBuffer(&clasGlobals, 0);
+                          cmd->ClearBuffer(
+                              &virtualTextureManager.feedbackBuffers[currentBuffer].buffer, 0,
+                              0, sizeof(u32));
 
-        rg->StartPass(
-              2,
-              [&clasGlobals = virtualGeometryManager.clasGlobalsBuffer,
-               instanceBitVector =
-                   virtualGeometryManager.instanceBitVectorHandle](CommandBuffer *cmd) {
-                  RenderGraph *rg = GetRenderGraph();
-
-                  GPUBuffer *buffer = rg->GetBuffer(instanceBitVector);
-                  cmd->ClearBuffer(buffer);
-
-                  cmd->ClearBuffer(&clasGlobals, 0);
-
-                  cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                               VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                               VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
-                  cmd->FlushBarriers();
-              })
+                          cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                       VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                       VK_ACCESS_2_SHADER_WRITE_BIT |
+                                           VK_ACCESS_2_SHADER_READ_BIT);
+                          cmd->FlushBarriers();
+                      })
             .AddHandle(virtualGeometryManager.clasGlobalsBufferHandle,
                        ResourceUsageType::Write)
             .AddHandle(virtualGeometryManager.instanceBitVectorHandle,
                        ResourceUsageType::Write);
-
-        // Streaming
-        int cpuIndex = TIMED_CPU_RANGE_BEGIN();
-
-        TIMED_RANGE_END(cpuIndex);
 
         if (device->frameCount > 0)
         {

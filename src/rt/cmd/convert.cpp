@@ -975,7 +975,7 @@ static string WriteNanite(PBRTFileInfo *state, SceneLoadState *sls, string direc
                           string currentFilename)
 {
 
-#ifdef USE_GPU
+#if 1
     if (state->shapes.Length())
     {
         ScratchArena scratch;
@@ -1173,12 +1173,11 @@ static string WriteNanite(PBRTFileInfo *state, SceneLoadState *sls, string direc
                 newMesh.p           = vertices;
                 newMesh.indices     = indices;
                 newMesh.n           = normals;
-                // newMesh.uv          = uvs;
+                newMesh.faceIDs     = mesh.faceIDs;
 
                 meshes[meshIndex] = newMesh;
             }
         });
-
         // Remove duplicated triangles
         ParallelFor(0, newNumMeshes, 32, 32, [&](int jobID, int start, int count) {
             for (int meshIndex = start; meshIndex < start + count; meshIndex++)
@@ -1217,6 +1216,7 @@ static string WriteNanite(PBRTFileInfo *state, SceneLoadState *sls, string direc
                         mesh.indices[3 * newTri + 0] = index0;
                         mesh.indices[3 * newTri + 1] = index1;
                         mesh.indices[3 * newTri + 2] = index2;
+                        mesh.faceIDs[newTri]         = mesh.faceIDs[tri];
                     }
                 }
 
@@ -3410,6 +3410,7 @@ static void LoadMoanaJSON(Arena *arena, SceneLoadState *sls, string directory, s
         if (material.colorMap.size == 0)
         {
             sls->materialMap.FindOrAdd(arena, material.name, sls->materialCounter);
+            newDisneyMaterials.Push(material);
         }
     }
 

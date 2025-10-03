@@ -78,7 +78,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
 
     // TODO don't hardcode
     HMODULE module =
-        LoadLibraryA("../../src/third_party/streamline/bin/x64/sl.interposer.dll");
+        LoadLibraryA("../../src/third_party/streamline/bin/x64/development/sl.interposer.dll");
     Assert(module);
 
     // note: function pointer is cast through void function pointer to silence

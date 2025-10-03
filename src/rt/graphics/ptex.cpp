@@ -1172,14 +1172,24 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
     string data       = OS_ReadFile(arena, shaderName);
     shader            = device->CreateShader(ShaderStage::Compute, "update page tables", data);
 
+    string clearPageTableName = "../src/shaders/clear_page_table.spv";
+    string clearPageTableData = OS_ReadFile(arena, clearPageTableName);
+    Shader clearPageTableShader =
+        device->CreateShader(ShaderStage::Compute, "clear page table", clearPageTableData);
+
     descriptorSetLayout = {};
     descriptorSetLayout.AddBinding(0, DescriptorType::StorageBuffer,
                                    VK_SHADER_STAGE_COMPUTE_BIT);
     push     = PushConstant(ShaderStage::Compute, 0, sizeof(PageTableUpdatePushConstant));
     pipeline = device->CreateComputePipeline(&shader, &descriptorSetLayout, &push);
 
-    ImageLimits limits = device->GetImageLimits();
+    clearPageTableLayout = {};
+    clearPageTableLayout.AddBinding(0, DescriptorType::StorageImage,
+                                    VK_SHADER_STAGE_COMPUTE_BIT);
+    clearPageTablePipeline =
+        device->CreateComputePipeline(&clearPageTableShader, &clearPageTableLayout);
 
+    ImageLimits limits = device->GetImageLimits();
     // Allocate page table
     const u32 numMips =
         Log2Int(Max(virtualTextureWidth, virtualTextureHeight) >> PAGE_SHIFT) + 1;
@@ -1293,12 +1303,8 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
         uploadDeviceBuffers =
             FixedArray<GPUBuffer, numPendingSubmissions>(numPendingSubmissions);
 
-        // uploadDeviceBuffers[0] = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        //                                               maxUploadSize,
-        //                                               MemoryUsage::CPU_TO_GPU);
-        // uploadDeviceBuffers[1] = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        //                                               maxUploadSize,
-        //                                               MemoryUsage::CPU_TO_GPU);
+        uploadDeviceBuffers[0] = {};
+        uploadDeviceBuffers[1] = {};
 
         pageTableRequestBuffers =
             FixedArray<TransferBuffer, numPendingSubmissions>(numPendingSubmissions);
@@ -1457,7 +1463,7 @@ void VirtualTextureManager::PinPages(CommandBuffer *cmd, u32 textureIndex, Vec3u
 void VirtualTextureManager::ClearTextures(CommandBuffer *cmd)
 {
     cmd->ClearImage(&pageTable, ~0u);
-    cmd->ClearImage(&gpuPhysicalPool, Vec4f(1.f, 1.f, 1.f, 1.f));
+    // cmd->ClearImage(&gpuPhysicalPool, Vec4f(1.f, 1.f, 1.f, 1.f));
 }
 
 ///////////////////////////////////////
@@ -1471,7 +1477,7 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *tra
     // Update page table
     ScratchArena scratch;
 
-    u32 currentBuffer = device->GetCurrentBuffer();
+    u32 currentBuffer = device->frameCount & 1;
 
     // Synchronize
     uploadSemaphores[currentBuffer].signalValue++;

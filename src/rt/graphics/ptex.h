@@ -290,6 +290,10 @@ struct VirtualTextureManager
     DescriptorSetLayout descriptorSetLayout;
     VkPipeline pipeline;
     PushConstant push;
+
+    DescriptorSetLayout clearPageTableLayout;
+    VkPipeline clearPageTablePipeline;
+
     int bindlessPageTableStartIndex;
 
     // Streaming

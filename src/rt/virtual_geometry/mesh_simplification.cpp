@@ -5643,11 +5643,11 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
 void CreateClusters2(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndices,
                      string filename)
 {
-    if (OS_FileExists(filename))
-    {
-        Print("%S skipped\n", filename);
-        return;
-    }
+    // if (OS_FileExists(filename))
+    // {
+    //     Print("%S skipped\n", filename);
+    //     return;
+    // }
 
     ScratchArena scratch;
     Arena **arenas = GetArenaArray(scratch.temp.arena);
@@ -5729,14 +5729,14 @@ void CreateClusters2(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndi
             {
                 for (int i = 0; i < mesh.numIndices / 3; i++)
                 {
-                    faceIDs[indexOffset / 3] = mesh.faceIDs[i];
+                    faceIDs[indexOffset / 3 + i] = mesh.faceIDs[i];
                 }
             }
             else
             {
                 for (int i = 0; i < mesh.numIndices / 3; i++)
                 {
-                    faceIDs[indexOffset / 3] = -1;
+                    faceIDs[indexOffset / 3 + i] = -1;
                 }
             }
         }

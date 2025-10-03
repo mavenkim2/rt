@@ -379,6 +379,7 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
     pageUploadBuffer = {};
     blasUploadBuffer = {};
 
+    // TODO IMPORTANT: this has to go up due to faceids
     clusterPageDataBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, megabytes(800));
     clusterPageDataBufferHandle =

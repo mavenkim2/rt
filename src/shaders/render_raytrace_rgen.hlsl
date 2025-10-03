@@ -300,7 +300,7 @@ void main()
             uint baseAddress = resources[instanceID].baseAddress;
             DenseGeometry dg = GetDenseGeometryHeader2(clusterID, baseAddress);
 
-            uint materialID = dg.DecodeMaterialID(triangleIndex);
+            materialID = dg.DecodeMaterialID(triangleIndex);
             uint3 vids = dg.DecodeTriangle(triangleIndex);
 
             uint2 pageInformation = dg.DecodeFaceIDAndRotateInfo(triangleIndex);
@@ -382,9 +382,9 @@ void main()
         }
 
         // Get material
-        GPUMaterial material = materials[NonUniformResourceIndex(materialID)];
+        GPUMaterial material = materials[materialID];
         // Ray cone
-        float4 reflectance = 0;
+        float4 reflectance = 1;
         float filterU = rng.Uniform();
         if (material.textureIndex != -1)
         {
@@ -396,7 +396,7 @@ void main()
             rayCone.Propagate(surfaceSpreadAngle, rayT);
             float lambda = rayCone.ComputeTextureLOD(hitInfo.p0, hitInfo.p1, hitInfo.p2, hitInfo.uv0, hitInfo.uv1, hitInfo.uv2, dir, hitInfo.n, dim, printDebug);
             uint mipLevel = (uint)lambda;
-            float4 reflectance = SampleStochasticCatmullRomBorderless(faceData, material, hitInfo.faceID, hitInfo.uv, mipLevel, filterU, printDebug);
+            reflectance = SampleStochasticCatmullRomBorderless(faceData, material, hitInfo.faceID, hitInfo.uv, mipLevel, filterU, printDebug);
 
             if (depth == 1)
             {
@@ -445,7 +445,7 @@ void main()
 #endif
 
                 //dir = SampleDiffuse(reflectance.xyz, wo, sample, throughput, printDebug);
-                dir = SampleDisneyThin(sample, throughput, wo);
+                dir = SampleDisneyThin(sample, reflectance.xyz, throughput, wo);
             }
             break;
         }
@@ -503,7 +503,6 @@ void main()
     }
     image[swizzledThreadID] = float4(radiance, 1);
 
-#if 0
     // Write virtual texture feedback back to main memory
     uint4 mask = WaveMatch(feedbackRequest.x);
     int4 highLanes = (int4)(firstbithigh(mask) | uint4(0, 0x20, 0x40, 0x60));
@@ -517,5 +516,4 @@ void main()
         feedbackBuffer[index + 1] = feedbackRequest.x;
         feedbackBuffer[index + 2] = feedbackRequest.y;
     }
-#endif
 }

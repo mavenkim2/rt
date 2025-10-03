@@ -11,52 +11,6 @@ float SchlickFresnel(float u)
     return m2*m2*m;
 }
 
-#if 0
-float3 DisneyThin(float wo, float3 wi) 
-{
-    float sheen = 0.15f;
-    float sheenTint = 0.3f;
-    float3 baseColor = float3(.554, .689, .374);
-    float flatness = .25f;
-    float roughness = 0.72f;
-    float metallic = 0.f;
-    float specTrans = 0.f;
-
-    float cosThetaD;
-    float FH;
-    
-    // Sheen
-    float3 cdLin = float3(pow(baseColor.x, 2.2), pow(baseColor.y, 2.2), pow(baseColor.z, 2.2));
-    float cdLum = .3 * cdLin.x + .6 * cdLin.y + .1 * cdLin.z;
-    float3 cTint = cdLum > 0 ? cdLin / cdLum : 1.f;
-    float3 cSheen = lerp(1.f, cTint, sheenTint);
-    float3 fSheen = FH * sheen * cSheen;
-
-    // Thin surface BSDF
-    float ior = 1.22;
-    float transissionRoughness = saturate(roughness * (.65f * ior - .35f));
-
-    // Thin surface BRDF
-    float fss90 = ldotH * ldotH * roughness;
-    float fL = SchlickFresnel(wi.z); 
-    float fV = SchlickFresnel(wo.z);
-
-    float3 h;
-    float wiDotH = Dot(wi, h);
-    float fd = (1 - 0.5f * fL) * (1 - 0.5f * fV);
-    float rr = 2 * roughness * wiDotH * wiDotH;
-    float retroReflection = rr * (fL + fV + fL * fV * (rr - 1.f));
-
-    float fss = lerp(1.f, fss90, fL) * lerp(1.f, fss90, fV);
-    float ss = 1.25f * (fss * (1.f / (wi.z + wo.z) - .5f) + .5f);
-
-    float3 diffuse = cdLin * InvPi * lerp(fd + retroReflection, ss, flatness);
-
-    float3 result = diffuse * (1 - metallic)
-
-}
-#endif
-
 float3 SampleGGXVNDF(float3 w, float2 u, float alphaX, float alphaY)
 {
     float3 wh = normalize(float3(alphaX * w.x, alphaY * w.y, w.z));
@@ -239,11 +193,10 @@ float3 SampleDisney(GPUMaterial material, float2 u, float3 baseColor, inout floa
     return wi;
 }
 
-float3 SampleDisneyThin(float2 u, inout float3 throughput, float3 wo) 
+float3 SampleDisneyThin(float2 u, float3 baseColor, inout float3 throughput, float3 wo) 
 {
     float sheen = 0.15f;
     float sheenTint = 0.3f;
-    float3 baseColor = float3(.554, .689, .374);
     float flatness = .25f;
     float roughness = 0.72f;
     float metallic = 0.f;
@@ -260,7 +213,6 @@ float3 SampleDisneyThin(float2 u, inout float3 throughput, float3 wo)
 
     float3 dir;
     float3 value;
-    float3 cdLin = float3(pow(baseColor.x, 2.2), pow(baseColor.y, 2.2), pow(baseColor.z, 2.2));
     // TODO: specular BSDF
     if (u.x < probDiffReflect)
     {
@@ -272,8 +224,8 @@ float3 SampleDisneyThin(float2 u, inout float3 throughput, float3 wo)
         float wiDotH = dot(wi, h);
 
         float fH = SchlickFresnel(wiDotH);
-        float cdLum = .3 * cdLin.x + .6 * cdLin.y + .1 * cdLin.z;
-        float3 cTint = cdLum > 0 ? cdLin / cdLum : 1.f;
+        float cdLum = .3 * baseColor.x + .6 * baseColor.y + .1 * baseColor.z;
+        float3 cTint = cdLum > 0 ? baseColor / cdLum : 1.f;
         float3 cSheen = lerp(1.f, cTint, sheenTint);
         float3 fSheen = fH * sheen * cSheen;
 
@@ -288,16 +240,17 @@ float3 SampleDisneyThin(float2 u, inout float3 throughput, float3 wo)
         float fss = lerp(1.f, fss90, fL) * lerp(1.f, fss90, fV);
         float ss = 1.25f * (fss * (1.f / (wi.z + wo.z) - .5f) + .5f);
 
-        // NOTE: InvPi * (1.f - specTrans) * (1.f - diffTrans) cancels
-        // TODO: no it doesn't
-        float3 diffuse = cdLin * lerp(fd + retroReflection, ss, flatness) + fSheen;
-        value = diffuse;
+        float3 diffuse = baseColor * lerp(fd + retroReflection, ss, flatness) + fSheen;
+        value = (1.f - specTrans) * (1.f - diffTrans) * diffuse;
+        value /= probDiffReflect;
     }
     else if (u.x < probDiffReflect + probDiffRefract)
     {
         u.x = (u.x - probDiffReflect) / probDiffRefract;
         dir = -SampleCosineHemisphere(u);
-        value = cdLin;
+        value = baseColor;
+        value *= (1.f - specTrans) * diffTrans;
+        value /= probDiffRefract;
     }
     throughput *= value;
     return dir;
