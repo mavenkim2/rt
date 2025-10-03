@@ -3250,10 +3250,10 @@ static void LoadMoanaJSON(Arena *arena, SceneLoadState *sls, string directory, s
         }
         else if (parameterType == "instancedPrimitiveJsonFiles")
         {
-            string jsonFile;
             SkipToNextChar2(&tokenizer, '"');
             for (;;)
             {
+                string jsonFile = {};
                 if (*tokenizer.cursor == '}')
                 {
                     tokenizer.cursor++;
@@ -3283,14 +3283,15 @@ static void LoadMoanaJSON(Arena *arena, SceneLoadState *sls, string directory, s
                     }
                     else if (field == "archives")
                     {
+                        Assert(jsonFile.size != 0);
                         PBRTFileInfo *transformsInfo = &fileInfos.AddBack();
                         string transformsFilename =
                             StrConcat(scratch.temp.arena, directory, jsonFile);
-                        transformsInfo->Init(transformsFilename);
+                        transformsInfo->Init(jsonFile);
 
-                        // scheduler.Schedule(&counter, [=](u32 jobID) {
-                        LoadMoanaTransforms(transformsInfo, directory, transformsFilename);
-                        // });
+                        scheduler.Schedule(&counter, [=](u32 jobID) {
+                            LoadMoanaTransforms(transformsInfo, directory, transformsFilename);
+                        });
 
                         for (;;)
                         {
@@ -3316,9 +3317,9 @@ static void LoadMoanaJSON(Arena *arena, SceneLoadState *sls, string directory, s
                             string archiveFilepath =
                                 StrConcat(scratch.temp.arena, directory, archiveFilename);
 
-                            // scheduler.Schedule(&counter, [=](u32 jobID) {
-                            LoadMoanaOBJ(archiveInfo, archiveFilepath);
-                            // });
+                            scheduler.Schedule(&counter, [=](u32 jobID) {
+                                LoadMoanaOBJ(archiveInfo, archiveFilepath);
+                            });
 
                             SkipToNextChar(&tokenizer);
                         }
@@ -3360,7 +3361,7 @@ static void LoadMoanaJSON(Arena *arena, SceneLoadState *sls, string directory, s
     }
 
     PBRTFileInfo base;
-    base.Init(StrConcat(scratch.temp.arena, directory, name));
+    base.Init("base.rtscene");
     for (auto *node = instanceTransforms.first; node != 0; node = node->next)
     {
         for (u32 i = 0; i < node->count; i++)
@@ -3443,7 +3444,7 @@ static void LoadMoanaJSON(Arena *arena, SceneLoadState *sls, string directory, s
                         string newMaterialName =
                             StrConcat(arena, shape.materialName, shape.groupName);
                         string colorMapName =
-                            StrConcat(arena, material.colorMap, shape.groupName);
+                            PushStr8F(arena, "%S%S.ptx", material.colorMap, shape.groupName);
                         sls->materialMap.FindOrAdd(arena, newMaterialName,
                                                    sls->materialCounter);
                         material.colorMap = colorMapName;

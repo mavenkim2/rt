@@ -19,6 +19,7 @@ struct alignas(CACHE_LINE_SIZE) ThreadStatistics
     u64 misc2;
     u64 misc3;
     u64 misc4;
+    u64 misc5;
 
     u64 test;
     f64 miscF;

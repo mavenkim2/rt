@@ -2,6 +2,7 @@
 #define DISNEY_BSDF_HLSLI
 
 #include "../sampling.hlsli"
+#include "../../rt/shader_interop/hit_shaderinterop.h"
 
 float SchlickFresnel(float u)
 {
@@ -56,6 +57,138 @@ float3 DisneyThin(float wo, float3 wi)
 }
 #endif
 
+float3 SampleGGXVNDF(float3 w, float2 u, float alphaX, float alphaY)
+{
+    float3 wh = normalize(float3(alphaX * w.x, alphaY * w.y, w.z));
+    wh         = wh.z < 0 ? -wh : wh;
+    float2 p  = SampleUniformDiskPolar(u);
+    float3 T1 =
+        wh.z < 0.99999f ? normalize(cross(float3(0, 0, 1), wh)) :  float3(1, 0, 0);
+    float3 T2 = cross(wh, T1);
+    float h = sqrt(1 - p.x * p.x);
+    p.y        = lerp((1.f + wh.z) / 2.f, h, p.y);
+
+    // Project point to hemisphere, transform to ellipsoid.
+    float pz = sqrt(max(0.f, 1 - p.x * p.x - p.y * p.y));
+    float3 nh  = p.x * T1 + p.y * T2 + pz * wh;
+    return normalize(float3(alphaX * nh.x, alphaY * nh.y, max(1e-6f, nh.z)));
+}
+
+float GTR1(float cosH, float a)
+{
+    if (a >= 1) return InvPi;
+    float a2 = a * a;
+    float result = (a2 - 1) / (PI * log2(a2) * (1.f + (a2 - 1.f) * Sqr(cosH)));
+}
+
+float GTR2Aniso(float3 wm, float alphaX, float alphaY)
+{
+    return 1.f /
+           (PI * alphaX * alphaY * (Sqr(wm.x / alphaX) + Sqr(wm.y / alphaY) + Sqr(wm.z)));
+}
+
+float SmithLambda(float3 w, float ax, float ay)
+{
+    float a = (Sqr(w.x * ax) + Sqr(w.y * ay)) / Sqr(w.z);
+    float lambda = (-1 + sqrt(1 + 1 / a)) / 2.f;
+    return lambda;
+}
+
+float SmithG1(float3 w, float3 wm, float ax, float ay)
+{
+    if (dot(w, wm) <= 0.f) return 0.f;
+
+    float lambda = SmithLambda(w, ax, ay);
+    float G = 1 / (1 + lambda);
+    return G;
+}
+
+// TODO: multiply vs height correllated?
+float SmithG(float3 wo, float3 wi, float ax, float ay)
+{
+    return 1 / (1 + SmithLambda(wo, ax, ay) + SmithLambda(wi, ax, ay));
+}
+
+float GGXPDF(float3 w, float3 wm, float ax, float ay)
+{
+    float result = SmithG1(w, wm, ax, ay) / abs(w.z) * GTR2Aniso(wm, ax, ay) * abs(dot(w, wm));
+}
+
+void CalculateAnisotropicRoughness(float anisotropic, float roughness, out float ax, out float ay)
+{
+    float aspect = sqrt(1 - .9f * anisotropic);
+    ax = roughness * roughness / aspect;
+    ay = roughness * roughness * aspect;
+}
+
+float3 SampleDisney(GPUMaterial material, float2 u, float3 baseColor, inout float3 throughput, float3 wo) 
+{
+    // GTR2
+    float F = FrDielectric(wo.z, material.ior);
+    float probSpecReflect = (1.f - material.metallic) * material.specTrans * F;
+    float probSpecRefract = (1.f - material.metallic) * material.specTrans * (1 - F);
+    float probClearCoat = 0.25f * material.clearcoat;
+    float probDiffuse = (1.f - material.metallic) * (1.f - material.specTrans);
+
+    float totalProb = probSpecReflect + probSpecRefract + probClearCoat + probDiffuse;
+    probSpecReflect /= totalProb;
+    probSpecRefract /= totalProb;
+    probClearCoat /= totalProb;
+    probDiffuse /= totalProb;
+
+    float3 wi;
+    float3 value;
+
+    float alphaX, alphaY;
+    CalculateAnisotropicRoughness(material.anisotropic, material.roughness, alphaX, alphaY);
+    float3 wm = SampleGGXVNDF(wo, u, alphaX, alphaY);
+    float D = GTR2Aniso(wm, alphaX, alphaY);
+
+    if (u.x < probSpecReflect)
+    {
+        u.x /= probSpecReflect;
+        wi = Reflect(wo, wm);
+        float G = SmithG(wi, wo, alphaX, alphaY);
+        float pdf = GGXPDF(wo, wm, alphaX, alphaY) * probSpecReflect / (4 * abs(dot(wo, wm)));
+        value = D * G * F / (4 * abs(wo.z));
+        value /= pdf;
+    }
+    else if (u.x < probSpecReflect + probSpecRefract)
+    {
+        u.x = (u.x - probSpecReflect) / probSpecRefract;
+        float etap;
+        bool success = Refract(wo, wm, material.ior, etap, wi);
+        if (!success)
+        {
+            return 0;
+        }
+
+        float G = SmithG(wi, wo, alphaX, alphaY);
+        float denom = Sqr(dot(wi, wm) + dot(wo, wm) / etap);
+        float dwm_dwi = abs(dot(wi, wm)) / denom;
+        float pdf = GGXPDF(wo, wm, alphaX, alphaY) * dwm_dwi * probSpecRefract;
+
+        value = sqrt(baseColor) * abs(dot(wo, wm)) * abs(dot(wi, wm)) * D * G * (1 - F) / (abs(wo.z) * denom);
+        value /= (pdf * Sqr(etap));
+    }
+    else if (u.x < probSpecReflect + probSpecRefract + probClearCoat)
+    {
+        u.x = (u.x - probSpecReflect - probSpecRefract) / probClearCoat;
+        float3 h = normalize(wi + wo);
+        D = GTR1(h, material.roughness);
+        F = lerp(0.04f, 1.f, SchlickFresnel(Dot(wi, h)));
+        float G = SmithG(wi, wo, .25f, .25f);
+
+        value = .25f * material.clearcoat * D * G * F;
+    }
+    else 
+    {
+        u.x = (u.x - (1.f - probDiffuse)) / probDiffuse;
+    }
+    throughput *= value;
+    return wi;
+}
+
 float3 SampleDisneyThin(float2 u, inout float3 throughput, float3 wo) 
 {
     float sheen = 0.15f;
@@ -106,6 +239,7 @@ float3 SampleDisneyThin(float2 u, inout float3 throughput, float3 wo)
         float ss = 1.25f * (fss * (1.f / (wi.z + wo.z) - .5f) + .5f);
 
         // NOTE: InvPi * (1.f - specTrans) * (1.f - diffTrans) cancels
+        // TODO: no it doesn't
         float3 diffuse = cdLin * lerp(fd + retroReflection, ss, flatness) + fSheen;
         value = diffuse;
     }

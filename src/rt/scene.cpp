@@ -551,6 +551,10 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
                 (*material)->displacement = ParseDisplacement(arena, tokenizer, directory);
             }
             break;
+            case MaterialTypes::Disney:
+            {
+            }
+            break;
             default: Assert(0);
         }
         (*material)->ptexReflectanceIndex = ptexReflectanceIndex;

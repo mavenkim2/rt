@@ -164,6 +164,13 @@ float2 SampleUniformDiskConcentric(float2 u)
     return result;
 }
 
+float2 SampleUniformDiskPolar(float2 u)
+{
+    float r     = sqrt(u[0]);
+    float theta = 2 * PI * u[1];
+    return float2(r * cos(theta), r * sin(theta));
+}
+
 float3 SampleCosineHemisphere(float2 u)
 {
     float2 d = SampleUniformDiskConcentric(u);

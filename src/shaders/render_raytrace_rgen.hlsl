@@ -356,18 +356,6 @@ void main()
 
             hitInfo = CalculateTriangleHitInfo(p0, p1, p2, n0, n1, n2, gn, uv0, uv1, uv2, bary);
 
-            // Ray cone
-#if 0
-            Ptex::FaceData faceData = Ptex::GetFaceData(material, faceID);
-            int2 dim = int2(1u << faceData.log2Dim.x, 1u << faceData.log2Dim.y);
-
-            float4 reflectance = SampleStochasticCatmullRomBorderless(faceData, material, faceID, uv, mipLevel, filterU, printDebug);
-            float surfaceSpreadAngle = depth == 1 ? rayCone.CalculatePrimaryHitUnifiedSurfaceSpreadAngle(dir, hitInfo.n, p0, p1, p2, n0, n1, n2) 
-                                                  : rayCone.CalculateSecondaryHitSurfaceSpreadAngle(dir, hitInfo.n, p0, p1, p2, n0, n1, n2);
-            rayCone.Propagate(surfaceSpreadAngle, rayT);
-            float lambda = rayCone.ComputeTextureLOD(p0, p1, p2, uv0, uv1, uv2, dir, hitInfo.n, dim, printDebug);
-            uint mipLevel = (uint)lambda;
-#endif
         }
         else if (query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
         {
@@ -406,6 +394,22 @@ void main()
 
         // Get material
         GPUMaterial material = materials[NonUniformResourceIndex(materialID)];
+        // Ray cone
+        float4 reflectance;
+#if 0
+        if (material.textureIndex != -1)
+        {
+        }
+        Ptex::FaceData faceData = Ptex::GetFaceData(material, faceID);
+        int2 dim = int2(1u << faceData.log2Dim.x, 1u << faceData.log2Dim.y);
+
+        float4 reflectance = SampleStochasticCatmullRomBorderless(faceData, material, faceID, uv, mipLevel, filterU, printDebug);
+        float surfaceSpreadAngle = depth == 1 ? rayCone.CalculatePrimaryHitUnifiedSurfaceSpreadAngle(dir, hitInfo.n, p0, p1, p2, n0, n1, n2) 
+                                                  : rayCone.CalculateSecondaryHitSurfaceSpreadAngle(dir, hitInfo.n, p0, p1, p2, n0, n1, n2);
+        rayCone.Propagate(surfaceSpreadAngle, rayT);
+        float lambda = rayCone.ComputeTextureLOD(p0, p1, p2, uv0, uv1, uv2, dir, hitInfo.n, dim, printDebug);
+        uint mipLevel = (uint)lambda;
+#endif
 
         float3 wo = normalize(float3(dot(hitInfo.ss, -objectRayDir), dot(hitInfo.ts, -objectRayDir),
                               dot(hitInfo.n, -objectRayDir)));
@@ -417,9 +421,14 @@ void main()
         uint2 virtualPage = ~0u;
         switch (material.type) 
         {
+            case GPUMaterialType::Disney: 
+            {
+                dir = SampleDisney(material, sample, 
+            }
+            break;
             case GPUMaterialType::Dielectric:
             {
-                dir = SampleDielectric(wo, material.eta, sample, throughput, printDebug);
+                dir = SampleDielectric(wo, material.ior, sample, throughput, printDebug);
             }
             break;
             default:

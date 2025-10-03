@@ -521,6 +521,46 @@ struct CoatedDiffuseMaterial : Material
     virtual MaterialTypes GetType() override { return MaterialTypes::CoatedDiffuse; }
 };
 
+struct DisneyMaterial : Material
+{
+    float diffTrans;
+    Vec4f baseColor;
+    float specTrans;
+    float clearcoatGloss;
+    Vec3f scatterDistance;
+    float clearcoat;
+    float specularTint;
+    float ior;
+    float metallic;
+    float flatness;
+    float sheen;
+    float sheenTint;
+    float anisotropic;
+    float alpha;
+    float roughness;
+    bool thin;
+};
+
+struct DiskDisneyMaterial
+{
+    float diffTrans;
+    Vec4f baseColor;
+    float specTrans;
+    float clearcoatGloss;
+    Vec3f scatterDistance;
+    float clearcoat;
+    float specularTint;
+    float ior;
+    float metallic;
+    float flatness;
+    float sheen;
+    float sheenTint;
+    float anisotropic;
+    float alpha;
+    float roughness;
+    bool thin;
+};
+
 enum class ColorEncoding
 {
     None,

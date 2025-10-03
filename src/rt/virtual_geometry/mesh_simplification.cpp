@@ -5643,11 +5643,11 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
 void CreateClusters2(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndices,
                      string filename)
 {
-    if (Contains(filename, "ironwood", MatchFlag_CaseInsensitive))
-    {
-        Print("%S skipped\n", filename);
-        return;
-    }
+    // if (Contains(filename, "ironwood", MatchFlag_CaseInsensitive))
+    // {
+    //     Print("%S skipped\n", filename);
+    //     return;
+    // }
 
     ScratchArena scratch;
     Arena **arenas = GetArenaArray(scratch.temp.arena);

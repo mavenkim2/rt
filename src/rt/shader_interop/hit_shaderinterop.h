@@ -17,6 +17,7 @@ enum class GPUMaterialType
 {
     Diffuse,
     Dielectric,
+    Disney,
 };
 
 struct GPUMaterial
@@ -25,15 +26,29 @@ struct GPUMaterial
 
     // Virtual texture info
     uint2 baseVirtualPage;
-    uint textureIndex;
+    int textureIndex;
     uint minLog2Dim;
     uint numVirtualOffsetBits;
     uint numFaceDimBits;
     uint numFaceIDBits;
     uint faceDataOffset;
 
-    // Shading info
-    float eta;
+    float diffTrans;
+    float4 baseColor;
+    float specTrans;
+    float clearcoatGloss;
+    float3 scatterDistance;
+    float clearcoat;
+    float specularTint;
+    float ior;
+    float metallic;
+    float flatness;
+    float sheen;
+    float sheenTint;
+    float anisotropic;
+    float alpha;
+    float roughness;
+    bool thin;
 };
 
 #ifdef __cplusplus

@@ -81,7 +81,7 @@ inline TextureType ConvertStringToTextureType(string type)
 }
 
 static const string materialTypeNames[] = {
-    "interface", "diffuse", "diffusetransmission", "coateddiffuse", "dielectric",
+    "interface", "diffuse", "diffusetransmission", "coateddiffuse", "dielectric", "disney",
 };
 
 static const StringId materialTypeIDs[] = {
@@ -498,7 +498,7 @@ inline Mesh *LoadObj(Arena *arena, string filename, int &numMeshes, int &actualN
                 {
                     if (!repeatedMesh)
                     {
-                        Mesh mesh = {};
+                        Mesh mesh        = {};
                         mesh.numVertices = (u32)vertices.size();
                         mesh.numIndices  = (u32)indices.size();
 
