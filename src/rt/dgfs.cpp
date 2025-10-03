@@ -497,6 +497,8 @@ void DenseGeometryBuildData::WriteTriangleData(StaticArray<int> &triangleIndices
     StaticArray<u32> vertexIndices(scratch.temp.arena, clusterNumTriangles * 3,
                                    clusterNumTriangles * 3);
     StaticArray<u32> geomIDs(scratch.temp.arena, clusterNumTriangles);
+    StaticArray<u32> primIDs(scratch.temp.arena, clusterNumTriangles);
+    StaticArray<int> faceIDs(scratch.temp.arena, clusterNumTriangles);
     StaticArray<u32> clusterVertexIndexToMeshVertexIndex(scratch.temp.arena,
                                                          MAX_CLUSTER_TRIANGLE_VERTICES);
 
@@ -509,9 +511,9 @@ void DenseGeometryBuildData::WriteTriangleData(StaticArray<int> &triangleIndices
         ind[2] = vertexIndices[3 * triangleIndex + 2];
     };
 
-    u32 minFaceID = pos_inf;
-    u32 maxFaceID = 0;
-    // bool hasFaceIDs    = false;
+    u32 minFaceID               = pos_inf;
+    u32 maxFaceID               = 0;
+    bool hasFaceIDs             = false;
     tempResources.hasAnyNormals = (bool)mesh.n;
 
     Assert(triangleIndices.Length() == triangleGeomIDs.Length());
@@ -521,15 +523,14 @@ void DenseGeometryBuildData::WriteTriangleData(StaticArray<int> &triangleIndices
         u32 geomID = triangleGeomIDs[tri];
 
         geomIDs.Push(geomID);
+        primIDs.Push(primID);
 
-#if 0
-            u32 faceID         = mesh.faceIDs ? mesh.faceIDs[primID] : 0u;
-            minFaceID          = Min(minFaceID, faceID);
-            maxFaceID          = Max(maxFaceID, faceID);
-            faceIDs[i - start] = faceID;
-#endif
+        u32 faceID = mesh.faceIDs ? mesh.faceIDs[primID] : 0;
+        minFaceID  = Min(minFaceID, faceID);
+        maxFaceID  = Max(maxFaceID, faceID);
+        faceIDs.Push(faceID);
 
-        // hasFaceIDs |= (bool(mesh.faceIDs) && bool(materialID >> 31u));
+        hasFaceIDs |= bool(mesh.faceIDs) && (mesh.faceIDs[primID] != ~0u);
 
         for (int indexIndex = 0; indexIndex < 3; indexIndex++)
         {
@@ -707,6 +708,7 @@ void DenseGeometryBuildData::WriteTriangleData(StaticArray<int> &triangleIndices
     // NOTE: implicitly starts with "Restart"
     StaticArray<TriangleStripType> triangleStripTypes(scratch.temp.arena, clusterNumTriangles);
     StaticArray<u32> newIndexOrder(scratch.temp.arena, clusterNumTriangles * 3);
+    StaticArray<u32> oldIndexOrder(scratch.temp.arena, clusterNumTriangles * 3);
     StaticArray<u32> triangleOrder(scratch.temp.arena, clusterNumTriangles * 3);
 
     u32 prevTriangle = minValenceTriangle;
@@ -732,6 +734,10 @@ void DenseGeometryBuildData::WriteTriangleData(StaticArray<int> &triangleIndices
     newIndexOrder.Push(firstIndices[0]);
     newIndexOrder.Push(firstIndices[1]);
     newIndexOrder.Push(firstIndices[2]);
+
+    oldIndexOrder.Push(firstIndices[0]);
+    oldIndexOrder.Push(firstIndices[1]);
+    oldIndexOrder.Push(firstIndices[2]);
 
     triangleOrder.Push(minValenceTriangle);
 
@@ -768,6 +774,10 @@ void DenseGeometryBuildData::WriteTriangleData(StaticArray<int> &triangleIndices
                 newIndexOrder.Push(indices[0]);
                 newIndexOrder.Push(indices[1]);
                 newIndexOrder.Push(indices[2]);
+
+                oldIndexOrder.Push(indices[0]);
+                oldIndexOrder.Push(indices[1]);
+                oldIndexOrder.Push(indices[2]);
 
                 triangleOrder.Push(minValenceTriangle);
                 continue;
@@ -833,6 +843,10 @@ void DenseGeometryBuildData::WriteTriangleData(StaticArray<int> &triangleIndices
             vertexIndices[3 * newMinValenceTriangle + 1] = indices[2];
             vertexIndices[3 * newMinValenceTriangle + 2] = indices[0];
             newIndexOrder.Push(indices[0]);
+
+            oldIndexOrder.Push(indices[0]);
+            oldIndexOrder.Push(indices[1]);
+            oldIndexOrder.Push(indices[2]);
         }
         // [0, 1, 2] -> [2, 0, 1]
         else if (edgeIndex == 2)
@@ -841,10 +855,18 @@ void DenseGeometryBuildData::WriteTriangleData(StaticArray<int> &triangleIndices
             vertexIndices[3 * newMinValenceTriangle + 1] = indices[0];
             vertexIndices[3 * newMinValenceTriangle + 2] = indices[1];
             newIndexOrder.Push(indices[1]);
+
+            oldIndexOrder.Push(indices[0]);
+            oldIndexOrder.Push(indices[1]);
+            oldIndexOrder.Push(indices[2]);
         }
         else
         {
             newIndexOrder.Push(indices[2]);
+
+            oldIndexOrder.Push(indices[0]);
+            oldIndexOrder.Push(indices[1]);
+            oldIndexOrder.Push(indices[2]);
         }
 
         u32 oldIndices[3];
@@ -897,37 +919,6 @@ void DenseGeometryBuildData::WriteTriangleData(StaticArray<int> &triangleIndices
         materialIndices.Push(materialIndex);
     }
 
-#if 0
-    ChunkedLinkedList<u8>::ChunkNode *faceIDNode = 0;
-    if (hasFaceIDs)
-    {
-        totalSize += faceBitStreamSize;
-        faceIDNode = buildData.shadingByteBuffer.AddNode(faceBitStreamSize);
-    }
-
-    if (hasFaceIDs)
-    {
-        WriteBits((u32 *)faceIDNode->values, faceBitOffset, minFaceID, 32);
-        for (u32 i = 0; i < triangleOrder.Length(); i++)
-        {
-            u32 index = triangleOrder[i];
-            WriteBits((u32 *)faceIDNode->values, faceBitOffset, faceIDs[index] - minFaceID,
-                      numFaceBits);
-
-            // Write 2 bits to denote triangle rotation
-            u32 indices[3];
-            GetIndices(indices, index);
-            u32 oldStartIndex = oldIndexOrder[3 * i];
-            u32 rotate =
-                oldStartIndex == indices[0] ? 0 : (oldStartIndex == indices[1] ? 2 : 1);
-
-            WriteBits((u32 *)faceIDNode->values, faceBitOffset, rotate, 2);
-            WriteBits((u32 *)faceIDNode->values, faceBitOffset, primIDs[index] & 1, 1);
-        }
-        Assert(faceBitOffset == 32 + (numFaceBits + 3) * clusterNumTriangles);
-    }
-#endif
-
     u32 geoBaseAddress     = geoByteBuffer.Length();
     u32 shadingBaseAddress = shadingByteBuffer.Length();
 
@@ -965,6 +956,33 @@ void DenseGeometryBuildData::WriteTriangleData(StaticArray<int> &triangleIndices
 
     Assert(addedVertexCount == vertexCount);
     WriteVertexData(mesh, meshVertexIndices, meshVertexIndices, tempResources);
+
+    ChunkedLinkedList<u8>::ChunkNode *faceIDNode = 0;
+    u32 numFaceBits = hasFaceIDs ? Log2Int(Max(maxFaceID - minFaceID, 1u)) + 1 : 0;
+    if (hasFaceIDs)
+    {
+        Assert(faceIDs.Length() == triangleOrder.Length());
+        u32 faceBitStreamSize = 4 + ((faceIDs.Length() * (numFaceBits + 3) + 7) >> 3u);
+        faceIDNode            = shadingByteBuffer.AddNode(faceBitStreamSize);
+        WriteBits((u32 *)faceIDNode->values, faceBitOffset, minFaceID, 32);
+        for (u32 i = 0; i < triangleOrder.Length(); i++)
+        {
+            u32 index = triangleOrder[i];
+            WriteBits((u32 *)faceIDNode->values, faceBitOffset, faceIDs[index] - minFaceID,
+                      numFaceBits);
+
+            // Write 2 bits to denote triangle rotation
+            u32 indices[3];
+            GetIndices(indices, index);
+            u32 oldStartIndex = oldIndexOrder[3 * i];
+            u32 rotate =
+                oldStartIndex == indices[0] ? 0 : (oldStartIndex == indices[1] ? 2 : 1);
+
+            WriteBits((u32 *)faceIDNode->values, faceBitOffset, rotate, 2);
+            WriteBits((u32 *)faceIDNode->values, faceBitOffset, primIDs[index] & 1, 1);
+        }
+        Assert(faceBitOffset == 32 + (numFaceBits + 3) * clusterNumTriangles);
+    }
 
     FixedArray<u32, 4> restartHighBitPerDword = {0, 0, 0, 0};
     FixedArray<u32, 4> restartCountPerDword   = {1, 0, 0, 0};
@@ -1111,6 +1129,8 @@ void DenseGeometryBuildData::WriteTriangleData(StaticArray<int> &triangleIndices
     packed.h     = BitFieldPackU32(packed.h, restartCountPerDword[0], headerOffset, 6);
     packed.h     = BitFieldPackU32(packed.h, restartCountPerDword[1], headerOffset, 7);
     packed.h     = BitFieldPackU32(packed.h, restartCountPerDword[2], headerOffset, 8);
+
+    packed.k = numFaceBits;
 
     headers.AddBack() = packed;
 }

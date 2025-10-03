@@ -521,7 +521,7 @@ struct CoatedDiffuseMaterial : Material
     virtual MaterialTypes GetType() override { return MaterialTypes::CoatedDiffuse; }
 };
 
-struct DisneyMaterial : Material
+struct DiskDisneyMaterial
 {
     float diffTrans;
     Vec4f baseColor;
@@ -541,7 +541,7 @@ struct DisneyMaterial : Material
     bool thin;
 };
 
-struct DiskDisneyMaterial
+struct DisneyMaterial : Material
 {
     float diffTrans;
     Vec4f baseColor;
@@ -559,6 +559,14 @@ struct DiskDisneyMaterial
     float alpha;
     float roughness;
     bool thin;
+
+    DisneyMaterial() {}
+    BxDF *Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
+                   const Vec4f &filterWidths) override
+    {
+        return 0;
+    }
+    virtual GPUMaterial ConvertToGPU() override;
 };
 
 enum class ColorEncoding

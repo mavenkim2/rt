@@ -97,10 +97,6 @@ struct BLASVoxelInfo
     uint instanceIndex;
 };
 
-struct DisneyMaterial
-{
-};
-
 struct GPUTruncatedEllipsoid
 {
 #ifdef __cplusplus

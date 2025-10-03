@@ -474,7 +474,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         int ptexIndex;
     };
 
-#if 0
     StaticArray<TextureTempData> textureTempData(sceneScratch.temp.arena,
                                                  rootScene->ptexTextures.size(),
                                                  rootScene->ptexTextures.size());
@@ -601,12 +600,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         ptexFaceDataBytes += faceDataBitStreamSize;
     }
-#endif
 
-    u32 ptexFaceDataBytes  = 8;
+    ptexFaceDataBytes      = 8;
     u8 *faceDataByteBuffer = PushArrayNoZero(sceneScratch.temp.arena, u8, ptexFaceDataBytes);
     u32 ptexOffset         = 0;
-#if 0
+
     for (int i = 0; i < numHandles; i++)
     {
         RequestHandle &handle = handles[i];
@@ -615,7 +613,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         MemoryCopy(faceDataByteBuffer + ptexOffset, info.packedFaceData, info.packedDataSize);
         ptexOffset += info.packedDataSize;
     }
-#endif
 
     // Populate GPU materials
     StaticArray<GPUMaterial> gpuMaterials(sceneScratch.temp.arena,

@@ -2560,6 +2560,14 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state,
         {
             Put(&builder, "m %S ", material.name);
             Put(&builder, "disney ");
+            if (material.colorMap.size)
+            {
+                Put(&builder, "t %S ", material.colorMap);
+            }
+            else
+            {
+                Put(&builder, "t none ");
+            }
             DiskDisneyMaterial writeMaterial(material);
             PutPointerValue(&builder, &writeMaterial);
             Put(&builder, " ");
@@ -2797,8 +2805,8 @@ static Array<DisneyMaterial> LoadMaterialJSON(SceneLoadState *sls, string direct
 
         materialName = PushStr8Copy(arena, materialName);
 
-        DisneyMaterial material;
-        material.name = materialName;
+        DisneyMaterial material = {};
+        material.name           = materialName;
 
         for (;;)
         {
@@ -2818,7 +2826,7 @@ static Array<DisneyMaterial> LoadMaterialJSON(SceneLoadState *sls, string direct
                 {
                     SkipToNextDigit(&tokenizer);
                     float f      = ReadFloat(&tokenizer);
-                    baseColor[i] = f;
+                    baseColor[i] = Pow(f, 2.2f);
                 }
                 material.baseColor = baseColor;
             }
@@ -3451,6 +3459,13 @@ static void LoadMoanaJSON(Arena *arena, SceneLoadState *sls, string directory, s
                         newDisneyMaterials.Push(material);
                         colorMaps.Push(colorMapName);
                         shape.materialName = newMaterialName;
+
+                        shape.mesh.faceIDs = PushArrayNoZero(scratch.temp.arena, u32,
+                                                             shape.mesh.numIndices / 3);
+                        for (u32 i = 0; i < shape.mesh.numIndices / 3; i++)
+                        {
+                            shape.mesh.faceIDs[i] = i / 2;
+                        }
                     }
                 }
             }

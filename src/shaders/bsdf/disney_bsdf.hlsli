@@ -79,6 +79,7 @@ float GTR1(float cosH, float a)
     if (a >= 1) return InvPi;
     float a2 = a * a;
     float result = (a2 - 1) / (PI * log2(a2) * (1.f + (a2 - 1.f) * Sqr(cosH)));
+    return result;
 }
 
 float GTR2Aniso(float3 wm, float alphaX, float alphaY)
@@ -112,6 +113,7 @@ float SmithG(float3 wo, float3 wi, float ax, float ay)
 float GGXPDF(float3 w, float3 wm, float ax, float ay)
 {
     float result = SmithG1(w, wm, ax, ay) / abs(w.z) * GTR2Aniso(wm, ax, ay) * abs(dot(w, wm));
+    return result;
 }
 
 void CalculateAnisotropicRoughness(float anisotropic, float roughness, out float ax, out float ay)
@@ -143,14 +145,26 @@ float3 SampleDisney(GPUMaterial material, float2 u, float3 baseColor, inout floa
     CalculateAnisotropicRoughness(material.anisotropic, material.roughness, alphaX, alphaY);
     float3 wm = SampleGGXVNDF(wo, u, alphaX, alphaY);
     float D = GTR2Aniso(wm, alphaX, alphaY);
+        
+    float cdLum = .3 * baseColor.x + .6 * baseColor.y + .1 * baseColor.z;
+    float3 tint = cdLum > 0 ? baseColor / cdLum : 1.f;
 
     if (u.x < probSpecReflect)
     {
         u.x /= probSpecReflect;
         wi = Reflect(wo, wm);
+
+        float f0 = Sqr((1 - material.ior) / (1 + material.ior));
+        float3 r0 = f0 * lerp(1.f, tint, material.specularTint);
+        r0 = lerp(r0, baseColor, material.metallic);
+        float fR = SchlickFresnel(dot(wi, wm));
+        float3 metallicFresnel = r0 + (1 - r0) * fR;
+        float3 disneyFresnel = lerp(F, metallicFresnel, material.metallic);
+
         float G = SmithG(wi, wo, alphaX, alphaY);
         float pdf = GGXPDF(wo, wm, alphaX, alphaY) * probSpecReflect / (4 * abs(dot(wo, wm)));
-        value = D * G * F / (4 * abs(wo.z));
+        value = D * G * disneyFresnel / (4 * abs(wo.z));
+        value *= (1.f - material.metallic) * (1.f - material.specTrans);
         value /= pdf;
     }
     else if (u.x < probSpecReflect + probSpecRefract)
@@ -174,16 +188,52 @@ float3 SampleDisney(GPUMaterial material, float2 u, float3 baseColor, inout floa
     else if (u.x < probSpecReflect + probSpecRefract + probClearCoat)
     {
         u.x = (u.x - probSpecReflect - probSpecRefract) / probClearCoat;
+
+        float a = 0.25f;
+        float a2 = a * a;
+        float cosTheta = sqrt(max(0.f, (1.f - pow(a2, 1 - u.x)) / (1 - a2)));
+        float sinTheta = sqrt(max(0.f, 1.f - cosTheta * cosTheta));
+        float phi = 2 * PI * u.y;
+        float3 wm = float3(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta);
+        wm = dot(wm, wo) < 0.f ? -wm : wm;
+        wi = Reflect(wo, wm);
+        if (dot(wi, wo) < 0.f) return 0;
+
         float3 h = normalize(wi + wo);
-        D = GTR1(h, material.roughness);
-        F = lerp(0.04f, 1.f, SchlickFresnel(Dot(wi, h)));
+        // TODO
+        D = GTR1(wm.z, lerp(0.1f, 0.001f, material.clearcoatGloss));
+        F = lerp(0.04f, 1.f, SchlickFresnel(dot(wi, h)));
         float G = SmithG(wi, wo, .25f, .25f);
+        float pdf = D / (4.f * dot(wo, wm));
 
         value = .25f * material.clearcoat * D * G * F;
+        value /= pdf;
     }
     else 
     {
         u.x = (u.x - (1.f - probDiffuse)) / probDiffuse;
+        wi = SampleCosineHemisphere(u);
+        wi = dot(wi, wo) < 0.f ? -wi : wi;
+
+        float3 h = normalize(wi + wo);
+        float wiDotH = dot(wi, h);
+
+        float fH = SchlickFresnel(wiDotH);
+        float3 cSheen = lerp(1.f, tint, material.sheenTint);
+        float3 fSheen = fH * material.sheen * cSheen;
+
+        float fss90 = wiDotH * wiDotH * material.roughness;
+        float fL = SchlickFresnel(wi.z); 
+        float fV = SchlickFresnel(wo.z);
+
+        float fd = (1 - 0.5f * fL) * (1 - 0.5f * fV);
+        float rr = 2 * material.roughness * wiDotH * wiDotH;
+        float retroReflection = rr * (fL + fV + fL * fV * (rr - 1.f));
+
+        // NOTE: cosine/InvPi from pdf and rendering equation cancels
+        float3 diffuse = baseColor * (fd + retroReflection) + fSheen;
+        value = diffuse;
+        value /= probDiffuse;
     }
     throughput *= value;
     return wi;

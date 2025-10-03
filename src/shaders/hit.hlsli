@@ -11,6 +11,19 @@ struct HitInfo
     float3 n;
 
     float3 gn;
+    uint faceID;
+
+    float3 p0;
+    float3 p1;
+    float3 p2;
+
+    float3 n0;
+    float3 n1;
+    float3 n2;
+
+    float2 uv0;
+    float2 uv1;
+    float2 uv2;
 };
 
 HitInfo CalculateTriangleHitInfo(float3 p0, float3 p1, float3 p2, float3 n0, float3 n1, float3 n2, 
@@ -72,6 +85,15 @@ HitInfo CalculateTriangleHitInfo(float3 p0, float3 p1, float3 p2, float3 n0, flo
     hitInfo.ts = ts;
     hitInfo.n = n;
     hitInfo.gn = gn;
+    hitInfo.p0 = p0;
+    hitInfo.p1 = p1;
+    hitInfo.p2 = p2;
+    hitInfo.n0 = n0;
+    hitInfo.n1 = n1;
+    hitInfo.n2 = n2;
+    hitInfo.uv0 = uv0;
+    hitInfo.uv1 = uv1;
+    hitInfo.uv2 = uv2;
 
     return hitInfo;
 }

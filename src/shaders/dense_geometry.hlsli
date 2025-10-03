@@ -536,13 +536,11 @@ DenseGeometry GetDenseGeometryHeader2(uint headerIndex, uint baseAddress)
     result.numPrevRestartsBeforeDwords[1] = BitFieldExtractU32(packed[2].x, 7, 16);
     result.numPrevRestartsBeforeDwords[2] = BitFieldExtractU32(packed[2].x, 8, 23);
 
-    result.numFaceIDBits = 0;
-    //result.numFaceIDBits = BitFieldExtractU32(packed[3].x, 6, 26); 
-
     result.octBase[0] = BitFieldExtractU32(packed[2].y, 16, 0);
     result.octBase[1] = BitFieldExtractU32(packed[2].y, 16, 16);
 
     result.materialInfo = packed[2].z;
+    result.numFaceIDBits = packed[2].w;
 
     // Size of vertex buffer and normal buffer
     const uint vertexBitWidth = result.posBitWidths[0] + result.posBitWidths[1] + result.posBitWidths[2];
@@ -551,9 +549,9 @@ DenseGeometry GetDenseGeometryHeader2(uint headerIndex, uint baseAddress)
     uint numPositions = result.numBricks ? result.numBricks : result.numVertices;
 
     result.normalOffset = 0;
-    result.coverageOffset = result.normalOffset + ((result.numVertices * octBitWidth + 7) >> 3);
-    result.sggxOffset = result.coverageOffset + 4 * result.numVertices;
-    //result.faceIDOffset = result.normalOffset + ((result.numVertices * octBitWidth + 7) >> 3);
+    //result.coverageOffset = result.normalOffset + ((result.numVertices * octBitWidth + 7) >> 3);
+    //result.sggxOffset = result.coverageOffset + 4 * result.numVertices;
+    result.faceIDOffset = result.normalOffset + ((result.numVertices * octBitWidth + 7) >> 3);
 
     result.ctrlOffset = (numPositions * vertexBitWidth + 7) >> 3;
     result.brickOffset = result.ctrlOffset;

@@ -15,7 +15,8 @@ inline Vec3f Reflect(const Vec3f &v, const Vec3f &norm)
 }
 
 // NOTE: wi and wt point away from the surface point
-inline MaskF32 Refract(Vec3lfn wi, Vec3lfn n, LaneNF32 eta, LaneNF32 *etap = 0, Vec3lfn *wt = 0)
+inline MaskF32 Refract(Vec3lfn wi, Vec3lfn n, LaneNF32 eta, LaneNF32 *etap = 0,
+                       Vec3lfn *wt = 0)
 {
     LaneNF32 cosTheta_i = Dot(wi, n);
 
@@ -72,7 +73,8 @@ inline LaneNF32 FrComplex(LaneNF32 cosTheta_i, const Complex<LaneNF32> &eta)
     return Fr;
 }
 
-inline SampledSpectrumN FrComplex(LaneNF32 cosTheta_i, SampledSpectrumN eta, SampledSpectrumN k)
+inline SampledSpectrumN FrComplex(LaneNF32 cosTheta_i, SampledSpectrumN eta,
+                                  SampledSpectrumN k)
 {
     SampledSpectrumN result;
     for (i32 i = 0; i < NSampledWavelengths; ++i)
@@ -1204,25 +1206,6 @@ inline f32 SmithGAniso(const Vec3f &v, const Vec3f &wm, f32 alphaX, f32 alphaY)
     f32 tan2Theta = (Sqr(v.x * alphaX) + Sqr(v.y * alphaY)) / Sqr(v.z);
     return Select(Dot(v, wm) <= 0.f, 0.f, 2 * Rcp(1 + Sqrt(1.f + tan2Theta)));
 }
-
-struct DisneyMaterial
-{
-    f32 metallic;
-    f32 roughness;
-    f32 anisotropic;
-    f32 specularTint;
-    f32 sheen;
-    f32 sheenTint;
-    f32 clearcoat;
-    f32 clearcoatGloss;
-    f32 specTrans;
-    f32 ior;
-    // Solid
-    Vec3f scatterDistance;
-    // Thin
-    f32 flatness;
-    f32 diffTrans;
-};
 
 inline Vec3f Luminance(const Vec3f &color) { return Dot(Vec3f(.3f, .6f, 1.f), color); }
 

@@ -308,7 +308,6 @@ void main()
             uint materialID = dg.DecodeMaterialID(triangleIndex) + 1;
             uint3 vids = dg.DecodeTriangle(triangleIndex);
 
-#if 0
             uint2 pageInformation = dg.DecodeFaceIDAndRotateInfo(triangleIndex);
             uint faceID = pageInformation.x;
             // Rotate to original order
@@ -320,18 +319,12 @@ void main()
             float2 oldBary = bary;
             bary.x = (rotate == 1 ? 1 - oldBary.x - oldBary.y : (rotate == 2 ? oldBary.y : oldBary.x));
             bary.y = (rotate == 1 ? oldBary.x : (rotate == 2 ? 1 - oldBary.x - oldBary.y : oldBary.y));
-#endif
 
             float3 p0 = dg.DecodePosition(vids[0]);
             float3 p1 = dg.DecodePosition(vids[1]);
             float3 p2 = dg.DecodePosition(vids[2]);
 
             float3 gn = normalize(cross(p0 - p2, p1 - p2));
-            // TODO
-            //if (dot(gn, query.WorldRayDirection()) > 0.f)
-            //{
-                //gn = -gn;
-            //}
 
             float3 n0, n1, n2;
             if (dg.HasNormals())
@@ -340,7 +333,7 @@ void main()
                 n1 = dg.DecodeNormal(vids[1]);
                 n2 = dg.DecodeNormal(vids[2]);
             }
-            //else 
+            else 
             {
                 n0 = gn;
                 n1 = gn;
@@ -351,10 +344,11 @@ void main()
             // p0 + dpdu * u + dpdv * v = p1
 
             float2 uv0 = float2(0, 0);
-            float2 uv1 = float2(0, 1);//isSecondFace ? float2(1, 1) : float2(1, 0);
-            float2 uv2 = float2(1, 1);//isSecondFace ? float2(0, 1) : float2(1, 1);
+            float2 uv1 = isSecondFace ? float2(1, 1) : float2(1, 0);
+            float2 uv2 = isSecondFace ? float2(0, 1) : float2(1, 1);
 
             hitInfo = CalculateTriangleHitInfo(p0, p1, p2, n0, n1, n2, gn, uv0, uv1, uv2, bary);
+            hitInfo.faceID = faceID;
 
         }
         else if (query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
@@ -395,35 +389,44 @@ void main()
         // Get material
         GPUMaterial material = materials[NonUniformResourceIndex(materialID)];
         // Ray cone
-        float4 reflectance;
-#if 0
+        float4 reflectance = 0;
+        float filterU = rng.Uniform();
         if (material.textureIndex != -1)
         {
-        }
-        Ptex::FaceData faceData = Ptex::GetFaceData(material, faceID);
-        int2 dim = int2(1u << faceData.log2Dim.x, 1u << faceData.log2Dim.y);
+            Ptex::FaceData faceData = Ptex::GetFaceData(material, hitInfo.faceID);
+            int2 dim = int2(1u << faceData.log2Dim.x, 1u << faceData.log2Dim.y);
 
-        float4 reflectance = SampleStochasticCatmullRomBorderless(faceData, material, faceID, uv, mipLevel, filterU, printDebug);
-        float surfaceSpreadAngle = depth == 1 ? rayCone.CalculatePrimaryHitUnifiedSurfaceSpreadAngle(dir, hitInfo.n, p0, p1, p2, n0, n1, n2) 
-                                                  : rayCone.CalculateSecondaryHitSurfaceSpreadAngle(dir, hitInfo.n, p0, p1, p2, n0, n1, n2);
-        rayCone.Propagate(surfaceSpreadAngle, rayT);
-        float lambda = rayCone.ComputeTextureLOD(p0, p1, p2, uv0, uv1, uv2, dir, hitInfo.n, dim, printDebug);
-        uint mipLevel = (uint)lambda;
-#endif
+            float surfaceSpreadAngle = depth == 1 ? rayCone.CalculatePrimaryHitUnifiedSurfaceSpreadAngle(dir, hitInfo.n, hitInfo.p0, hitInfo.p1, hitInfo.p2, hitInfo.n0, hitInfo.n1, hitInfo.n2) 
+                : rayCone.CalculateSecondaryHitSurfaceSpreadAngle(dir, hitInfo.n, hitInfo.p0, hitInfo.p1, hitInfo.p2, hitInfo.n0, hitInfo.n1, hitInfo.n2);
+            rayCone.Propagate(surfaceSpreadAngle, rayT);
+            float lambda = rayCone.ComputeTextureLOD(hitInfo.p0, hitInfo.p1, hitInfo.p2, hitInfo.uv0, hitInfo.uv1, hitInfo.uv2, dir, hitInfo.n, dim, printDebug);
+            uint mipLevel = (uint)lambda;
+            float4 reflectance = SampleStochasticCatmullRomBorderless(faceData, material, hitInfo.faceID, hitInfo.uv, mipLevel, filterU, printDebug);
+
+            if (depth == 1)
+            {
+                float2 newUv = faceData.rotate ? float2(1 - hitInfo.uv.y, hitInfo.uv.x) : hitInfo.uv;
+                uint2 virtualPage = VirtualTexture::CalculateVirtualPage(faceData.faceOffset, newUv, dim, mipLevel);
+                const uint feedbackMipLevel = VirtualTexture::ClampMipLevel(dim, mipLevel);
+                feedbackRequest = PackFeedbackEntry(virtualPage.x, virtualPage.y, material.textureIndex, feedbackMipLevel);
+            }
+        }
+        else 
+        {
+            reflectance = material.baseColor;
+        }
 
         float3 wo = normalize(float3(dot(hitInfo.ss, -objectRayDir), dot(hitInfo.ts, -objectRayDir),
                               dot(hitInfo.n, -objectRayDir)));
 
         float2 sample = rng.Uniform2D();
 
-        float filterU = rng.Uniform();
-
         uint2 virtualPage = ~0u;
         switch (material.type) 
         {
             case GPUMaterialType::Disney: 
             {
-                dir = SampleDisney(material, sample, 
+                dir = SampleDisney(material, sample, reflectance.xyz, throughput, wo);
             }
             break;
             case GPUMaterialType::Dielectric:
@@ -446,19 +449,8 @@ void main()
                 reflectance.w = 1.f;
 #endif
 
-                float4 reflectance = float4(0.f, 1.f, 0.f, 1.f);
-
                 //dir = SampleDiffuse(reflectance.xyz, wo, sample, throughput, printDebug);
                 dir = SampleDisneyThin(sample, throughput, wo);
-#if 0
-                if (depth == 1)
-                {
-                    float2 newUv = faceData.rotate ? float2(1 - uv.y, uv.x) : uv;
-                    uint2 virtualPage = VirtualTexture::CalculateVirtualPage(faceData.faceOffset, newUv, dim, mipLevel);
-                    const uint feedbackMipLevel = VirtualTexture::ClampMipLevel(dim, mipLevel);
-                    feedbackRequest = PackFeedbackEntry(virtualPage.x, virtualPage.y, material.textureIndex, feedbackMipLevel);
-                }
-#endif
             }
             break;
         }

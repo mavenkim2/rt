@@ -55,7 +55,30 @@ GPUMaterial DielectricMaterial::ConvertToGPU()
 {
     GPUMaterial result = {};
     result.type        = GPUMaterialType::Dielectric;
-    result.eta         = eta;
+    result.ior         = eta;
+    return result;
+}
+
+GPUMaterial DisneyMaterial::ConvertToGPU()
+{
+    GPUMaterial result     = {};
+    result.type            = GPUMaterialType::Disney;
+    result.diffTrans       = diffTrans;
+    result.baseColor       = baseColor;
+    result.specTrans       = specTrans;
+    result.clearcoatGloss  = clearcoatGloss;
+    result.scatterDistance = scatterDistance;
+    result.clearcoat       = clearcoat;
+    result.specularTint    = specularTint;
+    result.ior             = ior;
+    result.metallic        = metallic;
+    result.flatness        = flatness;
+    result.sheen           = sheen;
+    result.sheenTint       = sheenTint;
+    result.anisotropic     = anisotropic;
+    result.alpha           = alpha;
+    result.roughness       = roughness;
+    result.thin            = thin;
     return result;
 }
 
@@ -477,6 +500,65 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
                 *material = PushStructConstruct(arena, NullMaterial)();
             }
             break;
+            case MaterialTypes::Disney:
+            {
+                *material    = PushStructConstruct(arena, DisneyMaterial)();
+                bool success = Advance(tokenizer, "t ");
+                Assert(success);
+                string ptexFilename = ReadWord(tokenizer);
+                if (!(ptexFilename == "none"))
+                {
+                    PtexTexture tex(PushStr8F(arena, "%S%S\0", directory, ptexFilename));
+
+                    Scene *scene = GetScene();
+                    scene->ptexTextures.push_back(tex);
+
+                    ptexReflectanceIndex = (int)(scene->ptexTextures.size() - 1);
+                }
+                SkipToNextChar(tokenizer);
+                struct DiskDisneyMaterial
+                {
+                    float diffTrans;
+                    Vec4f baseColor;
+                    float specTrans;
+                    float clearcoatGloss;
+                    Vec3f scatterDistance;
+                    float clearcoat;
+                    float specularTint;
+                    float ior;
+                    float metallic;
+                    float flatness;
+                    float sheen;
+                    float sheenTint;
+                    float anisotropic;
+                    float alpha;
+                    float roughness;
+                    bool thin;
+                };
+                DiskDisneyMaterial diskMaterial;
+                GetPointerValue(tokenizer, &diskMaterial);
+
+                DisneyMaterial *disneyMaterial = (DisneyMaterial *)(*material);
+
+                disneyMaterial->diffTrans       = diskMaterial.diffTrans;
+                disneyMaterial->baseColor       = diskMaterial.baseColor;
+                disneyMaterial->specTrans       = diskMaterial.specTrans;
+                disneyMaterial->clearcoatGloss  = diskMaterial.clearcoatGloss;
+                disneyMaterial->scatterDistance = diskMaterial.scatterDistance;
+                disneyMaterial->clearcoat       = diskMaterial.clearcoat;
+                disneyMaterial->specularTint    = diskMaterial.specularTint;
+                disneyMaterial->ior             = diskMaterial.ior;
+                disneyMaterial->metallic        = diskMaterial.metallic;
+                disneyMaterial->flatness        = diskMaterial.flatness;
+                disneyMaterial->sheen           = diskMaterial.sheen;
+                disneyMaterial->sheenTint       = diskMaterial.sheenTint;
+                disneyMaterial->anisotropic     = diskMaterial.anisotropic;
+                disneyMaterial->alpha           = diskMaterial.alpha;
+                disneyMaterial->roughness       = diskMaterial.roughness;
+                disneyMaterial->thin            = diskMaterial.thin;
+                SkipToNextChar(tokenizer);
+            }
+            break;
             case MaterialTypes::Diffuse:
             {
                 bool result = Advance(tokenizer, "reflectance ");
@@ -549,10 +631,6 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
                     dm, DiffuseMaterial(reflectance), albedo, g, maxDepth, nSamples,
                     thickness);
                 (*material)->displacement = ParseDisplacement(arena, tokenizer, directory);
-            }
-            break;
-            case MaterialTypes::Disney:
-            {
             }
             break;
             default: Assert(0);

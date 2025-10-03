@@ -5703,6 +5703,7 @@ void CreateClusters2(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndi
     Vec3f *normals     = PushArrayNoZero(scratch.temp.arena, Vec3f, totalNumVertices);
     u32 *indexData     = PushArrayNoZero(scratch.temp.arena, u32, totalNumTriangles * 3);
     Bounds *meshBounds = PushArrayNoZero(scratch.temp.arena, Bounds, numMeshes);
+    int *faceIDs       = PushArrayNoZero(scratch.temp.arena, int, totalNumTriangles);
 
     ParallelFor(0, numMeshes, 1, [&](int jobID, int start, int count) {
         for (int meshIndex = start; meshIndex < start + count; meshIndex++)
@@ -5724,6 +5725,20 @@ void CreateClusters2(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndi
             {
                 indexData[indexOffset + indexIndex] = mesh.indices[indexIndex] + vertexOffset;
             }
+            if (mesh.faceIDs)
+            {
+                for (int i = 0; i < mesh.numIndices / 3; i++)
+                {
+                    faceIDs[indexOffset / 3] = mesh.faceIDs[i];
+                }
+            }
+            else
+            {
+                for (int i = 0; i < mesh.numIndices / 3; i++)
+                {
+                    faceIDs[indexOffset / 3] = -1;
+                }
+            }
         }
     });
 
@@ -5737,6 +5752,7 @@ void CreateClusters2(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndi
     combinedMesh.p          = positions;
     combinedMesh.n          = normals;
     combinedMesh.indices    = indexData;
+    combinedMesh.faceIDs    = (u32 *)faceIDs;
     combinedMesh.numIndices = totalNumTriangles * 3;
     combinedMesh.numFaces   = totalNumTriangles;
 

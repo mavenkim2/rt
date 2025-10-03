@@ -38,8 +38,7 @@ struct PackedDenseGeometryHeader
     uint h;
     uint i;
     uint j;
-
-    uint pad;
+    uint k;
 };
 
 struct DGFGeometryInfo
