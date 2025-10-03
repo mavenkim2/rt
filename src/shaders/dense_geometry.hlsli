@@ -36,6 +36,8 @@ struct DenseGeometry
     uint coverageOffset;
     uint sggxOffset;
     uint faceIDOffset;
+    uint materialTableOffset;
+
     uint indexOffset;
     uint ctrlOffset;
     uint firstBitOffset;
@@ -336,7 +338,7 @@ struct DenseGeometry
         {
             uint numHighOrderBits = BitFieldExtractU32(materialInfo, 5, 0) + 1;
             uint numEntries = BitFieldExtractU32(materialInfo, 5, 5);
-            uint materialOffset = BitFieldExtractU32(materialInfo, 22, 10);
+            uint materialOffset = materialTableOffset;
 
             uint numLowOrderBits = 32 - numHighOrderBits;
 
@@ -549,9 +551,8 @@ DenseGeometry GetDenseGeometryHeader2(uint headerIndex, uint baseAddress)
     uint numPositions = result.numBricks ? result.numBricks : result.numVertices;
 
     result.normalOffset = 0;
-    //result.coverageOffset = result.normalOffset + ((result.numVertices * octBitWidth + 7) >> 3);
-    //result.sggxOffset = result.coverageOffset + 4 * result.numVertices;
     result.faceIDOffset = result.normalOffset + ((result.numVertices * octBitWidth + 7) >> 3);
+    result.materialTableOffset = result.faceIDOffset + 4 + (result.numTriangles * (result.numFaceIDBits + 3) + 7) / 8;
 
     result.ctrlOffset = (numPositions * vertexBitWidth + 7) >> 3;
     result.brickOffset = result.ctrlOffset;

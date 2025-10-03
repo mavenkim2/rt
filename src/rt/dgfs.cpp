@@ -526,6 +526,7 @@ void DenseGeometryBuildData::WriteTriangleData(StaticArray<int> &triangleIndices
         primIDs.Push(primID);
 
         u32 faceID = mesh.faceIDs ? mesh.faceIDs[primID] : 0;
+        faceID     = faceID == ~0u ? 0 : faceID;
         minFaceID  = Min(minFaceID, faceID);
         maxFaceID  = Max(maxFaceID, faceID);
         faceIDs.Push(faceID);

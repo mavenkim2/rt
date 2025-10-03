@@ -176,7 +176,6 @@ float3 SampleDisney(GPUMaterial material, float2 u, float3 baseColor, inout floa
         float3 cSheen = lerp(1.f, tint, material.sheenTint);
         float3 fSheen = fH * material.sheen * cSheen;
 
-        float fss90 = wiDotH * wiDotH * material.roughness;
         float fL = SchlickFresnel(wi.z); 
         float fV = SchlickFresnel(wo.z);
 
