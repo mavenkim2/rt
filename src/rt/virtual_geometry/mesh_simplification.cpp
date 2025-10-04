@@ -2653,10 +2653,10 @@ static GraphPartitionResult PartitionTriangles(Arena *arena, Mesh &mesh, u32 max
     const u32 minGroupSize = maxNumTriangles - 4;
     const u32 maxGroupSize = maxNumTriangles;
 
-    ScratchArena scratch(&arena, 1);
+    TempArena scratch = ScratchStart(&arena, 1);
 
     u32 hashSize = NextPowerOfTwo(mesh.numIndices);
-    HashIndex cornerHash(scratch.temp.arena, hashSize, hashSize);
+    HashIndex cornerHash(scratch.arena, hashSize, hashSize);
     for (u32 index = 0; index < mesh.numIndices; index++)
     {
         Vec3f pos = mesh.p[mesh.indices[index]];
@@ -2667,7 +2667,7 @@ static GraphPartitionResult PartitionTriangles(Arena *arena, Mesh &mesh, u32 max
 
     Graph<u32> triangleAdjGraph;
     u32 total = triangleAdjGraph.InitializeStatic(
-        scratch.temp.arena, mesh.numFaces, [&](u32 tri, u32 *offsets, u32 *data = 0) {
+        scratch.arena, mesh.numFaces, [&](u32 tri, u32 *offsets, u32 *data = 0) {
             ScratchArena scratch(&arena, 1);
 
             Array<u32> tris(scratch.temp.arena, 8);
@@ -2700,9 +2700,9 @@ static GraphPartitionResult PartitionTriangles(Arena *arena, Mesh &mesh, u32 max
 
     Bounds totalBounds;
 
-    StaticArray<Vec3f> centers(scratch.temp.arena, mesh.numFaces);
-    StaticArray<Array<int>> graphNeighbors(scratch.temp.arena, mesh.numFaces, mesh.numFaces);
-    StaticArray<Array<int>> graphWeights(scratch.temp.arena, mesh.numFaces, mesh.numFaces);
+    StaticArray<Vec3f> centers(scratch.arena, mesh.numFaces);
+    StaticArray<Array<int>> graphNeighbors(scratch.arena, mesh.numFaces, mesh.numFaces);
+    StaticArray<Array<int>> graphWeights(scratch.arena, mesh.numFaces, mesh.numFaces);
 
     for (int tri = 0; tri < mesh.numFaces; tri++)
     {
@@ -2717,22 +2717,22 @@ static GraphPartitionResult PartitionTriangles(Arena *arena, Mesh &mesh, u32 max
         totalBounds.Extend(Lane4F32(p2));
 
         u32 count = triangleAdjGraph.offsets[tri + 1] - triangleAdjGraph.offsets[tri];
-        graphNeighbors[tri] = Array<int>(scratch.temp.arena, count);
+        graphNeighbors[tri] = Array<int>(scratch.arena, count);
         MemoryCopy(graphNeighbors[tri].data,
                    triangleAdjGraph.data + triangleAdjGraph.offsets[tri], sizeof(u32) * count);
         graphNeighbors[tri].size = count;
 
-        graphWeights[tri] = Array<int>(scratch.temp.arena, count);
+        graphWeights[tri] = Array<int>(scratch.arena, count);
         for (int i = 0; i < count; i++)
         {
             graphWeights[tri].Push(4 * 65);
         }
     }
 
-    AddSpatialLinks(scratch.temp.arena, mesh.numFaces, totalBounds, centers, graphNeighbors,
+    AddSpatialLinks(scratch.arena, mesh.numFaces, totalBounds, centers, graphNeighbors,
                     graphWeights);
 
-    idx_t *offsets  = PushArray(scratch.temp.arena, idx_t, mesh.numFaces + 1);
+    idx_t *offsets  = PushArray(arena, idx_t, mesh.numFaces + 1);
     idx_t *offsets1 = &offsets[1];
 
     idx_t totalData = 0;
@@ -2744,8 +2744,8 @@ static GraphPartitionResult PartitionTriangles(Arena *arena, Mesh &mesh, u32 max
         totalData += num;
     }
 
-    idx_t *weights = PushArrayNoZero(scratch.temp.arena, idx_t, totalData);
-    idx_t *data    = PushArrayNoZero(scratch.temp.arena, idx_t, totalData);
+    idx_t *weights = PushArrayNoZero(arena, idx_t, totalData);
+    idx_t *data    = PushArrayNoZero(arena, idx_t, totalData);
 
     for (int tri = 0; tri < mesh.numFaces; tri++)
     {
@@ -2756,6 +2756,8 @@ static GraphPartitionResult PartitionTriangles(Arena *arena, Mesh &mesh, u32 max
             weights[dataIndex] = graphWeights[tri][idx];
         }
     }
+
+    ScratchEnd(scratch);
 
     for (u32 i = 1; i < mesh.numFaces; i++)
     {

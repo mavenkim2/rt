@@ -1216,7 +1216,10 @@ static string WriteNanite(PBRTFileInfo *state, SceneLoadState *sls, string direc
                         mesh.indices[3 * newTri + 0] = index0;
                         mesh.indices[3 * newTri + 1] = index1;
                         mesh.indices[3 * newTri + 2] = index2;
-                        mesh.faceIDs[newTri]         = mesh.faceIDs[tri];
+                        if (mesh.faceIDs)
+                        {
+                            mesh.faceIDs[newTri] = mesh.faceIDs[tri];
+                        }
                     }
                 }
 
@@ -2812,6 +2815,9 @@ static Array<DisneyMaterial> LoadMaterialJSON(SceneLoadState *sls, string direct
 
         for (;;)
         {
+            SkipToNextChar(&tokenizer);
+            if (EndOfBuffer(&tokenizer) || *tokenizer.cursor == '}') break;
+
             SkipToNextChar2(&tokenizer, '"');
             string parameterType;
             result = GetBetweenPair(parameterType, &tokenizer, '"');
@@ -2921,7 +2927,8 @@ static Array<DisneyMaterial> LoadMaterialJSON(SceneLoadState *sls, string direct
             else if (parameterType == "mask")
             {
                 string blank;
-                bool success = GetBetweenPair(blank, &tokenizer, '"');
+                SkipToNextChar2(&tokenizer, '"');
+                bool success = Advance(&tokenizer, "\"\"");
                 Assert(success);
             }
             else if (parameterType == "type")
@@ -2942,7 +2949,7 @@ static Array<DisneyMaterial> LoadMaterialJSON(SceneLoadState *sls, string direct
                 string displacementMapFilename;
                 SkipToNextChar2(&tokenizer, '"');
                 GetBetweenPair(displacementMapFilename, &tokenizer, '"');
-                break;
+                Advance(&tokenizer, ",");
             }
             else
             {
@@ -3191,7 +3198,14 @@ static void LoadMoanaOBJ(PBRTFileInfo *info, string filePath)
         ShapeType &shape   = info->shapes.AddBack();
         shape.packet.type  = "trianglemesh"_sid;
         meshes[i].numFaces = meshes[i].numIndices / 4;
-        shape.mesh         = ConvertQuadToTriangleMesh(info->arena, meshes[i]);
+        if (Contains(info->filename, "osOcean"))
+        {
+            shape.mesh = meshes[i];
+        }
+        else
+        {
+            shape.mesh = ConvertQuadToTriangleMesh(info->arena, meshes[i]);
+        }
         shape.materialName = materials[i];
         shape.groupName    = groupNames[i];
     }
@@ -3434,6 +3448,73 @@ static void LoadMoanaJSON(SceneLoadState *sls, PBRTFileInfo *base, string direct
                     {
                         Assert(0);
                     }
+                }
+            }
+        }
+        else if (parameterType == "instancedCopies")
+        {
+            SkipToNextChar2(&tokenizer, '"');
+
+            for (;;)
+            {
+                string name;
+                if (*tokenizer.cursor == '}') break;
+                bool success = GetBetweenPair(name, &tokenizer, '"');
+                Assert(success);
+                SkipToNextChar2(&tokenizer, '"');
+
+                bool differentGeometry = false;
+                AffineSpace baseTransform;
+
+                for (;;)
+                {
+                    SkipToNextChar(&tokenizer, ',');
+                    if (*tokenizer.cursor == '}') break;
+
+                    string field;
+                    success = GetBetweenPair(field, &tokenizer, '"');
+                    Assert(success);
+
+                    if (field == "name")
+                    {
+                        SkipToNextChar2(&tokenizer, '"');
+                        string instanceName;
+                        success = GetBetweenPair(instanceName, &tokenizer, '"');
+                        Assert(success);
+                    }
+                    else if (field == "transformMatrix")
+                    {
+                        for (u32 c = 0; c < 4; c++)
+                        {
+                            for (u32 r = 0; r < 4; r++)
+                            {
+                                SkipToNextDigit(&tokenizer);
+                                float value = ReadFloat(&tokenizer);
+                                if (r < 3)
+                                {
+                                    baseTransform[c][r] = value;
+                                }
+                            }
+                        }
+                        SkipToNextChar2(&tokenizer, ']');
+                        success = Advance(&tokenizer, "]");
+                        Assert(success);
+                    }
+                    else
+                    {
+                        // TODO
+                        Assert(0);
+                    }
+                }
+
+                if (!differentGeometry)
+                {
+                    instanceTransforms.Push(baseTransform);
+                }
+                else
+                {
+                    // TODO
+                    Assert(0);
                 }
             }
         }
