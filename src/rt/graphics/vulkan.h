@@ -19,6 +19,8 @@
 #include "../../third_party/streamline/include/sl.h"
 #include "../../third_party/streamline/include/sl_dlss_d.h"
 
+// #define USE_DLSS
+
 namespace rt
 {
 
@@ -919,11 +921,13 @@ struct CommandBuffer
     void ResolveQuery(QueryPool *queryPool, GPUBuffer *gpuBuffer, u32 queryIndex, u32 count,
                       u32 destOffset);
     void ResetQuery(QueryPool *queryPool, u32 index, u32 count);
+#ifdef USE_DLSS
     void DLSS(DLSSTargets &targets, AffineSpace &worldToCameraView,
               AffineSpace &cameraViewToWorld, Mat4 &clipFromCamera, Mat4 &cameraFromClip,
               Mat4 &clipToPrevClip, Mat4 &prevClipToClip, Vec3f &cameraP, Vec3f &cameraUp,
               Vec3f &cameraFwd, Vec3f &cameraRight, f32 fov, f32 aspectRatio,
               const Vec2f &jitter);
+#endif
 };
 
 typedef ChunkedLinkedList<CommandBuffer> CommandBufferList;
@@ -1220,11 +1224,13 @@ struct Vulkan
     void EndFrame(int queueType);
 
     bool Wait(Semaphore s, u64 val = UINT64_MAX);
+#ifdef USE_DLSS
     void GetDLSSTargetDimensions(u32 &width, u32 &height);
     DLSSTargets InitializeDLSSTargets(GPUImage *inColor, GPUImage *inDiffuseAlbedo,
                                       GPUImage *inSpecularAlbedo, GPUImage *inNormalRoughness,
                                       GPUImage *inMvec, GPUImage *inDepth,
                                       GPUImage *inSpecularHitDistance, GPUImage *outColor);
+#endif
 
     // void CopyBuffer(CommandBuffer cmd, GPUBuffer *dest, GPUBuffer *src, u32 size);
     // void ClearBuffer(CommandBuffer cmd, GPUBuffer *dst);

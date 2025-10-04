@@ -11,6 +11,7 @@
 #define VMA_IMPLEMENTATION
 #include "../../third_party/vulkan/vk_mem_alloc.h"
 
+#ifdef USE_DLSS
 PFun_slGetFeatureFunction *slGetFeatureFunction_p;
 PFun_slSetTagForFrame *slSetTagForFrame_p;
 PFun_slGetNewFrameToken *slGetNewFrameToken_p;
@@ -22,6 +23,7 @@ sl::Result slGetFeatureFunction(sl::Feature feature, const char *functionName, v
 {
     return slGetFeatureFunction_p(feature, functionName, function);
 }
+#endif
 
 namespace rt
 {
@@ -61,6 +63,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
     const i32 minor = 0;
     const i32 patch = 1;
 
+#ifdef USE_DLSS
     sl::Preferences slPreference;
     slPreference.showConsole        = true;
     slPreference.logLevel           = sl::LogLevel::eVerbose;
@@ -76,7 +79,6 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
     slPreference.numFeaturesToLoad = ArrayLength(slFeatures);
     slPreference.renderAPI         = sl::RenderAPI::eVulkan;
 
-    // TODO don't hardcode
     HMODULE module =
         LoadLibraryA("../../src/third_party/streamline/bin/x64/development/sl.interposer.dll");
     Assert(module);
@@ -107,16 +109,9 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
         (PFun_slAllocateResources *)GetProcAddress(module, "slAllocateResources");
     slFreeResources_p = (PFun_slFreeResources *)GetProcAddress(module, "slFreeResources");
 
-    // SLDLSSSetOptions slDLSSSetOptions_p =
-    //     (SLDLSSSetOptions)GetProcAddress(module, "slDLSSSetOptions");
-    //
-    // SLDLSSOptimalSettings slDLSSGetOptimalSettings_p =
-    //     (SLDLSSOptimalSettings)GetProcAddress(module, "slDLSSGetOptimalSettings");
-
-    // sl::FeatureRequirements requirements;
-    // slGetFeatureRequirements(sl::Feature feature, sl::FeatureRequirements &requirements)
-
     volkInitializeCustom(slvkGetInstanceProcAddr);
+#endif
+    volkInitialize();
 
     u32 apiVersion = VK_API_VERSION_1_4;
 
@@ -327,11 +322,13 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
 #endif
             if (props.properties.apiVersion < apiVersion) continue;
 
+#ifdef USE_DLSS
             sl::AdapterInfo adapterInfo;
             adapterInfo.vkPhysicalDevice = testDevice;
             sl::Result res = slIsFeatureSupported_p(sl::kFeatureDLSS_RR, adapterInfo);
 
             if (res != sl::Result::eOk) continue;
+#endif
 
             b32 suitable = props.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
             if (preference == GPUDevicePreference::Integrated)
@@ -600,7 +597,10 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
         createInfo.enabledExtensionCount   = (u32)deviceExtensions.size();
         createInfo.ppEnabledExtensionNames = deviceExtensions.data();
 
+#ifdef USE_DLSS
         VK_CHECK(sl_vkCreateDevice(physicalDevice, &createInfo, 0, &device));
+#endif
+        VK_CHECK(vkCreateDevice(physicalDevice, &createInfo, 0, &device));
 
         volkLoadDevice(device);
     }
@@ -4362,6 +4362,7 @@ void CommandBuffer::ResetQuery(QueryPool *queryPool, u32 index, u32 count)
     vkCmdResetQueryPool(buffer, queryPool->queryPool, index, count);
 }
 
+#ifdef USE_DLSS
 DLSSTargets Vulkan::InitializeDLSSTargets(GPUImage *inColor, GPUImage *inDiffuseAlbedo,
                                           GPUImage *inSpecularAlbedo,
                                           GPUImage *inNormalRoughness, GPUImage *inMvec,
@@ -4561,6 +4562,7 @@ void CommandBuffer::DLSS(DLSSTargets &targets, AffineSpace &worldToCameraView,
         slEvaluateFeature_p(sl::kFeatureDLSS_RR, *token, inputs, ArrayLength(inputs), buffer);
     Assert(res == sl::Result::eOk);
 }
+#endif
 
 u32 Vulkan::GetQueueFamily(QueueType queueType)
 {
@@ -4633,6 +4635,7 @@ bool Vulkan::Wait(Semaphore s, u64 waitVal)
     return result == VK_SUCCESS;
 }
 
+#ifdef USE_DLSS
 void Vulkan::GetDLSSTargetDimensions(u32 &width, u32 &height)
 {
     // DLSS
@@ -4646,5 +4649,6 @@ void Vulkan::GetDLSSTargetDimensions(u32 &width, u32 &height)
     width          = dlssSettings.optimalRenderWidth;
     height         = dlssSettings.optimalRenderHeight;
 }
+#endif
 
 } // namespace rt

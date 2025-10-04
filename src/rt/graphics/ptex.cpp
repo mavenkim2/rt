@@ -1843,19 +1843,20 @@ void VirtualTextureManager::Callback()
                 // Replace previously mapped entry with a coarser mip
                 Vec2u coarserVirtualPage = virtualPage >> 1u;
                 u32 mipNumVertPagesWide  = numVirtPagesWide >> level;
-                u32 evictPackedEntry =
-                    cpuPageTable[level + 1][coarserVirtualPage.y * (mipNumVertPagesWide >> 1) +
-                                            coarserVirtualPage.x];
+                // u32 evictPackedEntry =
+                //     cpuPageTable[level + 1][coarserVirtualPage.y * (mipNumVertPagesWide >>
+                //     1) +
+                //                             coarserVirtualPage.x];
 
-                cpuPageTable[level][virtualPage.y * mipNumVertPagesWide + virtualPage.x] =
-                    evictPackedEntry;
+                cpuPageTable[level][virtualPage.y * mipNumVertPagesWide + virtualPage.x] = ~0u;
+                // evictPackedEntry;
 
                 UnlinkLRU(pageIndex);
 
                 PageTableUpdateRequest evictRequest;
                 evictRequest.virtualPage = virtualPage;
                 evictRequest.mipLevel    = mipLevel;
-                evictRequest.packed      = evictPackedEntry;
+                evictRequest.packed      = ~0u; // evictPackedEntry;
                 evictRequests.push_back(evictRequest);
             }
 

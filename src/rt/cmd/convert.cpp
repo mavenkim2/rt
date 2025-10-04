@@ -949,7 +949,7 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
 }
 
 void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state = 0,
-               StaticArray<DisneyMaterial> *disneyMaterials = 0);
+               Array<DisneyMaterial> *disneyMaterials = 0);
 
 string ConvertPBRTToRTScene(Arena *arena, string file)
 {
@@ -2463,7 +2463,7 @@ void WriteTransforms(PBRTFileInfo *info, StringBuilderMapped &dataBuilder)
 }
 
 void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state,
-               StaticArray<DisneyMaterial> *disneyMaterials)
+               Array<DisneyMaterial> *disneyMaterials)
 {
     TempArena temp = ScratchStart(0, 0);
     Assert(GetFileExtension(info->filename) == "rtscene");
@@ -2915,6 +2915,15 @@ static Array<DisneyMaterial> LoadMaterialJSON(SceneLoadState *sls, string direct
                 SkipToNextDigit(&tokenizer);
                 material.roughness = ReadFloat(&tokenizer);
             }
+            else if (parameterType == "refractive")
+            {
+            }
+            else if (parameterType == "mask")
+            {
+                string blank;
+                bool success = GetBetweenPair(blank, &tokenizer, '"');
+                Assert(success);
+            }
             else if (parameterType == "type")
             {
                 string type;
@@ -2993,23 +3002,33 @@ static Mesh *LoadObj(Arena *arena, string filename, string *&outMaterialNames,
                 {
                     materialNames.push_back(materialName);
                     groupNames.push_back(meshGroupName);
-                    materialName     = {};
-                    meshGroupName    = {};
-                    Mesh mesh        = {};
-                    mesh.numVertices = (u32)vertices.size();
-                    mesh.numIndices  = (u32)indices.size();
+                    materialName  = {};
+                    meshGroupName = {};
 
-                    mesh.p = PushArrayNoZero(arena, Vec3f, vertices.size());
+                    u32 normalsSize = (u32)normals.size();
+                    u32 numVertices = Max(normalsSize, (u32)vertices.size());
+
+                    struct Index
+                    {
+                        int normalIndex;
+                        int vertexIndex;
+                        int next;
+                    };
+
+                    Index *tempIndices = PushArray(temp.arena, Index, numVertices);
+                    MemorySet(tempIndices, 0xff, sizeof(Index) * numVertices);
+                    u32 currentVertexCount = vertices.size();
+
+                    Mesh mesh        = {};
+                    mesh.numVertices = numVertices;
+                    mesh.numIndices  = (u32)indices.size();
+                    mesh.p           = PushArrayNoZero(arena, Vec3f, numVertices);
                     MemoryCopy(mesh.p, vertices.data(), sizeof(Vec3f) * vertices.size());
+                    mesh.n       = PushArrayNoZero(arena, Vec3f, numVertices);
+                    mesh.indices = PushArrayNoZero(arena, u32, indices.size());
 
                     threadLocalStatistics[GetThreadIndex()].misc2 += mesh.numVertices;
                     threadLocalStatistics[GetThreadIndex()].misc3 += mesh.numIndices;
-
-                    int *normalIndices = PushArray(temp.arena, int, mesh.numVertices);
-                    MemorySet(normalIndices, 0xff, sizeof(int) * mesh.numVertices);
-
-                    mesh.n       = PushArrayNoZero(arena, Vec3f, vertices.size());
-                    mesh.indices = PushArrayNoZero(arena, u32, indices.size());
                     // Ensure that vertex index and normal index pairings are
                     // consistent
                     for (u32 i = 0; i < mesh.numIndices; i++)
@@ -3017,20 +3036,62 @@ static Mesh *LoadObj(Arena *arena, string filename, string *&outMaterialNames,
                         i32 vertexIndex = indices[i][0];
                         i32 normalIndex = indices[i][2];
 
-                        if (normalIndices[vertexIndex] != 0xffffffff)
+                        if (tempIndices[vertexIndex].normalIndex != -1 &&
+                            tempIndices[vertexIndex].normalIndex != normalIndex)
                         {
-                            ErrorExit(normalIndices[vertexIndex] == normalIndex,
-                                      "Face-varying normals currently unsupported. "
-                                      "file: %S\n",
-                                      filename);
+                            int vertexIndexIndex = vertexIndex;
+                            while (vertexIndexIndex != -1)
+                            {
+                                Index index = tempIndices[vertexIndexIndex];
+                                if (index.normalIndex == normalIndex)
+                                {
+                                    vertexIndex = index.vertexIndex;
+                                    break;
+                                }
+                                vertexIndexIndex = index.next;
+                            }
+
+                            if (vertexIndexIndex == -1)
+                            {
+                                int prevVertexIndex = vertexIndex;
+                                vertexIndex         = currentVertexCount++;
+                                Assert(vertexIndex < numVertices);
+
+                                mesh.p[vertexIndex] = mesh.p[prevVertexIndex];
+                                mesh.n[vertexIndex] = normals[normalIndex];
+                                Index index;
+                                index.vertexIndex = vertexIndex;
+                                index.normalIndex = normalIndex;
+                                index.next        = -1;
+
+                                tempIndices[vertexIndex] = index;
+
+                                Index *changedIndex = &tempIndices[prevVertexIndex];
+                                while (changedIndex->next != -1)
+                                {
+                                    changedIndex = &tempIndices[changedIndex->next];
+                                }
+                                changedIndex->next = vertexIndex;
+                            }
+                        }
+                        else if (tempIndices[vertexIndex].normalIndex == normalIndex)
+                        {
+                        }
+                        else
+                        {
+                            Index index;
+                            index.vertexIndex        = vertexIndex;
+                            index.normalIndex        = normalIndex;
+                            index.next               = -1;
+                            tempIndices[vertexIndex] = index;
+                            mesh.n[vertexIndex]      = normals[normalIndex];
                         }
 
                         Assert(normalIndex < (int)normals.size());
-                        Assert(vertexIndex < (int)vertices.size());
-                        normalIndices[vertexIndex] = normalIndex;
-                        mesh.n[vertexIndex]        = normals[normalIndex];
-                        mesh.indices[i]            = vertexIndex;
+                        Assert(vertexIndex < numVertices);
+                        mesh.indices[i] = vertexIndex;
                     }
+                    Assert(currentVertexCount == numVertices);
 
                     meshes.push_back(mesh);
 
@@ -3186,9 +3247,11 @@ static void LoadMoanaTransforms(PBRTFileInfo *info, string directory, string fil
     }
 }
 
-static void LoadMoanaJSON(Arena *arena, SceneLoadState *sls, string directory, string filePath)
+static void LoadMoanaJSON(SceneLoadState *sls, PBRTFileInfo *base, string directory,
+                          string filePath, Array<DisneyMaterial> &allDisneyMaterials)
 {
-    ScratchArena scratch(&arena, 1);
+    Arena *arena = sls->arenas[GetThreadIndex()];
+    ScratchArena scratch;
     Tokenizer tokenizer;
     tokenizer.input  = OS_MapFileRead(filePath);
     tokenizer.cursor = tokenizer.input.str;
@@ -3261,6 +3324,9 @@ static void LoadMoanaJSON(Arena *arena, SceneLoadState *sls, string directory, s
             SkipToNextChar2(&tokenizer, '"');
             success = GetBetweenPair(name, &tokenizer, '"');
             Assert(success);
+        }
+        else if (parameterType == "animated")
+        {
         }
         else if (parameterType == "instancedPrimitiveJsonFiles")
         {
@@ -3377,13 +3443,14 @@ static void LoadMoanaJSON(Arena *arena, SceneLoadState *sls, string directory, s
         }
     }
 
-    PBRTFileInfo base;
-    base.Init("base.rtscene");
+    // PBRTFileInfo base;
+    // base.Init("base.rtscene");
+    u32 transformIndexStart = base->transforms.Length();
     for (auto *node = instanceTransforms.first; node != 0; node = node->next)
     {
         for (u32 i = 0; i < node->count; i++)
         {
-            base.transforms.Push(node->values[i]);
+            base->transforms.Push(node->values[i]);
         }
     }
     scheduler.Wait(&counter);
@@ -3421,30 +3488,32 @@ static void LoadMoanaJSON(Arena *arena, SceneLoadState *sls, string directory, s
         {
             if (instanceTransforms.Length() == 1)
             {
-                AffineSpace &transform = base.transforms.first->values[0];
+                AffineSpace &transform = instanceTransforms.first->values[0];
                 if (transform[0] == Vec3f(1, 0, 0) && transform[1] == Vec3f(0, 1, 0) &&
                     transform[2] == Vec3f(0, 0, 1))
                 {
                     Assert(info->numInstances);
-                    base.Merge(info);
+                    base->Merge(info);
                 }
                 else
                 {
                     InstanceType instance;
-                    instance.filename            = PushStr8Copy(base.arena, info->filename);
-                    instance.transformIndexStart = 0;
-                    instance.transformIndexEnd   = instanceTransforms.Length() - 1;
-                    base.numInstances += instanceTransforms.Length();
+                    instance.filename            = PushStr8Copy(base->arena, info->filename);
+                    instance.transformIndexStart = transformIndexStart;
+                    instance.transformIndexEnd =
+                        transformIndexStart + instanceTransforms.Length() - 1;
+                    base->numInstances += instanceTransforms.Length();
                     WriteFile(directory, info);
                 }
             }
             else
             {
                 InstanceType instance;
-                instance.filename            = PushStr8Copy(base.arena, info->filename);
-                instance.transformIndexStart = 0;
-                instance.transformIndexEnd   = instanceTransforms.Length() - 1;
-                base.numInstances += instanceTransforms.Length();
+                instance.filename            = PushStr8Copy(base->arena, info->filename);
+                instance.transformIndexStart = transformIndexStart;
+                instance.transformIndexEnd =
+                    transformIndexStart + instanceTransforms.Length() - 1;
+                base->numInstances += instanceTransforms.Length();
                 WriteFile(directory, info);
             }
         }
@@ -3517,12 +3586,13 @@ static void LoadMoanaJSON(Arena *arena, SceneLoadState *sls, string directory, s
             if (info->base)
             {
                 InstanceType instance;
-                instance.filename            = PushStr8Copy(base.arena, info->filename);
-                instance.transformIndexStart = 0;
-                instance.transformIndexEnd   = instanceTransforms.Length() - 1;
-                base.fileInstances.Push(instance);
+                instance.filename            = PushStr8Copy(base->arena, info->filename);
+                instance.transformIndexStart = transformIndexStart;
+                instance.transformIndexEnd =
+                    transformIndexStart + instanceTransforms.Length() - 1;
+                base->fileInstances.Push(instance);
 
-                base.numInstances += instanceTransforms.Length();
+                base->numInstances += instanceTransforms.Length();
             }
 
 #ifdef USE_GPU
@@ -3533,6 +3603,12 @@ static void LoadMoanaJSON(Arena *arena, SceneLoadState *sls, string directory, s
             ArenaRelease(info->arena);
         }
     }
+
+    for (DisneyMaterial &material : newDisneyMaterials)
+    {
+        allDisneyMaterials.Push(material);
+    }
+
 #ifdef USE_GPU
     for (string colorMap : colorMaps)
     {
@@ -3541,8 +3617,28 @@ static void LoadMoanaJSON(Arena *arena, SceneLoadState *sls, string directory, s
     }
 #endif
 
-    WriteFile(directory, &base, 0, &newDisneyMaterials);
     scheduler.Wait(&counter);
+}
+
+static void LoadMoanaJSON(Arena *arena, string directory)
+{
+    ScratchArena scratch(&arena, 1);
+    SceneLoadState sls;
+    sls.Init(arena);
+
+    PBRTFileInfo baseInfo;
+    baseInfo.Init("base.rtscene");
+
+    Array<DisneyMaterial> disneyMaterials(scratch.temp.arena, 100);
+
+    // TODO
+    string testFilename = "../../data/island/pbrt-v4/json/isMountainB/isMountainB.json";
+    LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+
+    testFilename = "../../data/island/pbrt-v4/json/osOcean/osOcean.json";
+    LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+
+    WriteFile(directory, &baseInfo, 0, &disneyMaterials);
 }
 
 void LoadPBRT(Arena *arena, string filename)
@@ -3616,9 +3712,7 @@ int main(int argc, char **argv)
     string testFilename = "../../data/island/pbrt-v4/json/isMountainB/isMountainB.json";
     string directory    = "../../data/island/pbrt-v4/";
     string baseFile     = PathSkipLastSlash(testFilename);
-    SceneLoadState sls;
-    sls.Init(arena);
-    LoadMoanaJSON(arena, &sls, directory, testFilename);
+    LoadMoanaJSON(arena, directory);
 
     // int numMeshes, actualNumMeshes;
     // // string testFilename = "../../data/island/pbrt-v4/obj/isMountainB/archives/"
