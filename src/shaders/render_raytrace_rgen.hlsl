@@ -75,10 +75,9 @@ void main()
     RNG rng = RNG::Init(RNG::PCG3d(swizzledThreadID.xyx).zy, push.frameNum);
 
     // Generate Ray
-    //float2 sample = rng.Uniform2D();
+    float2 sample = rng.Uniform2D();
     const float2 filterRadius = float2(0.5, 0.5);
-    float2 filterSample = float2(0, 0);
-    //float2(lerp(-filterRadius.x, filterRadius.x, sample[0]), lerp(-filterRadius.y, filterRadius.y, sample[1]));
+    float2 filterSample = float2(lerp(-filterRadius.x, filterRadius.x, sample[0]), lerp(-filterRadius.y, filterRadius.y, sample[1]));
     filterSample += float2(0.5, 0.5) + float2(swizzledThreadID);
     float2 pLens = rng.Uniform2D();
 

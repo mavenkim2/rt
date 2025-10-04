@@ -156,6 +156,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     Shader testShader;
     Shader mvecShader;
+    Shader accumulateShader;
 
     RayTracingShaderGroup groups[3];
     Arena *arena = params->arenas[GetThreadIndex()];
@@ -197,6 +198,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         string mvecShaderName = "../src/shaders/calculate_motion_vectors.spv";
         string mvecShaderData = OS_ReadFile(arena, mvecShaderName);
         mvecShader = device->CreateShader(ShaderStage::Compute, "mvec shader", mvecShaderData);
+
+        string accumulateShaderName = "../src/shaders/accumulate_frames.spv";
+        string accumulateShaderData = OS_ReadFile(arena, accumulateShaderName);
+        accumulateShader = device->CreateShader(ShaderStage::Compute, "accumulate shader",
+                                                accumulateShaderData);
     }
 
     // Compile pipelines
@@ -225,10 +231,21 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     VkPipeline mvecPipeline =
         device->CreateComputePipeline(&mvecShader, &mvecLayout, 0, "mvec");
 
-    u32 targetWidth;
-    u32 targetHeight;
+    DescriptorSetLayout accumulateLayout = {};
+    accumulateLayout.AddBinding(0, DescriptorType::SampledImage, VK_SHADER_STAGE_COMPUTE_BIT);
+    accumulateLayout.AddBinding(1, DescriptorType::StorageImage, VK_SHADER_STAGE_COMPUTE_BIT);
 
-    device->GetDLSSTargetDimensions(targetWidth, targetHeight);
+    PushConstant accumulatePC;
+    accumulatePC.size   = sizeof(NumPushConstant);
+    accumulatePC.offset = 0;
+    accumulatePC.stage  = ShaderStage::Compute;
+
+    VkPipeline accumulatePipeline = device->CreateComputePipeline(
+        &accumulateShader, &accumulateLayout, &accumulatePC, "accumulate pipeline");
+
+    // device->GetDLSSTargetDimensions(targetWidth, targetHeight);
+    u32 targetWidth  = 2560;
+    u32 targetHeight = 1440;
     // targetWidth  = 1920;
     // targetHeight = 1080;
 
@@ -292,9 +309,18 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     ImageDesc targetUavDesc(ImageType::Type2D, targetWidth, targetHeight, 1, 1, 1,
                             VK_FORMAT_R8G8B8A8_UNORM, MemoryUsage::GPU_ONLY,
-                            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
+                                VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                             VK_IMAGE_TILING_OPTIMAL);
     ResourceHandle image = rg->CreateImageResource("target image", targetUavDesc);
+
+    ImageDesc accumulateUavDesc(ImageType::Type2D, targetWidth, targetHeight, 1, 1, 1,
+                                VK_FORMAT_R16G16B16A16_SFLOAT, MemoryUsage::GPU_ONLY,
+                                VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                                VK_IMAGE_TILING_OPTIMAL);
+    GPUImage accumulatedImage = device->CreateImage(accumulateUavDesc);
+    ResourceHandle accumulatedImageHandle =
+        rg->RegisterExternalResource("accumulate", &accumulatedImage);
 
     ImageDesc imageOutDesc(ImageType::Type2D, params->width, params->height, 1, 1, 1,
                            VK_FORMAT_R8G8B8A8_UNORM, MemoryUsage::GPU_ONLY,
@@ -902,9 +928,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     Semaphore transferSem   = device->CreateSemaphore();
     transferSem.signalValue = 1;
 
-    u32 testCount = 0;
-    u32 maxUnused = 0;
-    f32 speed     = 5000.f;
+    u32 testCount            = 0;
+    u32 maxUnused            = 0;
+    f32 speed                = 5000.f;
+    u32 numFramesAccumulated = 0.f;
     for (;;)
     {
         ScratchArena frameScratch;
@@ -959,6 +986,16 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             dMouseP[0] = 0;
             dMouseP[1] = 0;
             MemoryZero(dir, sizeof(dir));
+        }
+
+        if (dMouseP[0] == 0 && dMouseP[0] == 0 && dir[0] == 0 && dir[1] == 0 && dir[2] == 0 &&
+            dir[3] == 0)
+        {
+            numFramesAccumulated++;
+        }
+        else
+        {
+            numFramesAccumulated = 1;
         }
 
         events.Clear();
@@ -1022,8 +1059,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             AffineSpace renderFromCamera = Inverse(cameraFromRender);
 
             Mat4 clipFromCamera = params->NDCFromCamera;
-            clipFromCamera[2][0] -= jitterX;
-            clipFromCamera[2][1] -= jitterY;
+            // clipFromCamera[2][0] -= jitterX;
+            // clipFromCamera[2][1] -= jitterY;
 
             clipToPrevClip = params->NDCFromCamera * Mat4(gpuScene.cameraFromRender) *
                              Mat4(renderFromCamera) * params->cameraFromClip;
@@ -1035,8 +1072,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             gpuScene.prevClipFromClip = clipToPrevClip;
             gpuScene.clipFromPrevClip = prevClipToClip;
             gpuScene.clipFromRender   = clipFromCamera * Mat4(cameraFromRender);
-            gpuScene.jitterX          = jitterX;
-            gpuScene.jitterY          = jitterY;
+            // gpuScene.jitterX          = jitterX;
+            // gpuScene.jitterY          = jitterY;
             OS_GetMousePos(params->window, shaderDebug.mousePos.x, shaderDebug.mousePos.y);
         }
         u32 dispatchDimX =
@@ -1440,7 +1477,31 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             .AddHandle(specularAlbedo, ResourceUsageType::Write)
             .AddHandle(specularHitDistance, ResourceUsageType::Write);
 
-#if 1
+        NumPushConstant accumulatePush;
+        accumulatePush.num = numFramesAccumulated;
+        rg->StartComputePass(
+              accumulatePipeline, accumulateLayout, 2,
+              [targetWidth, targetHeight, image, &accumulatedImage](CommandBuffer *cmd) {
+                  RenderGraph *rg      = GetRenderGraph();
+                  GPUImage *frameImage = rg->GetImage(image);
+                  device->BeginEvent(cmd, "Accumulate");
+                  cmd->Barrier(frameImage, VK_IMAGE_LAYOUT_GENERAL,
+                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                               VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                               VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+                  cmd->Barrier(&accumulatedImage, VK_IMAGE_LAYOUT_GENERAL,
+                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                               VK_ACCESS_2_SHADER_WRITE_BIT);
+                  cmd->FlushBarriers();
+                  cmd->Dispatch((targetWidth + 7) / 8, (targetHeight + 7) / 8, 1);
+                  device->EndEvent(cmd);
+              },
+              &accumulatePC, &accumulatePush)
+            .AddHandle(image, ResourceUsageType::Read)
+            .AddHandle(accumulatedImageHandle, ResourceUsageType::Write);
+
+#if 0
         rg->StartComputePass(
               mvecPipeline, mvecLayout, 3,
               [&depthBuffer, motionVectorHandle = motionVectorBuffer, targetWidth,
@@ -1558,12 +1619,18 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         debugState.EndFrame(cmd);
 
-        rg->StartPass(1, [&swapchain, imageOutHandle = imageOut](CommandBuffer *cmd) {
+#if 0
+        rg->StartPass(1, [&swapchain, imageOutHandle = image](CommandBuffer *cmd) {
               RenderGraph *rg    = GetRenderGraph();
               GPUImage *imageOut = rg->GetImage(imageOutHandle);
 
               device->CopyFrameBuffer(&swapchain, cmd, imageOut);
           }).AddHandle(imageOut, ResourceUsageType::Read);
+#else
+        rg->StartPass(0, [&swapchain, &imageOut = accumulatedImage](CommandBuffer *cmd) {
+            device->CopyFrameBuffer(&swapchain, cmd, &imageOut);
+        });
+#endif
 
         rg->Compile();
         rg->Execute(cmd);
