@@ -161,6 +161,7 @@ struct PBRTFileInfo
 
     string virtualGeoFilename;
     bool base;
+    bool differentGeometry;
 
     PBRTFileInfo *imports[32];
     u32 numImports;
@@ -172,10 +173,11 @@ struct PBRTFileInfo
         filename = PushStr8Copy(arena, inFilename);
         shapes   = ChunkedLinkedList<ShapeType, MemoryType_Shape>(arena, 1024);
 
-        fileInstances = ChunkedLinkedList<InstanceType, MemoryType_Instance>(arena, 1024);
-        transforms    = ChunkedLinkedList<AffineSpace, MemoryType_Instance>(arena, 16384);
-        numInstances  = 0;
-        base          = false;
+        fileInstances     = ChunkedLinkedList<InstanceType, MemoryType_Instance>(arena, 1024);
+        transforms        = ChunkedLinkedList<AffineSpace, MemoryType_Instance>(arena, 16384);
+        numInstances      = 0;
+        base              = false;
+        differentGeometry = false;
     }
 
     void Merge(PBRTFileInfo *import)
@@ -329,7 +331,6 @@ struct MaterialMap
             prev = node;
             node = node->next;
         }
-        Assert(0);
         return node;
     }
 };
@@ -1001,10 +1002,10 @@ static string WriteNanite(PBRTFileInfo *state, SceneLoadState *sls, string direc
             Arena *arena = arenas[GetThreadIndex()];
             for (int meshIndex = start; meshIndex < start + count; meshIndex++)
             {
-                ShapeType &shape  = shapes[meshIndex];
-                u32 materialIndex = shape.materialName.size
-                                        ? sls->materialMap.Find(shape.materialName)->index
-                                        : 0;
+                ShapeType &shape = shapes[meshIndex];
+                MaterialHashNode *node =
+                    shape.materialName.size ? sls->materialMap.Find(shape.materialName) : 0;
+                u32 materialIndex = node ? node->index : 0;
 
                 materialIndices[meshIndex] = materialIndex;
                 int posParameterIndex      = CheckForID(&shape.packet, "P"_sid);
@@ -2830,11 +2831,15 @@ static Array<DisneyMaterial> LoadMaterialJSON(SceneLoadState *sls, string direct
             else if (parameterType == "baseColor")
             {
                 Vec4f baseColor;
+                baseColor.w = 1.f;
+
                 for (u32 i = 0; i < 4; i++)
                 {
+                    if (*tokenizer.cursor == ']') break;
                     SkipToNextDigit(&tokenizer);
                     float f      = ReadFloat(&tokenizer);
                     baseColor[i] = Pow(f, 2.2f);
+                    SkipToNextChar(&tokenizer, ',');
                 }
                 material.baseColor = baseColor;
             }
@@ -2870,6 +2875,8 @@ static Array<DisneyMaterial> LoadMaterialJSON(SceneLoadState *sls, string direct
             else if (parameterType == "assignment")
             {
                 SkipToNextChar2(&tokenizer, ']');
+                bool success = Advance(&tokenizer, "]");
+                Assert(success);
             }
             else if (parameterType == "clearcoat")
             {
@@ -3123,9 +3130,19 @@ static Mesh *LoadObj(Arena *arena, string filename, string *&outMaterialNames,
         }
         else if (word == "usemtl")
         {
-            Skip();
-            string s     = ReadWord(&tokenizer);
-            materialName = PushStr8Copy(arena, s);
+            while (!EndOfBuffer(&tokenizer) && CharIsWhitespace(*tokenizer.cursor))
+            {
+                tokenizer.cursor++;
+            }
+            if (IsBlank(&tokenizer))
+            {
+                materialName = {};
+            }
+            else
+            {
+                string s     = ReadWord(&tokenizer);
+                materialName = PushStr8Copy(arena, s);
+            }
         }
         else if (word == "s")
         {
@@ -3261,6 +3278,132 @@ static void LoadMoanaTransforms(PBRTFileInfo *info, string directory, string fil
     }
 }
 
+static void ProcessInstancedPrimitiveJson(Arena *arena, string directory, Tokenizer &tokenizer,
+                                          ChunkedLinkedList<PBRTFileInfo> &fileInfos,
+                                          Scheduler::Counter &counter,
+                                          std::atomic<u32> *totalMeshCount,
+                                          Array<string> &archiveFilenames)
+{
+    SkipToNextChar2(&tokenizer, '"');
+    for (;;)
+    {
+        string jsonFile = {};
+        if (*tokenizer.cursor == '}')
+        {
+            tokenizer.cursor++;
+
+            SkipToNextChar(&tokenizer);
+            if (*tokenizer.cursor == '}') break;
+        }
+        SkipToNextChar(&tokenizer, ',');
+
+        string name;
+        bool success = GetBetweenPair(name, &tokenizer, '"');
+        Assert(success);
+        SkipToNextChar2(&tokenizer, '"');
+        for (;;)
+        {
+            SkipToNextChar(&tokenizer, ',');
+            if (*tokenizer.cursor == '}') break;
+            string field;
+            success = GetBetweenPair(field, &tokenizer, '"');
+            Assert(success);
+
+            if (field == "jsonFile")
+            {
+                SkipToNextChar2(&tokenizer, '"');
+                success = GetBetweenPair(jsonFile, &tokenizer, '"');
+                Assert(success);
+            }
+            else if (field == "archives")
+            {
+                Assert(jsonFile.size != 0);
+                PBRTFileInfo *transformsInfo = &fileInfos.AddBack();
+                string transformsFilename    = StrConcat(arena, directory, jsonFile);
+                transformsInfo->Init(
+                    PushStr8F(arena, "%S.rtscene", RemoveFileExtension(jsonFile)));
+
+                scheduler.Schedule(&counter, [=](u32 jobID) {
+                    LoadMoanaTransforms(transformsInfo, directory, transformsFilename);
+                });
+
+                for (;;)
+                {
+                    if (*tokenizer.cursor == ']')
+                    {
+                        tokenizer.cursor++;
+                        SkipToNextChar(&tokenizer, ',');
+                        break;
+                    }
+
+                    SkipToNextChar2(&tokenizer, '"');
+                    string archiveFilename;
+                    success = GetBetweenPair(archiveFilename, &tokenizer, '"');
+                    Assert(success);
+
+                    string fileInfoName =
+                        PushStr8F(arena, "%S.rtscene", RemoveFileExtension(archiveFilename));
+
+                    bool found = false;
+                    for (string &archiveName : archiveFilenames)
+                    {
+                        if (archiveName == fileInfoName)
+                        {
+                            found = true;
+                            break;
+                        }
+                    }
+
+                    if (!found)
+                    {
+                        archiveFilenames.Push(fileInfoName);
+                        PBRTFileInfo *archiveInfo = &fileInfos.AddBack();
+
+                        archiveInfo->Init(fileInfoName);
+                        archiveInfo->base = false;
+
+                        string archiveFilepath = StrConcat(arena, directory, archiveFilename);
+
+                        scheduler.Schedule(&counter, [=](u32 jobID) {
+                            LoadMoanaOBJ(archiveInfo, archiveFilepath);
+                            totalMeshCount->fetch_add(archiveInfo->shapes.Length());
+                        });
+                    }
+
+                    SkipToNextChar(&tokenizer);
+                }
+            }
+            else if (field == "type")
+            {
+                SkipToNextChar2(&tokenizer, '"');
+                string type;
+                success = GetBetweenPair(type, &tokenizer, '"');
+                Assert(success);
+                if (type == "curve")
+                {
+                    SkipToNextChar2(&tokenizer, '}');
+                }
+                else if (type == "archive")
+                {
+                }
+                else
+                {
+                    Assert(0);
+                }
+            }
+            else if (field == "widthTip" || field == "widthRoot" || field == "degrees" ||
+                     field == "faceCamera")
+            {
+                SkipToNextChar2(&tokenizer, '}');
+            }
+            else
+            {
+                Assert(0);
+            }
+        }
+    }
+}
+
 static void LoadMoanaJSON(SceneLoadState *sls, PBRTFileInfo *base, string directory,
                           string filePath, Array<DisneyMaterial> &allDisneyMaterials)
 {
@@ -3270,14 +3413,13 @@ static void LoadMoanaJSON(SceneLoadState *sls, PBRTFileInfo *base, string direct
     tokenizer.input  = OS_MapFileRead(filePath);
     tokenizer.cursor = tokenizer.input.str;
 
-    bool baseMesh = false;
-
     ChunkedLinkedList<PBRTFileInfo> fileInfos(scratch.temp.arena, 16);
 
     Scheduler::Counter counter = {};
 
     ChunkedLinkedList<AffineSpace> instanceTransforms(scratch.temp.arena, 1024);
     Array<DisneyMaterial> disneyMaterials;
+    Array<string> archiveFilenames(scratch.temp.arena, 8);
     string name;
     std::atomic<u32> totalMeshCount = 0;
     for (;;)
@@ -3307,7 +3449,6 @@ static void LoadMoanaJSON(SceneLoadState *sls, PBRTFileInfo *base, string direct
         }
         else if (parameterType == "geomObjFile")
         {
-            baseMesh = true;
             SkipToNextChar2(&tokenizer, '"');
             string objFileName;
             success = GetBetweenPair(objFileName, &tokenizer, '"');
@@ -3344,112 +3485,8 @@ static void LoadMoanaJSON(SceneLoadState *sls, PBRTFileInfo *base, string direct
         }
         else if (parameterType == "instancedPrimitiveJsonFiles")
         {
-            SkipToNextChar2(&tokenizer, '"');
-            for (;;)
-            {
-                string jsonFile = {};
-                if (*tokenizer.cursor == '}')
-                {
-                    tokenizer.cursor++;
-
-                    SkipToNextChar(&tokenizer);
-                    if (*tokenizer.cursor == '}') break;
-                }
-                SkipToNextChar(&tokenizer, ',');
-
-                string name;
-                success = GetBetweenPair(name, &tokenizer, '"');
-                Assert(success);
-                SkipToNextChar2(&tokenizer, '"');
-                for (;;)
-                {
-                    SkipToNextChar(&tokenizer, ',');
-                    if (*tokenizer.cursor == '}') break;
-                    string field;
-                    success = GetBetweenPair(field, &tokenizer, '"');
-                    Assert(success);
-
-                    if (field == "jsonFile")
-                    {
-                        SkipToNextChar2(&tokenizer, '"');
-                        success = GetBetweenPair(jsonFile, &tokenizer, '"');
-                        Assert(success);
-                    }
-                    else if (field == "archives")
-                    {
-                        Assert(jsonFile.size != 0);
-                        PBRTFileInfo *transformsInfo = &fileInfos.AddBack();
-                        string transformsFilename =
-                            StrConcat(scratch.temp.arena, directory, jsonFile);
-                        transformsInfo->Init(PushStr8F(scratch.temp.arena, "%S.rtscene",
-                                                       RemoveFileExtension(jsonFile)));
-
-                        scheduler.Schedule(&counter, [=](u32 jobID) {
-                            LoadMoanaTransforms(transformsInfo, directory, transformsFilename);
-                        });
-
-                        for (;;)
-                        {
-                            if (*tokenizer.cursor == ']')
-                            {
-                                tokenizer.cursor++;
-                                SkipToNextChar(&tokenizer, ',');
-                                break;
-                            }
-
-                            SkipToNextChar2(&tokenizer, '"');
-                            PBRTFileInfo *archiveInfo = &fileInfos.AddBack();
-                            string archiveFilename;
-                            success = GetBetweenPair(archiveFilename, &tokenizer, '"');
-                            Assert(success);
-
-                            string fileInfoName =
-                                PushStr8F(scratch.temp.arena, "%S.rtscene",
-                                          RemoveFileExtension(archiveFilename));
-
-                            archiveInfo->Init(fileInfoName);
-                            archiveInfo->base = false;
-
-                            string archiveFilepath =
-                                StrConcat(scratch.temp.arena, directory, archiveFilename);
-
-                            scheduler.Schedule(&counter, [=, &totalMeshCount](u32 jobID) {
-                                LoadMoanaOBJ(archiveInfo, archiveFilepath);
-                                totalMeshCount.fetch_add(archiveInfo->shapes.Length());
-                            });
-
-                            SkipToNextChar(&tokenizer);
-                        }
-                    }
-                    else if (field == "type")
-                    {
-                        SkipToNextChar2(&tokenizer, '"');
-                        string type;
-                        success = GetBetweenPair(type, &tokenizer, '"');
-                        Assert(success);
-                        if (type == "curve")
-                        {
-                            SkipToNextChar2(&tokenizer, '}');
-                        }
-                        else if (type == "archive")
-                        {
-                        }
-                        else
-                        {
-                            Assert(0);
-                        }
-                    }
-                    else if (field == "widthTip" || field == "widthRoot" ||
-                             field == "degrees" || field == "faceCamera")
-                    {
-                        SkipToNextChar2(&tokenizer, '}');
-                    }
-                    else
-                    {
-                        Assert(0);
-                    }
-                }
-            }
+            ProcessInstancedPrimitiveJson(scratch.temp.arena, directory, tokenizer, fileInfos,
+                                          counter, &totalMeshCount, archiveFilenames);
         }
         else if (parameterType == "instancedCopies")
         {
@@ -3458,6 +3495,7 @@ static void LoadMoanaJSON(SceneLoadState *sls, PBRTFileInfo *base, string direct
             for (;;)
             {
                 string name;
+                SkipToNextChar(&tokenizer, ',');
                 if (*tokenizer.cursor == '}') break;
                 bool success = GetBetweenPair(name, &tokenizer, '"');
                 Assert(success);
@@ -3466,10 +3504,18 @@ static void LoadMoanaJSON(SceneLoadState *sls, PBRTFileInfo *base, string direct
                 bool differentGeometry = false;
                 AffineSpace baseTransform;
 
+                auto *startInfo    = fileInfos.last;
+                u32 startInfoIndex = startInfo->count;
+
                 for (;;)
                 {
                     SkipToNextChar(&tokenizer, ',');
-                    if (*tokenizer.cursor == '}') break;
+                    if (*tokenizer.cursor == '}')
+                    {
+                        bool success = Advance(&tokenizer, "}");
+                        Assert(success);
+                        break;
+                    }
 
                     string field;
                     success = GetBetweenPair(field, &tokenizer, '"');
@@ -3500,6 +3546,34 @@ static void LoadMoanaJSON(SceneLoadState *sls, PBRTFileInfo *base, string direct
                         success = Advance(&tokenizer, "]");
                         Assert(success);
                     }
+                    else if (field == "geomObjFile")
+                    {
+                        SkipToNextChar2(&tokenizer, '"');
+                        string objFileName;
+                        success = GetBetweenPair(objFileName, &tokenizer, '"');
+                        Assert(success);
+
+                        string fullObjFilename =
+                            StrConcat(scratch.temp.arena, directory, objFileName);
+
+                        string objectFileName     = PushStr8F(scratch.temp.arena, "%S.rtscene",
+                                                              RemoveFileExtension(objFileName));
+                        PBRTFileInfo *objFileInfo = &fileInfos.AddBack();
+                        objFileInfo->Init(objectFileName);
+                        objFileInfo->base = true;
+
+                        LoadMoanaOBJ(objFileInfo, fullObjFilename);
+                        totalMeshCount.fetch_add(objFileInfo->shapes.Length());
+                    }
+                    else if (field == "instancedPrimitiveJsonFiles")
+                    {
+                        ProcessInstancedPrimitiveJson(scratch.temp.arena, directory, tokenizer,
+                                                      fileInfos, counter, &totalMeshCount,
+                                                      archiveFilenames);
+                        differentGeometry = true;
+                        bool success      = Advance(&tokenizer, "}");
+                        Assert(success);
+                    }
                     else
                     {
                         // TODO
@@ -3513,8 +3587,51 @@ static void LoadMoanaJSON(SceneLoadState *sls, PBRTFileInfo *base, string direct
                 }
                 else
                 {
-                    // TODO
-                    Assert(0);
+                    scheduler.Wait(&counter);
+                    u32 infoIndex = startInfoIndex;
+                    for (auto *node = startInfo; node != 0; node = node->next)
+                    {
+                        for (; infoIndex < node->count; infoIndex++)
+                        {
+                            PBRTFileInfo *info      = &node->values[infoIndex];
+                            info->differentGeometry = true;
+
+                            if (info->transforms.Length())
+                            {
+                                AffineSpace &transform = baseTransform;
+                                if (transform[0] == Vec3f(1, 0, 0) &&
+                                    transform[1] == Vec3f(0, 1, 0) &&
+                                    transform[2] == Vec3f(0, 0, 1) && transform[3] == Vec3f(0))
+                                {
+                                    Assert(info->numInstances);
+                                    base->Merge(info);
+                                }
+                                else
+                                {
+                                    InstanceType instance;
+                                    instance.filename =
+                                        PushStr8Copy(base->arena, info->filename);
+                                    instance.transformIndexStart = base->transforms.Length();
+                                    instance.transformIndexEnd   = base->transforms.Length();
+                                    base->fileInstances.Push(instance);
+                                    base->numInstances += 1;
+                                    WriteFile(directory, info);
+                                    ArenaRelease(info->arena);
+                                }
+                            }
+                            else if (info->base)
+                            {
+                                InstanceType instance;
+                                instance.filename = PushStr8Copy(base->arena, info->filename);
+                                instance.transformIndexStart = base->transforms.Length();
+                                instance.transformIndexEnd   = base->transforms.Length();
+                                base->fileInstances.Push(instance);
+                                base->numInstances += 1;
+                            }
+                        }
+                        infoIndex = 0;
+                    }
+                    base->transforms.Push(baseTransform);
                 }
             }
         }
@@ -3551,13 +3668,17 @@ static void LoadMoanaJSON(SceneLoadState *sls, PBRTFileInfo *base, string direct
     for (u32 materialIndex = 0; materialIndex < disneyMaterials.Length(); materialIndex++)
     {
         DisneyMaterial &material = disneyMaterials[materialIndex];
+        string newMaterialName   = StrConcat(arena, name, material.name);
+        material.name            = newMaterialName;
         u32 hash                 = Hash(material.name);
 
         materialHash.AddInHash(hash, materialIndex);
 
         if (material.colorMap.size == 0)
         {
-            sls->materialMap.FindOrAdd(arena, material.name, sls->materialCounter);
+            bool result =
+                sls->materialMap.FindOrAdd(arena, newMaterialName, sls->materialCounter);
+            Assert(!result);
             newDisneyMaterials.Push(material);
         }
     }
@@ -3565,13 +3686,13 @@ static void LoadMoanaJSON(SceneLoadState *sls, PBRTFileInfo *base, string direct
     for (u32 fileInfoIndex = 0; fileInfoIndex < fileInfos.Length(); fileInfoIndex++)
     {
         PBRTFileInfo *info = &infos[fileInfoIndex];
-        if (info->transforms.Length())
+        if (info->transforms.Length() && !info->differentGeometry)
         {
             if (instanceTransforms.Length() == 1)
             {
                 AffineSpace &transform = instanceTransforms.first->values[0];
                 if (transform[0] == Vec3f(1, 0, 0) && transform[1] == Vec3f(0, 1, 0) &&
-                    transform[2] == Vec3f(0, 0, 1))
+                    transform[2] == Vec3f(0, 0, 1) && transform[3] == Vec3f(0))
                 {
                     Assert(info->numInstances);
                     base->Merge(info);
@@ -3583,6 +3704,7 @@ static void LoadMoanaJSON(SceneLoadState *sls, PBRTFileInfo *base, string direct
                     instance.transformIndexStart = transformIndexStart;
                     instance.transformIndexEnd =
                         transformIndexStart + instanceTransforms.Length() - 1;
+                    base->fileInstances.Push(instance);
                     base->numInstances += instanceTransforms.Length();
                     WriteFile(directory, info);
                 }
@@ -3594,11 +3716,12 @@ static void LoadMoanaJSON(SceneLoadState *sls, PBRTFileInfo *base, string direct
                 instance.transformIndexStart = transformIndexStart;
                 instance.transformIndexEnd =
                     transformIndexStart + instanceTransforms.Length() - 1;
+                base->fileInstances.Push(instance);
                 base->numInstances += instanceTransforms.Length();
                 WriteFile(directory, info);
             }
         }
-        else
+        else if (info->shapes.Length())
         {
             for (auto *shapeNode = info->shapes.first; shapeNode != 0;
                  shapeNode       = shapeNode->next)
@@ -3606,9 +3729,15 @@ static void LoadMoanaJSON(SceneLoadState *sls, PBRTFileInfo *base, string direct
                 for (u32 i = 0; i < shapeNode->count; i++)
                 {
                     ShapeType &shape = shapeNode->values[i];
-                    u32 hash         = Hash(shape.materialName);
-                    bool found       = false;
-                    bool hasColorMap = false;
+                    // TODO handle this :)
+                    // if (shape.materialName == "hidden")
+                    // {
+                    //     ArenaRelease(info->arena);
+                    // }
+                    shape.materialName = StrConcat(arena, name, shape.materialName);
+                    u32 hash           = Hash(shape.materialName);
+                    bool found         = false;
+                    bool hasColorMap   = false;
                     DisneyMaterial material;
                     for (int hashIndex = materialHash.FirstInHash(hash); hashIndex != -1;
                          hashIndex     = materialHash.NextInHash(hashIndex))
@@ -3621,13 +3750,22 @@ static void LoadMoanaJSON(SceneLoadState *sls, PBRTFileInfo *base, string direct
                             break;
                         }
                     }
-                    ErrorExit(found, "material not found\n");
+                    // ErrorExit(found, "material not found\n");
                     if (hasColorMap)
                     {
                         string newMaterialName =
                             StrConcat(arena, shape.materialName, shape.groupName);
-                        string colorMapName =
-                            PushStr8F(arena, "%S%S.ptx", material.colorMap, shape.groupName);
+                        string colorMapName;
+                        if (material.colorMap.str[material.colorMap.size - 1] != '/')
+                        {
+                            colorMapName = PushStr8F(arena, "%S/%S.ptx", material.colorMap,
+                                                     shape.groupName);
+                        }
+                        else
+                        {
+                            colorMapName = PushStr8F(arena, "%S%S.ptx", material.colorMap,
+                                                     shape.groupName);
+                        }
 
                         u32 hash   = Hash(newMaterialName);
                         bool found = false;
@@ -3645,8 +3783,9 @@ static void LoadMoanaJSON(SceneLoadState *sls, PBRTFileInfo *base, string direct
                         if (!found)
                         {
                             newMaterialHash.AddInHash(hash, newDisneyMaterials.Length());
-                            sls->materialMap.FindOrAdd(arena, newMaterialName,
-                                                       sls->materialCounter);
+                            bool result = sls->materialMap.FindOrAdd(arena, newMaterialName,
+                                                                     sls->materialCounter);
+                            Assert(!result);
                             material.name     = newMaterialName;
                             material.colorMap = colorMapName;
                             newDisneyMaterials.Push(material);
@@ -3664,7 +3803,7 @@ static void LoadMoanaJSON(SceneLoadState *sls, PBRTFileInfo *base, string direct
                 }
             }
 
-            if (info->base)
+            if (info->base && !info->differentGeometry)
             {
                 InstanceType instance;
                 instance.filename            = PushStr8Copy(base->arena, info->filename);
@@ -3710,13 +3849,22 @@ static void LoadMoanaJSON(Arena *arena, string directory)
     PBRTFileInfo baseInfo;
     baseInfo.Init("base.rtscene");
 
-    Array<DisneyMaterial> disneyMaterials(scratch.temp.arena, 100);
+    Array<DisneyMaterial> disneyMaterials(arena, 100);
 
-    // TODO
+    // TODO: don't hardcode this
     string testFilename = "../../data/island/pbrt-v4/json/isMountainB/isMountainB.json";
     LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
 
     testFilename = "../../data/island/pbrt-v4/json/osOcean/osOcean.json";
+    LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+
+    testFilename = "../../data/island/pbrt-v4/json/isMountainA/isMountainA.json";
+    LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+
+    testFilename = "../../data/island/pbrt-v4/json/isNaupakaA/isNaupakaA.json";
+    LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+
+    testFilename = "../../data/island/pbrt-v4/json/isCoral/isCoral.json";
     LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
 
     WriteFile(directory, &baseInfo, 0, &disneyMaterials);

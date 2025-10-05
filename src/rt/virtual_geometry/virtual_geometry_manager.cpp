@@ -1509,6 +1509,11 @@ bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
             ref.maxZ   = bounds.maxP[2];
             ref.primID = i;
 
+            if (ref.minX > 1e10)
+            {
+                int stop = 5;
+            }
+
             refs.Push(ref);
 
             geom.Extend(bounds);

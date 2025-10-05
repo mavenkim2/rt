@@ -110,6 +110,10 @@ static void FlattenInstances(ScenePrimitives *currentScene, const AffineSpace &t
         Instance &instance = sceneInstances[i];
         AffineSpace newTransform =
             transform * currentScene->affineTransforms[instance.transformIndex];
+        if (newTransform[0][0] > 1e10)
+        {
+            int stop = 5;
+        }
         ScenePrimitives *nextScene = currentScene->childScenes[instance.id];
 
         if (nextScene->geometryType == GeometryType::Instance)
@@ -145,9 +149,30 @@ static float Halton(uint32_t i, uint32_t b)
     return r;
 }
 
+static float Mitchell1D(float x)
+{
+    const float b = 1.f / 3.f;
+    const float c = 1.f / 3.f;
+    x             = Abs(x);
+    if (x <= 1)
+        return ((12 - 9 * b - 6 * c) * x * x * x + (-18 + 12 * b + 6 * c) * x * x +
+                (6 - 2 * b)) *
+               (1.f / 6.f);
+    else if (x <= 2)
+        return ((-b - 6 * c) * x * x * x + (6 * b + 30 * c) * x * x + (-12 * b - 48 * c) * x +
+                (8 * b + 24 * c)) *
+               (1.f / 6.f);
+    else return 0;
+}
+
+static float MitchellEvaluate(Vec2f p, Vec2f radius)
+{
+    float result = Mitchell1D(2.f * p.x / radius.x) * Mitchell1D(2.f * p.y / radius.y);
+    return result;
+}
+
 void Render(RenderParams2 *params, int numScenes, Image *envMap)
 {
-
     ScenePrimitives **scenes = GetScenes();
     NvAPI_Status status      = NvAPI_Initialize();
     Assert(status == NVAPI_OK);
@@ -461,6 +486,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     virtualTextureManager.ClearTextures(tileCmd);
     tileCmd->UAVBarrier(&virtualTextureManager.pageTable);
     tileCmd->FlushBarriers();
+    tileCmd->SignalOutsideFrame(tileSubmitSemaphore);
+    device->SubmitCommandBuffer(tileCmd);
+    device->Wait(tileSubmitSemaphore);
 
     struct TextureTempData
     {
@@ -510,7 +538,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     SortHandles<RequestHandle, false>(handles, numHandles);
 
-    u32 ptexFaceDataBytes = 0;
+    u32 ptexFaceDataBytes    = 0;
+    Semaphore texSemaphore   = device->CreateSemaphore();
+    texSemaphore.signalValue = 0;
     for (int i = 0; i < numHandles; i++)
     {
         RequestHandle &handle        = handles[i];
@@ -535,8 +565,23 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             Vec2u(fileHeader.virtualSqrtNumPages, fileHeader.virtualSqrtNumPages),
             tokenizer.cursor, allocIndex);
 
-        virtualTextureManager.PinPages(tileCmd, allocIndex, pinnedPages,
+        if (i > 0)
+        {
+            bool result = device->Wait(texSemaphore, 10e9);
+            Assert(result);
+        }
+        device->ResetDescriptorPool(0);
+        CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Compute);
+        virtualTextureManager.PinPages(cmd, allocIndex, pinnedPages,
                                        fileHeader.numPinnedPages);
+        texSemaphore.signalValue++;
+        cmd->SignalOutsideFrame(texSemaphore);
+        cmd->Barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                     VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                     VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
+                     VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT);
+        cmd->FlushBarriers();
+        device->SubmitCommandBuffer(cmd);
 
         // Pack ptex face metadata into FaceData bitstream
         u32 maxVirtualOffset = neg_inf;
@@ -646,31 +691,35 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         }
         gpuMaterials.Push(material);
     }
+
+    CommandBuffer *newTileCmd          = device->BeginCommandBuffer(QueueType_Compute);
+    Semaphore newTileSubmitSemaphore   = device->CreateSemaphore();
+    newTileSubmitSemaphore.signalValue = 1;
     GPUBuffer materialBuffer =
-        tileCmd
+        newTileCmd
             ->SubmitBuffer(gpuMaterials.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                            sizeof(GPUMaterial) * gpuMaterials.Length())
             .buffer;
 
     // Assert(ptexOffset == ptexFaceDataBytes);
     GPUBuffer faceDataBuffer =
-        tileCmd
+        newTileCmd
             ->SubmitBuffer(faceDataByteBuffer, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                            ptexFaceDataBytes)
             .buffer;
 
-    tileCmd->SignalOutsideFrame(tileSubmitSemaphore);
-    tileCmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                     VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                     VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-    tileCmd->Barrier(
+    newTileCmd->SignalOutsideFrame(newTileSubmitSemaphore);
+    newTileCmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                        VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                        VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+    newTileCmd->Barrier(
         &virtualTextureManager.gpuPhysicalPool, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_SHADER_READ_BIT);
-    tileCmd->Barrier(
+    newTileCmd->Barrier(
         &virtualTextureManager.pageTable, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_SHADER_READ_BIT);
-    tileCmd->FlushBarriers();
-    device->SubmitCommandBuffer(tileCmd);
+    newTileCmd->FlushBarriers();
+    device->SubmitCommandBuffer(newTileCmd);
     device->Wait(tileSubmitSemaphore);
 
     u32 numBlas = blasScenes.Length();
@@ -908,6 +957,37 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         device->GetStagingBuffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, sizeof(GPUScene)),
         device->GetStagingBuffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, sizeof(GPUScene))};
 
+    StaticArray<float> mitchellDistribution(sceneScratch.temp.arena, 16 * 16);
+    StaticArray<float> cdfs(sceneScratch.temp.arena, 16 * 16, 16 * 16);
+    StaticArray<float> integrals(sceneScratch.temp.arena, 16);
+    for (int y = 0; y < 16; y++)
+    {
+        for (int x = 0; x < 16; x++)
+        {
+            Vec2f p(Lerp(-0.5f, 0.5f, (x + 0.5f) / 16.f), Lerp(-0.5f, 0.5f, (y + 0.5f) / 16));
+            float m = MitchellEvaluate(p, 0.5f);
+            mitchellDistribution.Push(m);
+        }
+
+        // build cdfs
+        float total      = 0.f;
+        cdfs[y * 16 + 0] = 0.f;
+        for (int x = 1; x < 16; x++)
+        {
+            total += Abs(mitchellDistribution[y * 16 + x - 1]);
+            cdfs[y * 16 + x] = total;
+        }
+        float integral = total / 16.f;
+        for (int x = 1; x < 16; x++)
+        {
+            cdfs[y * 16 + x] /= total;
+        }
+        integrals.Push(integral);
+    }
+    for (int y = 0; y < 16; y++)
+    {
+    }
+
     bool mousePressed = false;
     OS_Key keys[4]    = {
         OS_Key_D,
@@ -988,7 +1068,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             MemoryZero(dir, sizeof(dir));
         }
 
-        if (dMouseP[0] == 0 && dMouseP[0] == 0 && dir[0] == 0 && dir[1] == 0 && dir[2] == 0 &&
+        if (dMouseP[0] == 0 && dMouseP[1] == 0 && dir[0] == 0 && dir[1] == 0 && dir[2] == 0 &&
             dir[3] == 0)
         {
             numFramesAccumulated++;

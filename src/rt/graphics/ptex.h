@@ -320,6 +320,9 @@ struct VirtualTextureManager
     Mutex updateRequestMutex;
     RingBuffer<PageTableUpdateRequest> updateRequestRingBuffer;
 
+    GPUBuffer pageTableUpdateRequestBuffer;
+    GPUBuffer pageTableUpdateRequestUploadBuffer;
+
     Mutex feedbackMutex;
     FixedArray<TransferBuffer, 2> feedbackBuffers;
     RingBuffer<Vec2u> feedbackRingBuffer;

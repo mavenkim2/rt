@@ -77,7 +77,7 @@ void CalculateAnisotropicRoughness(float anisotropic, float roughness, out float
     ay = roughness * roughness * aspect;
 }
 
-float3 SampleDisney(GPUMaterial material, float2 u, float3 baseColor, inout float3 throughput, float3 wo) 
+float3 SampleDisney(GPUMaterial material, float3 u, float3 baseColor, inout float3 throughput, float3 wo) 
 {
     // GTR2
     float F = FrDielectric(wo.z, material.ior);
@@ -93,37 +93,37 @@ float3 SampleDisney(GPUMaterial material, float2 u, float3 baseColor, inout floa
     probDiffuse /= totalProb;
 
     float3 wi;
-    float3 value;
+    float3 value = 1.f;
 
     float alphaX, alphaY;
     CalculateAnisotropicRoughness(material.anisotropic, material.roughness, alphaX, alphaY);
-    float3 wm = SampleGGXVNDF(wo, u, alphaX, alphaY);
+    float3 wm = material.roughness == 0.f ? float3(0, 0, 1) : SampleGGXVNDF(wo, u.xy, alphaX, alphaY);
     float D = GTR2Aniso(wm, alphaX, alphaY);
         
     float cdLum = .3 * baseColor.x + .6 * baseColor.y + .1 * baseColor.z;
     float3 tint = cdLum > 0 ? baseColor / cdLum : 1.f;
 
-    if (u.x < probSpecReflect)
+    if (u.z < probSpecReflect)
     {
-        u.x /= probSpecReflect;
         wi = Reflect(wo, wm);
 
-        float f0 = Sqr((1 - material.ior) / (1 + material.ior));
-        float3 r0 = f0 * lerp(1.f, tint, material.specularTint);
-        r0 = lerp(r0, baseColor, material.metallic);
-        float fR = SchlickFresnel(dot(wi, wm));
-        float3 metallicFresnel = r0 + (1 - r0) * fR;
-        float3 disneyFresnel = lerp(F, metallicFresnel, material.metallic);
-
-        float G = SmithG(wi, wo, alphaX, alphaY);
-        float pdf = GGXPDF(wo, wm, alphaX, alphaY) * probSpecReflect / (4 * abs(dot(wo, wm)));
-        value = D * G * disneyFresnel / (4 * abs(wo.z));
-        value *= (1.f - material.metallic) * (1.f - material.specTrans);
-        value /= pdf;
+        if (material.roughness != 0.f)
+        {
+            float f0 = Sqr((1 - material.ior) / (1 + material.ior));
+            float3 r0 = f0 * lerp(1.f, tint, material.specularTint);
+            r0 = lerp(r0, baseColor, material.metallic);
+            float fR = SchlickFresnel(dot(wi, wm));
+            float3 metallicFresnel = r0 + (1 - r0) * fR;
+            float3 disneyFresnel = lerp(F, metallicFresnel, material.metallic);
+            float G = SmithG(wi, wo, alphaX, alphaY);
+            float pdf = GGXPDF(wo, wm, alphaX, alphaY) * probSpecReflect / (4 * abs(dot(wo, wm)));
+            value = D * G * disneyFresnel / (4 * abs(wo.z));
+            value *= (1.f - material.metallic) * material.specTrans;
+            value /= pdf;
+        }
     }
-    else if (u.x < probSpecReflect + probSpecRefract)
+    else if (u.z < probSpecReflect + probSpecRefract)
     {
-        u.x = (u.x - probSpecReflect) / probSpecRefract;
         float etap;
         bool success = Refract(wo, wm, material.ior, etap, wi);
         if (!success)
@@ -131,18 +131,23 @@ float3 SampleDisney(GPUMaterial material, float2 u, float3 baseColor, inout floa
             return 0;
         }
 
-        float G = SmithG(wi, wo, alphaX, alphaY);
-        float denom = Sqr(dot(wi, wm) + dot(wo, wm) / etap);
-        float dwm_dwi = abs(dot(wi, wm)) / denom;
-        float pdf = GGXPDF(wo, wm, alphaX, alphaY) * dwm_dwi * probSpecRefract;
-
-        value = sqrt(baseColor) * abs(dot(wo, wm)) * abs(dot(wi, wm)) * D * G * (1 - F) / (abs(wo.z) * denom);
-        value /= (pdf * Sqr(etap));
+        if (material.roughness != 0.f)
+        {
+            float G = SmithG(wi, wo, alphaX, alphaY);
+            float denom = Sqr(dot(wi, wm) + dot(wo, wm) / etap);
+            float dwm_dwi = abs(dot(wi, wm)) / denom;
+            float pdf = GGXPDF(wo, wm, alphaX, alphaY) * dwm_dwi * probSpecRefract;
+            value = sqrt(baseColor) * abs(dot(wo, wm)) * abs(dot(wi, wm)) * D * G * (1 - F) / (abs(wo.z) * denom);
+            value *= (1.f - material.metallic) * material.specTrans;
+            value /= (pdf * Sqr(etap));
+        }
+        else 
+        {
+            value /= Sqr(etap);
+        }
     }
-    else if (u.x < probSpecReflect + probSpecRefract + probClearCoat)
+    else if (u.z < probSpecReflect + probSpecRefract + probClearCoat)
     {
-        u.x = (u.x - probSpecReflect - probSpecRefract) / probClearCoat;
-
         float a = 0.25f;
         float a2 = a * a;
         float cosTheta = sqrt(max(0.f, (1.f - pow(a2, 1 - u.x)) / (1 - a2)));
@@ -165,8 +170,7 @@ float3 SampleDisney(GPUMaterial material, float2 u, float3 baseColor, inout floa
     }
     else 
     {
-        u.x = (u.x - (1.f - probDiffuse)) / probDiffuse;
-        wi = SampleCosineHemisphere(u);
+        wi = SampleCosineHemisphere(u.xy);
         wi = dot(wi, wo) < 0.f ? -wi : wi;
 
         float3 h = normalize(wi + wo);
@@ -189,7 +193,7 @@ float3 SampleDisney(GPUMaterial material, float2 u, float3 baseColor, inout floa
         value /= probDiffuse;
     }
     throughput *= value;
-    return wi;
+    return normalize(wi);
 }
 
 float3 SampleDisneyThin(float2 u, float3 baseColor, inout float3 throughput, float3 wo) 

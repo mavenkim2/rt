@@ -413,7 +413,7 @@ void Convert(string filename)
             PaddedImage img = PtexToImg(arena, t, i, 0);
             t->release();
 
-            Assert(img.log2Width >= 2 && img.log2Height >= 2);
+            // Assert(img.log2Width >= 2 && img.log2Height >= 2);
             int levels = Min(img.log2Width, img.log2Height) + 1;
             Assert(levels < MAX_LEVEL);
 
@@ -735,7 +735,7 @@ void Convert(string filename)
         totalTextureArea += currentFaceImg.width * currentFaceImg.height;
         maxLevel = Max(maxLevel, images[faceIndex].Length());
 
-        Assert(currentFaceImg.width != 1 && currentFaceImg.height != 1);
+        // Assert(currentFaceImg.width != 1 && currentFaceImg.height != 1);
     }
 
     textureMetadata.numLevels = maxLevel;
@@ -1327,6 +1327,9 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
             device->GetReadbackBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, megabytes(8));
 
         feedbackMutex.count.store(0);
+
+        pageTableUpdateRequestUploadBuffer = {};
+        pageTableUpdateRequestBuffer       = {};
     }
 
     // callback
@@ -1442,12 +1445,34 @@ void VirtualTextureManager::PinPages(CommandBuffer *cmd, u32 textureIndex, Vec3u
     pc.numRequests                 = numPages;
     pc.bindlessPageTableStartIndex = bindlessPageTableStartIndex;
 
-    TransferBuffer pageTableUpdateRequestBuffer =
-        cmd->SubmitBuffer(updateRequests.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                          sizeof(PageTableUpdateRequest) * pc.numRequests);
+    if (sizeof(PageTableUpdateRequest) * pc.numRequests >
+        pageTableUpdateRequestUploadBuffer.size)
+    {
+        if (pageTableUpdateRequestUploadBuffer.size)
+        {
+            device->DestroyBuffer(&pageTableUpdateRequestUploadBuffer);
+            device->DestroyBuffer(&pageTableUpdateRequestBuffer);
+        }
+        pageTableUpdateRequestUploadBuffer = device->CreateBuffer(
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT, sizeof(PageTableUpdateRequest) * pc.numRequests,
+            MemoryUsage::CPU_TO_GPU);
+        pageTableUpdateRequestBuffer =
+            device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                 sizeof(PageTableUpdateRequest) * pc.numRequests);
+    }
+
+    MemoryCopy(pageTableUpdateRequestUploadBuffer.mappedPtr, updateRequests.data,
+               sizeof(PageTableUpdateRequest) * pc.numRequests);
+    BufferToBufferCopy bufferCopy = {};
+    bufferCopy.size               = sizeof(PageTableUpdateRequest) * pc.numRequests;
+    cmd->CopyBuffer(&pageTableUpdateRequestBuffer, &pageTableUpdateRequestUploadBuffer,
+                    &bufferCopy, 1);
+    // TransferBuffer pageTableUpdateRequestBuffer =
+    //     cmd->SubmitBuffer(updateRequests.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+    //                       sizeof(PageTableUpdateRequest) * pc.numRequests);
 
     DescriptorSet ds = descriptorSetLayout.CreateDescriptorSet();
-    ds.Bind(0, &pageTableUpdateRequestBuffer.buffer);
+    ds.Bind(0, &pageTableUpdateRequestBuffer);
     cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                  VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
     cmd->FlushBarriers();

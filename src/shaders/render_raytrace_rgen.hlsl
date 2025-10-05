@@ -48,6 +48,11 @@ RWTexture2D<float4> diffuseAlbedo : register(u23);
 RWTexture2D<float4> specularAlbedo : register(u24);
 RWTexture2D<float> specularHitDistance : register(u25);
 
+#if 0
+StructuredBuffer<float> mitchellCDF : register(u26);
+StructuredBuffer<float> mitchellFilterValues : register(u27);
+#endif
+
 [[vk::push_constant]] RayPushConstant push;
 
 void IntersectAABB(float3 boundsMin, float3 boundsMax, float3 o, float3 invDir, out float tEntry, out float tLeave)
@@ -77,6 +82,18 @@ void main()
     // Generate Ray
     float2 sample = rng.Uniform2D();
     const float2 filterRadius = float2(0.5, 0.5);
+
+#if 0
+    for (int i = 0; i < 16; i++)
+    {
+        if (mitchellCDF[i] <= sample.y)
+        {
+            uint offset = i;
+            float pdf = ;
+        }
+    }
+#endif
+
     float2 filterSample = float2(lerp(-filterRadius.x, filterRadius.x, sample[0]), lerp(-filterRadius.y, filterRadius.y, sample[1]));
     filterSample += float2(0.5, 0.5) + float2(swizzledThreadID);
     float2 pLens = rng.Uniform2D();
@@ -344,6 +361,7 @@ void main()
             hitInfo = CalculateTriangleHitInfo(p0, p1, p2, n0, n1, n2, gn, uv0, uv1, uv2, bary);
             hitInfo.faceID = faceID;
 
+            //hitInfo.gn = dot(hitInfo.gn, 
         }
         else if (query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
         {
@@ -414,13 +432,16 @@ void main()
                               dot(hitInfo.n, -objectRayDir)));
 
         float2 sample = rng.Uniform2D();
+        float sample2 = rng.Uniform();
+
+        float3 sample3 = float3(sample, sample2);
 
         uint2 virtualPage = ~0u;
         switch (material.type) 
         {
             case GPUMaterialType::Disney: 
             {
-                dir = SampleDisney(material, sample, reflectance.xyz, throughput, wo);
+                dir = SampleDisney(material, sample3, reflectance.xyz, throughput, wo);
             }
             break;
             case GPUMaterialType::Dielectric:
@@ -457,13 +478,13 @@ void main()
 
         float3 origin = TransformP(objectToWorld, hitInfo.hitP);
 
+        float3 r0 = float3(objectToWorld[0].xyz);
+        float3 r1 = float3(objectToWorld[1].xyz);
+        float3 r2 = float3(objectToWorld[2].xyz);
+        float3x3 adjugate = float3x3(cross(r1, r2), cross(r2, r0), cross(r0, r1));
+        hitInfo.gn = normalize(mul(adjugate, hitInfo.gn));
         if (depth == 1)
         {
-            float3 r0 = float3(objectToWorld[0].xyz);
-            float3 r1 = float3(objectToWorld[1].xyz);
-            float3 r2 = float3(objectToWorld[2].xyz);
-            float3x3 adjugate = float3x3(cross(r1, r2), cross(r2, r0), cross(r0, r1));
-
             float4 clipPos = mul(scene.clipFromRender, float4(origin, 1.f));
             float viewDepth = clipPos.z / clipPos.w;
             depthBuffer[swizzledThreadID] = viewDepth;

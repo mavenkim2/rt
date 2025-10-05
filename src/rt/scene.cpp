@@ -751,7 +751,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
         Advance(&dataTokenizer, "Count ");
         u32 count            = ReadInt(&dataTokenizer);
         scene->numTransforms = count;
-        SkipToNextChar(&dataTokenizer);
+        dataTokenizer.cursor++;
         scene->affineTransforms =
             PushArrayNoZeroTagged(arena, AffineSpace, count, MemoryType_Instance);
         AffineSpace *dataTransforms = reinterpret_cast<AffineSpace *>(dataTokenizer.cursor);
