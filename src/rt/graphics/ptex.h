@@ -158,14 +158,12 @@ struct FaceMetadata
 struct FaceMetadata2
 {
     int neighborFaces[4];
+    Vec2u mipOffsets[MAX_LEVEL];
     // 2 bits per face denoting rotation of each neighbor wrt this face, top bit set if this
     // face is rotated (done in packing process to make long textures tall)
     u32 rotate;
     int log2Width;
     int log2Height;
-
-    u32 offsetX;
-    u32 offsetY;
 };
 
 struct TextureMetadata
@@ -252,7 +250,7 @@ struct VirtualTextureManager
     struct TextureInfo
     {
         string filename;
-        Vec2u baseVirtualPage;
+        FaceMetadata2 *faceMetadata;
         TextureMetadata metadata;
         u8 *contents;
     };
@@ -265,14 +263,12 @@ struct VirtualTextureManager
 
     VkFormat format;
 
-    // Virtual texture space allocation
-    int currentHorizontalOffset;
-    int currentTotalHeight;
-    int currentShelfHeight;
-
     std::vector<TextureInfo> textureInfo;
     StaticArray<PhysicalPage> physicalPages;
-    StaticArray<StaticArray<u32>> cpuPageTable;
+    // StaticArray<StaticArray<u32>> cpuPageTable;
+
+    StaticArray<Vec3u> cpuPageHashTable;
+
     u32 numPhysPagesWidth;
     u32 numPhysPagesHeight;
     u32 numVirtPagesWide;
@@ -284,7 +280,8 @@ struct VirtualTextureManager
     int lruTail;
 
     GPUImage gpuPhysicalPool;
-    GPUImage pageTable;
+    // GPUImage pageTable;
+    GPUBuffer pageHashTableBuffer;
 
     Shader shader;
     DescriptorSetLayout descriptorSetLayout;
@@ -330,9 +327,12 @@ struct VirtualTextureManager
     VirtualTextureManager(Arena *arena, u32 virtualTextureWidth, u32 virtualTextureHeight,
                           u32 physicalTextureWidth, u32 physicalTextureHeight, u32 numPools,
                           VkFormat format);
-    Vec2u AllocateVirtualPages(Arena *arena, string filename, const TextureMetadata &metadata,
-                               const Vec2u &virtualSize, u8 *contents, u32 &index);
-    void PinPages(CommandBuffer *cmd, u32 textureIndex, Vec3u *pinnedPages, u32 numPages);
+    u32 AllocateVirtualPages(Arena *arena, string filename, const TextureMetadata &metadata,
+                             FaceMetadata2 *faceMetadata, u8 *contents);
+    u32 UpdateHash(Vec3u packed, u64 hash);
+    int GetInHash(u64 hash, u32 textureIndex, u32 mipLevel, u32 faceID, Vec3u &packed);
+    void PinPages(CommandBuffer *cmd, u32 textureIndex, Vec3u *pinnedPages, u32 *offsets,
+                  u32 *data, u32 numPages);
     void ClearTextures(CommandBuffer *cmd);
 
     // Streaming

@@ -13,18 +13,31 @@ static const float2x3 uvRotations[16] = {
     float2x3(0, 1, 1, -1, 0, 1),
     float2x3(-1, 0, 1, 0, -1, 0),
     float2x3(0, -1, 0, 1, 0, 0),
+
     float2x3(1, 0, -1, 0, 1, 0),
-    float2x3(0, 1, 0, -1, 0, 2), 
-    float2x3(-1, 0, 2, 0, -1, -1), 
-    float2x3(0, -1, 1, 1, 0, -1), 
+    //float2x3(0, 1, 0, -1, 0, 2), 
+    //float2x3(-1, 0, 2, 0, -1, -1), 
+    //float2x3(0, -1, 1, 1, 0, -1), 
+
+    float2x3(1, 0, 0, 0, 1, 0),
+    float2x3(1, 0, 0, 0, 1, 0),
+    float2x3(1, 0, 0, 0, 1, 0),
+
     float2x3(1, 0, 0, 0, 1, -1), 
-    float2x3(0, 1, -1, -1, 0, 1),
-    float2x3(-1, 0, 1, 0, -1, 2),
-    float2x3(0, -1, 2, 1, 0, 0), 
+    //float2x3(0, 1, -1, -1, 0, 1),
+    //float2x3(-1, 0, 1, 0, -1, 2),
+    //float2x3(0, -1, 2, 1, 0, 0), 
+    float2x3(1, 0, 0, 0, 1, 0),
+    float2x3(1, 0, 0, 0, 1, 0),
+    float2x3(1, 0, 0, 0, 1, 0),
+
     float2x3(1, 0, 1, 0, 1, 0), 
-    float2x3(0, 1, 0, -1, 0, 0), 
-    float2x3(-1, 0, 0, 0, -1, 1), 
-    float2x3(0, -1, 1, 1, 0, 1),
+    //float2x3(0, 1, 0, -1, 0, 0), 
+    //float2x3(-1, 0, 0, 0, -1, 1), 
+    //float2x3(0, -1, 1, 1, 0, 1),
+    float2x3(1, 0, 0, 0, 1, 0),
+    float2x3(1, 0, 0, 0, 1, 0),
+    float2x3(1, 0, 0, 0, 1, 0),
 };
 
 DefineBitStreamReader(Ptex, faceDataBuffer)
@@ -99,17 +112,19 @@ namespace Ptex
 
 }
 
-float4 StochasticCatmullRomBorderlessHelper(GPUMaterial material, Ptex::FaceData faceData, float2 texCoord, float2 texSize, uint mipLevel, float reservoirWeightSum, bool debug = false) 
+float4 StochasticCatmullRomBorderlessHelper(GPUMaterial material, Ptex::FaceData faceData, float2 texCoord, float2 texSize, uint mipLevel, float reservoirWeightSum, int faceID)
 {
     // Lookup adjacency information if necessary
     int neighborIndex = Ptex::GetNeighborIndexFromUV(texCoord, texSize);
     Ptex::FaceData neighborData = faceData;
+    int neighborFaceID = faceID;
 
     if (neighborIndex != -1)
     {
-        int neighborFaceID = faceData.neighborFaces[neighborIndex];
+        neighborFaceID = faceData.neighborFaces[neighborIndex];
         if (neighborFaceID == -1)
         {
+            neighborFaceID = faceID;
             texCoord = clamp(texCoord, 0.5, texSize - 0.5);
         }
         else 
@@ -125,8 +140,7 @@ float4 StochasticCatmullRomBorderlessHelper(GPUMaterial material, Ptex::FaceData
     newUv = neighborData.rotate ? float2(1 - newUv.y, newUv.x) : newUv;
 
     // Virtual texture lookup
-    const uint2 baseOffset = material.baseVirtualPage * PAGE_WIDTH + neighborData.faceOffset;
-    const float3 fullUv = VirtualTexture::GetPhysicalUV(baseOffset, newUv, faceSize, mipLevel, debug);
+    const float3 fullUv = VirtualTexture::GetPhysicalUV(material.textureIndex, faceID, mipLevel, newUv, faceSize);
     float4 result = reservoirWeightSum * physicalPages.SampleLevel(samplerNearestClamp, fullUv, 0.f);
 
     if (0)
@@ -191,12 +205,12 @@ float4 SampleStochasticCatmullRomBorderless(Ptex::FaceData faceData, GPUMaterial
     float4 result = 0.f;
     float2 posCoord = float2(texPos[reservoir[0].x].x, texPos[reservoir[0].y].y);
     result += StochasticCatmullRomBorderlessHelper(material, faceData, posCoord, 
-                                                   texSize, mipLevel, weightsSum[0], debug);
+                                                   texSize, mipLevel, weightsSum[0], faceID);
     if (weightsSum[1] != 0.f)
     {
         float2 negCoord = float2(texPos[reservoir[1].x].x, texPos[reservoir[1].y].y);
         result -= StochasticCatmullRomBorderlessHelper(material, faceData, negCoord, 
-                                                       texSize, mipLevel, weightsSum[1], debug);
+                                                       texSize, mipLevel, weightsSum[1], faceID);
     }
 
     return result;

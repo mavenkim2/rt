@@ -231,4 +231,14 @@ float3x4 Inverse(float3x4 transform)
     return float3x4(float4(inv[0].xyz, -translate.x), float4(inv[1].xyz, -translate.y), float4(inv[2].xyz, -translate.z));
 }
 
+uint64_t MixBits(uint64_t v)
+{
+    v ^= (v >> 31);
+    v *= 0x7fb5d329728ea185;
+    v ^= (v >> 27);
+    v *= 0x81dadef4bc2dd44d;
+    v ^= (v >> 33);
+    return v;
+}
+
 #endif

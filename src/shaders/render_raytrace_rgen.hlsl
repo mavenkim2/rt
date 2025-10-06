@@ -417,10 +417,9 @@ void main()
 
             if (depth == 1)
             {
-                float2 newUv = faceData.rotate ? float2(1 - hitInfo.uv.y, hitInfo.uv.x) : hitInfo.uv;
-                uint2 virtualPage = VirtualTexture::CalculateVirtualPage(faceData.faceOffset, newUv, dim, mipLevel);
-                const uint feedbackMipLevel = VirtualTexture::ClampMipLevel(dim, mipLevel);
-                feedbackRequest = PackFeedbackEntry(virtualPage.x, virtualPage.y, material.textureIndex, feedbackMipLevel);
+                //float2 newUv = faceData.rotate ? float2(1 - hitInfo.uv.y, hitInfo.uv.x) : hitInfo.uv;
+                const uint feedbackMipLevel = min(mipLevel, min(faceData.log2Dim.x, faceData.log2Dim.y));
+                feedbackRequest = uint2(material.textureIndex | (feedbackMipLevel << 16u), hitInfo.faceID);
             }
         }
         else 

@@ -30,9 +30,12 @@ struct PageTableUpdatePushConstant
 
 struct PageTableUpdateRequest
 {
-    uint2 virtualPage;
-    uint mipLevel;
-    uint packed;
+    // uint2 virtualPage;
+    //  uint faceID;
+    //  uint mipLevel;
+
+    uint hashIndex;
+    uint3 packed;
 };
 
 struct GPUFaceData
@@ -43,20 +46,29 @@ struct GPUFaceData
     uint rotate;
 };
 
-inline uint4 UnpackPageTableEntry(uint packedPageTableEntry)
+#ifdef __cplusplus
+inline uint4 UnpackPageTableEntry(uint packedPageTableEntry, uint &outLayer)
+#else
+inline uint4 UnpackPageTableEntry(uint packedPageTableEntry, out uint outLayer)
+#endif
 {
     uint pageX =
         BitFieldExtractU32(packedPageTableEntry, PHYSICAL_POOL_NUM_PAGES_WIDE_BITS, 0);
     uint pageY = BitFieldExtractU32(packedPageTableEntry, PHYSICAL_POOL_NUM_PAGES_WIDE_BITS,
                                     PHYSICAL_POOL_NUM_PAGES_WIDE_BITS);
-    uint mip =
-        BitFieldExtractU32(packedPageTableEntry, 4, 2 * PHYSICAL_POOL_NUM_PAGES_WIDE_BITS);
-    uint layer =
-        BitFieldExtractU32(packedPageTableEntry, 4, 2 * PHYSICAL_POOL_NUM_PAGES_WIDE_BITS + 4);
-    return uint4(pageX, pageY, mip, layer);
+    uint offsetInPageX = BitFieldExtractU32(packedPageTableEntry, PAGE_SHIFT,
+                                            2 * PHYSICAL_POOL_NUM_PAGES_WIDE_BITS);
+    uint offsetInPageY = BitFieldExtractU32(
+        packedPageTableEntry, PAGE_SHIFT, 2 * PHYSICAL_POOL_NUM_PAGES_WIDE_BITS + PAGE_SHIFT);
+
+    uint layer = BitFieldExtractU32(packedPageTableEntry, 4,
+                                    2 * PHYSICAL_POOL_NUM_PAGES_WIDE_BITS + 2 * PAGE_SHIFT);
+    outLayer   = layer;
+    return uint4(pageX, pageY, offsetInPageX, offsetInPageY);
 }
 
-inline uint PackPageTableEntry(uint pageLocationX, uint pageLocationY, uint mip, uint layer)
+inline uint PackPageTableEntry(uint pageLocationX, uint pageLocationY, uint offsetInPageX,
+                               uint offsetInPageY, uint layer)
 {
     uint packed       = 0;
     uint packedOffset = 0;
@@ -64,8 +76,10 @@ inline uint PackPageTableEntry(uint pageLocationX, uint pageLocationY, uint mip,
                                         PHYSICAL_POOL_NUM_PAGES_WIDE_BITS);
     packed            = BitFieldPackU32(packed, pageLocationY, packedOffset,
                                         PHYSICAL_POOL_NUM_PAGES_WIDE_BITS);
-    packed            = BitFieldPackU32(packed, mip, packedOffset, 4);
+    packed            = BitFieldPackU32(packed, offsetInPageX, packedOffset, PAGE_SHIFT);
+    packed            = BitFieldPackU32(packed, offsetInPageY, packedOffset, PAGE_SHIFT);
     packed            = BitFieldPackU32(packed, layer, packedOffset, 4);
+
     return packed;
 }
 

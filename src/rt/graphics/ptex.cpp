@@ -414,7 +414,7 @@ void Convert(string filename)
             t->release();
 
             // Assert(img.log2Width >= 2 && img.log2Height >= 2);
-            int levels = Min(img.log2Width, img.log2Height) + 1;
+            int levels = Max(img.log2Width, img.log2Height) + 1;
             Assert(levels < MAX_LEVEL);
 
             images[i]    = FixedArray<PaddedImage, MAX_LEVEL>(levels);
@@ -432,10 +432,9 @@ void Convert(string filename)
             PaddedImage inPaddedImage = img;
             int depth                 = 1;
 
-            Vec2u scale = 2u;
-
             while (depth < levels)
             {
+                Vec2u scale(width == 1 ? 1u : 2u, height == 1 ? 1u : 2u);
                 PaddedImage outPaddedImage =
                     GenerateMips(arena, inPaddedImage, width, height, scale, 0);
 
@@ -735,6 +734,10 @@ void Convert(string filename)
         totalTextureArea += currentFaceImg.width * currentFaceImg.height;
         maxLevel = Max(maxLevel, images[faceIndex].Length());
 
+        if (currentFaceImg.width == 1 || currentFaceImg.height == 1)
+        {
+            int stop = 5;
+        }
         // Assert(currentFaceImg.width != 1 && currentFaceImg.height != 1);
     }
 
@@ -810,6 +813,7 @@ void Convert(string filename)
         {
             FaceHandle &handle = handles[handleIndex];
             int faceIndex      = handle.faceIndex;
+
             if (levelIndex >= images[faceIndex].Length()) continue;
 
             PaddedImage &currentFaceImg = images[faceIndex][levelIndex];
@@ -849,15 +853,14 @@ void Convert(string filename)
                 currentFaceImg = img;
             }
 
-            Vec2u dstLoc(pos_inf);
+            Vec2u dstLoc = Vec2u(currentHorizontalOffset, currentTotalHeight);
+            faceMetadatas[faceIndex].mipOffsets[levelIndex] = dstLoc;
+
             if (levelIndex == 0)
             {
                 faceMetadatas[faceIndex].log2Width  = img.log2Width;
                 faceMetadatas[faceIndex].log2Height = img.log2Height;
-                faceMetadatas[faceIndex].offsetX    = currentHorizontalOffset;
-                faceMetadatas[faceIndex].offsetY    = currentTotalHeight;
-
-                const Ptex::FaceInfo &f = ptexFaceInfos[faceIndex];
+                const Ptex::FaceInfo &f             = ptexFaceInfos[faceIndex];
                 for (int edgeIndex = e_bottom; edgeIndex < e_max; edgeIndex++)
                 {
                     // Add edge borders
@@ -868,13 +871,6 @@ void Convert(string filename)
                     faceMetadatas[faceIndex].neighborFaces[edgeIndex] = neighborFace;
                     faceMetadatas[faceIndex].rotate |= rot << (2 * edgeIndex);
                 }
-                dstLoc = Vec2u(currentHorizontalOffset, currentTotalHeight);
-            }
-            else
-            {
-                dstLoc = Vec2u(faceMetadatas[faceIndex].offsetX,
-                               faceMetadatas[faceIndex].offsetY) >>
-                         (u32)levelIndex;
             }
 
             Assert(img.width <= gpuSubmissionWidth && img.height <= gpuSubmissionWidth);
@@ -929,15 +925,18 @@ void Convert(string filename)
             std::vector<Vec3u> pinnedPages;
             pinnedPages.reserve(sqrtNumPages);
 
+            std::vector<std::vector<int>> pinnedFaces;
+            pinnedFaces.reserve(sqrtNumPages);
+
             HashIndex hashMap(scratch.temp.arena);
             for (int handleIndex = 0; handleIndex < numFaces; handleIndex++)
             {
                 FaceHandle &handle = handles[handleIndex];
                 int faceIndex      = handle.faceIndex;
                 u32 levelIndex     = images[faceIndex].Length() - 1;
-                Vec2u page         = Vec2u(faceMetadatas[faceIndex].offsetX,
-                                           faceMetadatas[faceIndex].offsetY) >>
-                             ((u32)levelIndex + PAGE_SHIFT);
+                Vec2u page         = Vec2u(faceMetadatas[faceIndex].mipOffsets[levelIndex].x,
+                                           faceMetadatas[faceIndex].mipOffsets[levelIndex].y) >>
+                             u32(PAGE_SHIFT);
 
                 Vec3u pinnedPage(page, (u32)levelIndex);
 
@@ -952,14 +951,38 @@ void Convert(string filename)
                 {
                     if (pinnedPages[pinnedPageIndex] == pinnedPage)
                     {
+                        pinnedFaces[pinnedPageIndex].push_back(faceIndex);
                         found = true;
                         break;
                     }
                 }
                 if (!found)
                 {
+                    pinnedFaces.emplace_back();
+                    pinnedFaces.back().push_back(faceIndex);
                     pinnedPages.push_back(pinnedPage);
                     hashMap.AddInHash(hash, pinnedPages.size() - 1);
+                }
+            }
+
+            u32 *pinnedPageOffsets =
+                PushArrayNoZero(scratch.temp.arena, u32, pinnedPages.size() + 1);
+            u32 *pinnedPageOffsets1 = &pinnedPageOffsets[1];
+            u32 total               = 0;
+            for (u32 pinnedPageIndex = 0; pinnedPageIndex < pinnedPages.size();
+                 pinnedPageIndex++)
+            {
+                pinnedPageOffsets1[pinnedPageIndex] = total;
+                u32 count                           = pinnedFaces[pinnedPageIndex].size();
+                total += count;
+            }
+            int *pinnedPageData = PushArrayNoZero(scratch.temp.arena, int, pinnedPages.size());
+            for (u32 pinnedPageIndex = 0; pinnedPageIndex < pinnedPages.size();
+                 pinnedPageIndex++)
+            {
+                for (int pinnedFace : pinnedFaces[pinnedPageIndex])
+                {
+                    pinnedPageData[pinnedPageOffsets1[pinnedPageIndex]++] = pinnedFace;
                 }
             }
 
@@ -968,9 +991,18 @@ void Convert(string filename)
             u64 pinnedPagesOffset =
                 AllocateSpace(&builder, sizeof(Vec3u) * textureMetadata.numPinnedPages);
             Vec3u *outPinnedPages = (Vec3u *)GetMappedPtr(&builder, pinnedPagesOffset);
-
             MemoryCopy(outPinnedPages, pinnedPages.data(),
                        sizeof(Vec3u) * textureMetadata.numPinnedPages);
+
+            u64 pinnedPagesOffsetsOffset =
+                AllocateSpace(&builder, sizeof(u32) * (textureMetadata.numPinnedPages + 1));
+            void *ptr = GetMappedPtr(&builder, pinnedPagesOffsetsOffset);
+            MemoryCopy(ptr, pinnedPageOffsets,
+                       sizeof(u32) * (textureMetadata.numPinnedPages + 1));
+
+            u64 pinnedPagesDataOffset = AllocateSpace(&builder, sizeof(int) * total);
+            ptr                       = GetMappedPtr(&builder, pinnedPagesDataOffset);
+            MemoryCopy(ptr, pinnedPageData, sizeof(int) * total);
         }
 
         // Submit to GPU to calculate mip and block compress, then write to disk
@@ -1165,8 +1197,7 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
                                              u32 physicalTextureHeight, u32 numPools,
                                              VkFormat format)
     : format(format), updateRequestRingBuffer(arena, maxCopies),
-      feedbackRingBuffer(arena, maxFeedback), currentHorizontalOffset(0),
-      currentTotalHeight(0), currentShelfHeight(0)
+      feedbackRingBuffer(arena, maxFeedback)
 {
     string shaderName = "../src/shaders/update_page_tables.spv";
     string data       = OS_ReadFile(arena, shaderName);
@@ -1195,36 +1226,14 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
         Log2Int(Max(virtualTextureWidth, virtualTextureHeight) >> PAGE_SHIFT) + 1;
     numVirtPagesWide     = virtualTextureWidth >> PAGE_SHIFT;
     u32 numVirtPagesHigh = virtualTextureHeight >> PAGE_SHIFT;
-    ImageDesc pageTableDesc(ImageType::Type2D, numVirtPagesWide, numVirtPagesHigh, 1, numMips,
-                            1, VK_FORMAT_R32_UINT, MemoryUsage::GPU_ONLY,
-                            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                                VK_IMAGE_USAGE_TRANSFER_DST_BIT);
 
-    pageTable = device->CreateImage(pageTableDesc);
-    for (int i = 0; i < numMips; i++)
-    {
-        device->CreateSubresource(&pageTable, i, 1);
-        int bindlessIndex = device->BindlessStorageIndex(&pageTable, i);
-        if (i == 0) bindlessPageTableStartIndex = bindlessIndex;
-        Assert(bindlessIndex == bindlessPageTableStartIndex + i);
-    }
+    pageHashTableBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                               sizeof(Vec3u) * MAX_LEVEL * (1u << 20u));
 
     // Allocate cpu page table
-    cpuPageTable = StaticArray<StaticArray<u32>>(arena, numMips, numMips);
-    for (int i = 0; i < numMips; i++)
-    {
-        const u32 mipNumVirtPagesWide = numVirtPagesWide >> i;
-        const u32 mipNumVirtPagesHigh = numVirtPagesHigh >> i;
-        cpuPageTable[i] = StaticArray<u32>(arena, mipNumVirtPagesWide * mipNumVirtPagesHigh,
-                                           mipNumVirtPagesWide * mipNumVirtPagesHigh);
-        for (int pageY = 0; pageY < mipNumVirtPagesHigh; pageY++)
-        {
-            for (int pageX = 0; pageX < mipNumVirtPagesWide; pageX++)
-            {
-                cpuPageTable[i][pageY * mipNumVirtPagesWide + pageX] = ~0u;
-            }
-        }
-    }
+    cpuPageHashTable =
+        StaticArray<Vec3u>(arena, MAX_LEVEL * (1u << 20u), MAX_LEVEL * (1u << 20u));
+    MemorySet(cpuPageHashTable.data, 0xff, sizeof(Vec3u) * MAX_LEVEL * (1u << 20u));
 
     Assert(IsPow2(physicalTextureWidth) && IsPow2(physicalTextureHeight));
     numPhysPagesWidth  = physicalTextureWidth / PAGE_WIDTH;
@@ -1336,39 +1345,60 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
     scheduler.Schedule([&](int jobID) { Callback(); });
 }
 
-Vec2u VirtualTextureManager::AllocateVirtualPages(Arena *arena, string filename,
-                                                  const TextureMetadata &metadata,
-                                                  const Vec2u &virtualSize, u8 *contents,
-                                                  u32 &index)
+u32 VirtualTextureManager::AllocateVirtualPages(Arena *arena, string filename,
+                                                const TextureMetadata &metadata,
+                                                FaceMetadata2 *faceMetadata, u8 *contents)
 {
-    int virtualSqrtNumPages = (int)metadata.virtualSqrtNumPages;
-
-    if (currentHorizontalOffset + virtualSqrtNumPages > numVirtPagesWide)
-    {
-        currentHorizontalOffset = 0;
-        currentTotalHeight += currentShelfHeight;
-        currentShelfHeight = virtualSqrtNumPages;
-    }
-
-    currentShelfHeight = Max(currentShelfHeight, virtualSqrtNumPages);
-    Assert(currentTotalHeight + currentShelfHeight <= numVirtPagesWide);
-
-    Vec2u virtualPage(currentHorizontalOffset, currentTotalHeight);
-    currentHorizontalOffset += virtualSqrtNumPages;
-
     TextureInfo texInfo;
-    texInfo.filename        = PushStr8Copy(arena, filename);
-    texInfo.baseVirtualPage = virtualPage;
-    texInfo.metadata        = metadata;
-    texInfo.contents        = contents;
+    texInfo.filename     = PushStr8Copy(arena, filename);
+    texInfo.faceMetadata = faceMetadata;
+    texInfo.metadata     = metadata;
+    texInfo.contents     = contents;
     textureInfo.push_back(texInfo);
-    index = textureInfo.size() - 1;
 
-    return virtualPage;
+    return textureInfo.size() - 1;
+}
+
+u32 VirtualTextureManager::UpdateHash(Vec3u packed, u64 hash)
+{
+    u64 hashIndex = hash % cpuPageHashTable.Length();
+    for (;;)
+    {
+        if (cpuPageHashTable[hashIndex].x == ~0u)
+        {
+            cpuPageHashTable[hashIndex] = packed;
+            return hashIndex;
+        }
+        hashIndex = (hashIndex + 1) % cpuPageHashTable.Length();
+    }
+}
+
+int VirtualTextureManager::GetInHash(u64 hash, u32 textureIndex, u32 mipLevel, u32 faceID,
+                                     Vec3u &outPacked)
+{
+    u64 hashIndex = hash % cpuPageHashTable.Length();
+    for (;;)
+    {
+        if (cpuPageHashTable[hashIndex].x != ~0u)
+        {
+            Vec3u &packed = cpuPageHashTable[hashIndex];
+            if (packed.y == faceID && ((packed.x & 0xffff) == textureIndex) &&
+                (packed.x >> 16u) == mipLevel)
+            {
+                outPacked = packed;
+                return hashIndex;
+            }
+        }
+        else
+        {
+            return -1;
+        }
+        hashIndex = (hashIndex + 1) % cpuPageHashTable.Length();
+    }
 }
 
 void VirtualTextureManager::PinPages(CommandBuffer *cmd, u32 textureIndex, Vec3u *pinnedPages,
-                                     u32 numPages)
+                                     u32 *offsets, u32 *data, u32 numPages)
 {
     ScratchArena scratch;
 
@@ -1380,7 +1410,6 @@ void VirtualTextureManager::PinPages(CommandBuffer *cmd, u32 textureIndex, Vec3u
     TextureInfo &texInfo      = textureInfo[textureIndex];
     u8 *contents              = texInfo.contents;
     TextureMetadata &metadata = texInfo.metadata;
-    Vec2u baseVirtualPage     = texInfo.baseVirtualPage;
 
     StaticArray<PageTableUpdateRequest> updateRequests(scratch.temp.arena, numPages);
     StaticArray<BufferImageCopy> copies(scratch.temp.arena, numPages);
@@ -1401,8 +1430,6 @@ void VirtualTextureManager::PinPages(CommandBuffer *cmd, u32 textureIndex, Vec3u
 
         u32 sqrtLevelNumPages = std::sqrt(levelNumPages);
 
-        const Vec2u globalVirtualPage = (baseVirtualPage >> levelIndex) + pinnedPage.xy;
-
         // Allocate page from pool
         u32 freePageIndex = freePage;
         Assert(freePageIndex < physicalPages.size());
@@ -1410,17 +1437,21 @@ void VirtualTextureManager::PinPages(CommandBuffer *cmd, u32 textureIndex, Vec3u
         freePage++;
 
         // Create packed page table entry
-        u32 packed = PackPageTableEntry(page.page.x, page.page.y, levelIndex, page.layer);
-        PageTableUpdateRequest request;
-        request.virtualPage = globalVirtualPage;
-        request.mipLevel    = levelIndex;
-        request.packed      = packed;
+        for (u32 faceDataIndex = offsets[pageIndex]; faceDataIndex < offsets[pageIndex + 1];
+             faceDataIndex++)
+        {
+            u32 face           = data[faceDataIndex];
+            Vec2u offsetInPage = texInfo.faceMetadata[face].mipOffsets[levelIndex];
+            u32 packed         = PackPageTableEntry(page.page.x, page.page.y, offsetInPage.x,
+                                                    offsetInPage.y, page.layer);
+            u64 bitsToHash = (u64)textureIndex | ((u64)levelIndex << 16) | ((u64)face << 32);
+            u64 hash       = MixBits(bitsToHash);
 
-        updateRequests.push_back(request);
-
-        u32 mipNumVertPagesWide = numVirtPagesWide >> levelIndex;
-        cpuPageTable[levelIndex]
-                    [globalVirtualPage.y * mipNumVertPagesWide + globalVirtualPage.x] = packed;
+            PageTableUpdateRequest request;
+            request.packed    = Vec3u(textureIndex | (levelIndex << 16), face, packed);
+            request.hashIndex = UpdateHash(request.packed, hash);
+            updateRequests.push_back(request);
+        }
 
         // Create buffer image copy command
         BufferImageCopy copy = {};
@@ -1473,6 +1504,7 @@ void VirtualTextureManager::PinPages(CommandBuffer *cmd, u32 textureIndex, Vec3u
 
     DescriptorSet ds = descriptorSetLayout.CreateDescriptorSet();
     ds.Bind(0, &pageTableUpdateRequestBuffer);
+    ds.Bind(1, &pageHashTableBuffer);
     cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                  VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
     cmd->FlushBarriers();
@@ -1487,8 +1519,7 @@ void VirtualTextureManager::PinPages(CommandBuffer *cmd, u32 textureIndex, Vec3u
 
 void VirtualTextureManager::ClearTextures(CommandBuffer *cmd)
 {
-    cmd->ClearImage(&pageTable, ~0u);
-    // cmd->ClearImage(&gpuPhysicalPool, Vec4f(1.f, 1.f, 1.f, 1.f));
+    cmd->ClearBuffer(&pageHashTableBuffer, ~0u);
 }
 
 ///////////////////////////////////////
@@ -1550,9 +1581,6 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *tra
         computeCmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                             VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-        computeCmd->Barrier(&pageTable, VK_IMAGE_LAYOUT_GENERAL,
-                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                            VK_ACCESS_2_SHADER_WRITE_BIT);
         computeCmd->FlushBarriers();
 
         PageTableUpdatePushConstant pc;
@@ -1572,9 +1600,6 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *tra
         computeCmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                             VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-        computeCmd->Barrier(&pageTable, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                            VK_ACCESS_2_SHADER_READ_BIT);
         computeCmd->FlushBarriers();
     }
 
@@ -1669,8 +1694,8 @@ void VirtualTextureManager::Callback()
     struct FeedbackRequest
     {
         Vec2u packedFeedbackInfo;
+        u32 hashIndex;
         u32 count;
-        u32 diff;
     };
 
     const u32 blockShift    = GetBlockShift(format);
@@ -1709,15 +1734,12 @@ void VirtualTextureManager::Callback()
         for (int requestIndex = 0; requestIndex < numFeedbackRequests; requestIndex++)
         {
             Vec2u &feedbackRequest = feedbackRequests[requestIndex];
-            u32 virtualPageX       = feedbackRequest.x & 0xffff;
-            u32 virtualPageY       = feedbackRequest.x >> 16;
-            u32 textureIndex       = feedbackRequest.y & 0x00ffffff;
-            u32 mipLevel           = feedbackRequest.y >> 24;
+            u32 textureIndex       = feedbackRequest.x & 0xffff;
+            u32 mipLevel           = feedbackRequest.x >> 16;
+            u32 faceID             = feedbackRequest.y;
 
-            u64 packed = ((u64)mipLevel << 56u) | ((u64)textureIndex << 32u) |
-                         (virtualPageY << 16u) | virtualPageX;
-
-            i32 hash = (i32)MixBits(packed);
+            u64 packed = ((u64)faceID << 32u) | (mipLevel << 16u) | textureIndex;
+            i32 hash   = (i32)MixBits(packed);
 
             bool found = false;
             for (int index = pageHashMap.FirstInHash(hash); index != -1;
@@ -1757,30 +1779,26 @@ void VirtualTextureManager::Callback()
         {
             FeedbackRequest fr    = compactedFeedbackRequests[requestIndex];
             Vec2u feedbackRequest = fr.packedFeedbackInfo;
-            u32 virtualPageX      = feedbackRequest.x & 0xffff;
-            u32 virtualPageY      = feedbackRequest.x >> 16;
-            u32 textureIndex      = feedbackRequest.y & 0x00ffffff;
-            u32 mipLevel          = feedbackRequest.y >> 24;
+            u32 textureIndex      = feedbackRequest.x & 0xffff;
+            u32 mipLevel          = feedbackRequest.x >> 16;
+            u32 faceID            = feedbackRequest.y;
 
             TextureInfo &texInfo = textureInfo[textureIndex];
 
-            const Vec2u globalVirtualPage =
-                (texInfo.baseVirtualPage >> mipLevel) + Vec2u(virtualPageX, virtualPageY);
-            const u32 numMipVirtPagesWide = numVirtPagesWide >> mipLevel;
+            u64 bitsToHash = (u64)textureIndex | ((u64)mipLevel << 16) | ((u64)faceID << 32);
+            u64 hash       = MixBits(bitsToHash);
 
-            u32 packedPageTableEntry =
-                cpuPageTable[mipLevel]
-                            [globalVirtualPage.y * numMipVirtPagesWide + globalVirtualPage.x];
-
-            Vec4u pageTableEntry = UnpackPageTableEntry(packedPageTableEntry);
-            u32 physicalPageX    = pageTableEntry.x;
-            u32 physicalPageY    = pageTableEntry.y;
-            u32 mip              = pageTableEntry.z;
-            u32 layer            = pageTableEntry.w;
+            Vec3u packed;
+            int entryIndex = GetInHash(hash, textureIndex, mipLevel, faceID, packed);
 
             // Move to head of LRU if requested page is already resident
-            if (packedPageTableEntry != ~0u && mip == mipLevel)
+            if (entryIndex != -1)
             {
+                u32 layer;
+                Vec4u data        = UnpackPageTableEntry(packed.z, layer);
+                u32 physicalPageX = data.x;
+                u32 physicalPageY = data.y;
+
                 int pageIndex = layer * Sqr(numPhysPagesWidth) +
                                 physicalPageY * numPhysPagesWidth + physicalPageX;
 
@@ -1800,8 +1818,6 @@ void VirtualTextureManager::Callback()
             // Otherwise, page needs to be mapped
             else
             {
-                Assert(mip - mipLevel);
-                fr.diff                                             = mip - mipLevel;
                 compactedFeedbackRequests[numNonResidentFeedback++] = fr;
             }
         }
@@ -1864,24 +1880,13 @@ void VirtualTextureManager::Callback()
                 Vec2u virtualPage          = physicalPage.virtualPage;
                 u32 level                  = physicalPage.level;
 
-                // TODO: need to handle mapping to coarser mips
                 // Replace previously mapped entry with a coarser mip
-                Vec2u coarserVirtualPage = virtualPage >> 1u;
-                u32 mipNumVertPagesWide  = numVirtPagesWide >> level;
-                // u32 evictPackedEntry =
-                //     cpuPageTable[level + 1][coarserVirtualPage.y * (mipNumVertPagesWide >>
-                //     1) +
-                //                             coarserVirtualPage.x];
-
-                cpuPageTable[level][virtualPage.y * mipNumVertPagesWide + virtualPage.x] = ~0u;
-                // evictPackedEntry;
 
                 UnlinkLRU(pageIndex);
 
                 PageTableUpdateRequest evictRequest;
-                evictRequest.virtualPage = virtualPage;
-                evictRequest.mipLevel    = mipLevel;
-                evictRequest.packed      = ~0u; // evictPackedEntry;
+                evictRequest.packed    = Vec3u(~0u);
+                evictRequest.hashIndex = ? ;
                 evictRequests.push_back(evictRequest);
             }
 
@@ -1897,8 +1902,6 @@ void VirtualTextureManager::Callback()
             u32 mapPackedEntry =
                 PackPageTableEntry(page.page.x, page.page.y, mipLevel, page.layer);
             // Update CPU page table
-            cpuPageTable[mipLevel][globalVirtualPage.y * (numVirtPagesWide >> mipLevel) +
-                                   globalVirtualPage.x] = mapPackedEntry;
 
             LinkLRU(pageIndex);
 
