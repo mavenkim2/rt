@@ -545,6 +545,20 @@ struct Scheduler
 extern Scheduler scheduler;
 
 template <typename Func>
+void ParallelForNoWait(u32 start, u32 count, u32 groupSize, const Func &func)
+{
+    u32 taskCount = (count + groupSize - 1) / groupSize;
+    taskCount     = Min(taskCount, 768u);
+    u32 end       = start + count;
+    u32 stepSize  = count / taskCount;
+    scheduler.Schedule(taskCount, 1, [&](u32 jobID) {
+        u32 tStart = start + jobID * stepSize;
+        u32 size   = jobID == taskCount - 1 ? end - tStart : stepSize;
+        func(jobID, tStart, size);
+    });
+}
+
+template <typename Func>
 void ParallelFor(u32 start, u32 count, u32 groupSize, const Func &func)
 {
     u32 taskCount = (count + groupSize - 1) / groupSize;

@@ -1211,7 +1211,13 @@ Semaphore Vulkan::CreateSemaphore()
 
     Semaphore semaphore = {};
     vkCreateSemaphore(device, &semaphoreInfo, 0, &semaphore.semaphore);
+
     return semaphore;
+}
+
+void Vulkan::DestroySemaphore(Semaphore sem)
+{
+    vkDestroySemaphore(device, sem.semaphore, 0);
 }
 
 void Vulkan::AllocateCommandBuffers(ThreadPool &pool, QueueType type)
@@ -1991,6 +1997,16 @@ GPUImage Vulkan::CreateImage(ImageDesc desc, int numSubresources, int ownedQueue
 
     VK_CHECK(
         vmaCreateImage(allocator, &imageInfo, &allocInfo, &image.image, &image.allocation, 0));
+
+    VkMemoryRequirements req;
+    vkGetImageMemoryRequirements(device, image.image, &req);
+
+    MemoryRequirements memReq;
+    memReq.alignment = req.alignment;
+    memReq.bits      = req.memoryTypeBits;
+    memReq.size      = req.size;
+
+    image.req = memReq;
 
     numSubresources = numSubresources == -1 ? desc.numMips : numSubresources;
     if (numSubresources)
@@ -4632,7 +4648,15 @@ bool Vulkan::Wait(Semaphore s, u64 waitVal)
     waitInfo.semaphoreCount      = 1;
     waitInfo.pSemaphores         = &s.semaphore;
     VkResult result              = vkWaitSemaphores(device, &waitInfo, waitVal);
+
     return result == VK_SUCCESS;
+}
+
+u64 Vulkan::GetSemaphoreValue(Semaphore s)
+{
+    u64 value = 0;
+    vkGetSemaphoreCounterValue(device, s.semaphore, &value);
+    return value;
 }
 
 #ifdef USE_DLSS

@@ -193,11 +193,13 @@ PaddedImage PtexToImg(Arena *arena, Ptex::PtexTexture *ptx, int faceID, int bord
     int aChan       = ptx->alphaChannel();
 
     Ptex::FaceInfo fi = ptx->getFaceInfo(faceID);
+    Ptex::PtexPtr<Ptex::PtexFaceData> d(ptx->getData(faceID, fi.res));
+    Ptex::Res tileRes = d->tileRes();
 
-    int u = fi.res.u();
-    int v = fi.res.v();
-
-    Assert(IsPow2(u) && IsPow2(v));
+    int u       = fi.res.u();
+    int v       = fi.res.v();
+    int ntilesu = fi.res.ntilesu(tileRes);
+    int ntilesv = fi.res.ntilesv(tileRes);
 
     u32 bytesPerChannel = Ptex::DataSize(ptx->dataType());
     u32 bytesPerPixel   = numChannels * bytesPerChannel;
@@ -205,11 +207,6 @@ PaddedImage PtexToImg(Arena *arena, Ptex::PtexTexture *ptx, int faceID, int bord
     int size            = stride * (v + 2 * borderSize);
     u8 *data   = aChan == -1 ? PushArray(temp.arena, u8, size) : PushArray(arena, u8, size);
     int rowlen = (u * bytesPerPixel);
-    // if (flip)
-    // {
-    //     data += rowlen * (img.h - 1);
-    //     stride = -rowlen;
-    // }
 
     PaddedImage result;
     result.contents         = data;
@@ -221,8 +218,55 @@ PaddedImage PtexToImg(Arena *arena, Ptex::PtexTexture *ptx, int faceID, int bord
     result.strideNoBorder   = rowlen;
     result.borderSize       = borderSize;
     result.strideWithBorder = stride;
+    char *buffer            = (char *)data;
+
+    if (d->isConstant())
+    {
+        // fill dest buffer with pixel value
+        // Ptex::PtexUtils::fill(d->getData(), buffer, stride, resu, resv, _pixelsize);
+    }
+    else if (d->isTiled())
+    {
+        // loop over tiles
+        Ptex::Res tileres = d->tileRes();
+        int ntilesu       = fi.res.ntilesu(tileres);
+        int ntilesv       = fi.res.ntilesv(tileres);
+        int tileures      = tileres.u();
+        int tilevres      = tileres.v();
+        int tilerowlen    = bytesPerPixel * tileures;
+        int tile          = 0;
+        char *dsttilerow  = (char *)buffer;
+        for (int i = 0; i < ntilesv; i++)
+        {
+            char *dsttile = dsttilerow;
+            for (int j = 0; j < ntilesu; j++)
+            {
+                Ptex::PtexPtr<Ptex::PtexFaceData> t(d->getTile(tile++));
+                if (t->isConstant())
+                    Ptex::PtexUtils::fill(t->getData(), dsttile, stride, tileures, tilevres,
+                                          bytesPerPixel);
+                else
+                    Ptex::PtexUtils::copy(t->getData(), tilerowlen, dsttile, stride, tilevres,
+                                          tilerowlen);
+                dsttile += tilerowlen;
+            }
+            dsttilerow += stride * tilevres;
+        }
+    }
+    else
+    {
+        // Ptex::PtexUtils::copy(d->getData(), rowlen, buffer, stride, resv, rowlen);
+    }
 
     ptx->getData(faceID, (char *)result.GetContentsRelativeIndex({0, 0}), stride);
+
+    Assert(IsPow2(u) && IsPow2(v));
+
+    // if (flip)
+    // {
+    //     data += rowlen * (img.h - 1);
+    //     stride = -rowlen;
+    // }
 
     // Convert image from 3 to 4 channels
     if (aChan == -1)
@@ -324,11 +368,11 @@ void Convert(string filename)
 
     Print("starting conversion for %S\n", filename);
 
-    if (OS_FileExists(outFilename))
-    {
-        Print("skipping conversion for %S\n", filename);
-        return;
-    }
+    // if (OS_FileExists(outFilename))
+    // {
+    //     Print("skipping conversion for %S\n", filename);
+    //     return;
+    // }
 
     size_t maxMem = gigabytes(4);
 
@@ -700,32 +744,6 @@ void Convert(string filename)
 
     StaticArray<FaceInfo> faceInfos(scratch.temp.arena, numFaces);
 
-    // How this is packed:
-    // 1. calculate the total texture area to get a naive lower bound estimate on the
-    // number of pages
-    // 2. pack face data onto shelves in the estimated square virtual texture space to
-    // calculate the minimum necessary # of pages. shelves are packed such that all shelves
-    // have height >= shelves below. face data is rotated so that the largest dimension is the
-    // width, and then sorted first by height then width, descending
-    // 3. repeat #2 in the actual virtual texture space.
-    //
-    // e.g.
-    //
-    // Mip 0:
-    // 256x256 256x256 ...
-    // 256x128 256x128 128x128 128x128 <-- sorted descending width
-    // 256x16 256x16
-    //
-    // Mip 4:
-    // 16x16 16x16 ...
-    // 16x8 16x8 8x8 8x8
-    // 16x1 16x1 <-- at subsequent mip levels, this shelf and all shelves below are gone. TODO
-    // handling coarser mips of 4:1 and 2:1 aspect ratio face data
-    //
-    // Mip 5:
-    // 8x8 8x8 ...
-    // 8x4 8x4 4x4 4x4
-
     int totalTextureArea = 0;
     u32 maxLevel         = 0;
     for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
@@ -976,7 +994,7 @@ void Convert(string filename)
                 u32 count                           = pinnedFaces[pinnedPageIndex].size();
                 total += count;
             }
-            int *pinnedPageData = PushArrayNoZero(scratch.temp.arena, int, pinnedPages.size());
+            int *pinnedPageData = PushArrayNoZero(scratch.temp.arena, int, total);
             for (u32 pinnedPageIndex = 0; pinnedPageIndex < pinnedPages.size();
                  pinnedPageIndex++)
             {
@@ -1196,8 +1214,7 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
                                              u32 physicalTextureWidth,
                                              u32 physicalTextureHeight, u32 numPools,
                                              VkFormat format)
-    : format(format), updateRequestRingBuffer(arena, maxCopies),
-      feedbackRingBuffer(arena, maxFeedback)
+    : format(format), updateRequestRingBuffer(arena, maxCopies)
 {
     string shaderName = "../src/shaders/update_page_tables.spv";
     string data       = OS_ReadFile(arena, shaderName);
@@ -1210,6 +1227,8 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
 
     descriptorSetLayout = {};
     descriptorSetLayout.AddBinding(0, DescriptorType::StorageBuffer,
+                                   VK_SHADER_STAGE_COMPUTE_BIT);
+    descriptorSetLayout.AddBinding(1, DescriptorType::StorageBuffer,
                                    VK_SHADER_STAGE_COMPUTE_BIT);
     push     = PushConstant(ShaderStage::Compute, 0, sizeof(PageTableUpdatePushConstant));
     pipeline = device->CreateComputePipeline(&shader, &descriptorSetLayout, &push);
@@ -1233,12 +1252,13 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
     // Allocate cpu page table
     cpuPageHashTable =
         StaticArray<Vec3u>(arena, MAX_LEVEL * (1u << 20u), MAX_LEVEL * (1u << 20u));
-    MemorySet(cpuPageHashTable.data, 0xff, sizeof(Vec3u) * MAX_LEVEL * (1u << 20u));
+    MemorySet(cpuPageHashTable.data, 0xff, sizeof(HashTableEntry) * MAX_LEVEL * (1u << 20u));
 
     Assert(IsPow2(physicalTextureWidth) && IsPow2(physicalTextureHeight));
     numPhysPagesWidth  = physicalTextureWidth / PAGE_WIDTH;
     numPhysPagesHeight = physicalTextureHeight / PAGE_WIDTH;
 
+    // Slabs
     {
         numPools = Min(numPools, limits.maxNumLayers);
         Assert(physicalTextureWidth <= limits.max2DImageDim);
@@ -1246,49 +1266,37 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
         physicalTextureWidth  = Min(physicalTextureWidth, limits.max2DImageDim);
         physicalTextureHeight = Min(physicalTextureHeight, limits.max2DImageDim);
 
-        const u32 numPhysicalPages = 2 + numPools * numPhysPagesWidth * numPhysPagesHeight;
-        physicalPages              = StaticArray<PhysicalPage>(arena, numPhysicalPages);
+        numSlabs = physicalTextureWidth * physicalTextureHeight * GetFormatSize(format) *
+                   numPools / slabSize;
+        slabs    = StaticArray<Slab>(arena, numSlabs);
+        texArena = ArenaAlloc();
 
-        for (int i = 0; i < numPools; i++)
+        u32 slabTexelWidth =
+            Sqrt(slabSize / GetFormatSize(format)) * Sqr(GetBlockSize(format));
+        u32 numSlabsX = physicalTextureWidth / slabTexelWidth;
+        u32 numSlabsY = physicalTextureHeight / slabTexelWidth;
+        for (u32 layerIndex = 0; layerIndex < numPools; layerIndex++)
         {
-            for (int y = 0; y < numPhysPagesHeight; y++)
+            for (u32 slabIndexY = 0; slabIndexY < numSlabsY; slabIndexY++)
             {
-                for (int x = 0; x < numPhysPagesWidth; x++)
+                for (u32 slabIndexX = 0; slabIndexX < numSlabsX; slabIndexX++)
                 {
-                    PhysicalPage page = {};
-                    page.page         = Vec2u(x, y);
-                    page.layer        = i;
-                    page.prevPage     = -1;
-                    page.nextPage     = -1;
-                    physicalPages.Push(page);
+                    Slab slab           = {};
+                    slab.physicalOffset = Vec3u(slabIndexX * slabTexelWidth,
+                                                slabIndexY * slabTexelWidth, layerIndex);
+                    slabs.Push(slab);
                 }
             }
         }
 
-        u32 pageSentinelIndex = physicalPages.size();
-        int headIndex         = pageSentinelIndex++;
-        int tailIndex         = pageSentinelIndex++;
+        lruHead = 0;
+        lruTail = 1;
 
-        PhysicalPage head;
-        head.nextPage = tailIndex;
-        head.prevPage = -1;
-        PhysicalPage tail;
-        tail.nextPage = -1;
-        tail.prevPage = headIndex;
-
-        physicalPages.push_back(head);
-        physicalPages.push_back(tail);
-
-        lruHead = headIndex;
-        lruTail = tailIndex;
-
-        freePage = 0;
-        // Allocate texture arrays
-        ImageDesc poolDesc(ImageType::Array2D, physicalTextureWidth, physicalTextureHeight, 1,
-                           1, numPools, format, MemoryUsage::GPU_ONLY,
-                           VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
-        gpuPhysicalPool = device->CreateImage(
-            poolDesc, -1, QueueFlag_Copy | QueueFlag_Compute | QueueFlag_Graphics);
+        HashTableEntry entry      = {};
+        entry.lruNext             = lruTail;
+        cpuPageHashTable[lruHead] = entry;
+        entry.lruPrev             = lruHead;
+        cpuPageHashTable[lruTail] = entry;
     }
 
     // Instantiate streaming system
@@ -1357,6 +1365,66 @@ u32 VirtualTextureManager::AllocateVirtualPages(Arena *arena, string filename,
     textureInfo.push_back(texInfo);
 
     return textureInfo.size() - 1;
+}
+
+Vec3u VirtualTextureManager::AllocateMemory(int logWidth, int logHeight)
+{
+    // Minimum size of entry is 16x16 texels
+    int indexX = logWidth;
+    int indexY = logHeight;
+
+    int slabHead  = caches[indexX][indexY];
+    int slabIndex = slabHead;
+
+    while (slabIndex != -1)
+    {
+        Slab &slab = slabs[slabIndex];
+        if (slab.freeList.Length())
+        {
+            Vec2u loc = slab.freeList.Pop();
+            Vec3u result(loc, slab.physicalOffset.z);
+            return result;
+        }
+        slabIndex = slab.next;
+    }
+    Assert(slabIndex == -1);
+
+    int blockShift   = GetBlockShift(format);
+    u32 formatSize   = GetFormatSize(format);
+    int newLogWidth  = Max(logWidth - blockShift, 0);
+    int newLogHeight = Max(logHeight - blockShift, 0);
+    u32 sizeX        = (1u << newLogWidth);
+    u32 sizeY        = (1u << newLogHeight);
+
+    slabIndex           = numSlabs++;
+    u32 sqrtNumEntries  = Sqrt(slabSize / (sizeX * sizeY * formatSize));
+    Slab &slab          = slabs[slabIndex];
+    slab.sqrtNumEntries = sqrtNumEntries;
+    slab.freeList       = StaticArray<Vec2u>(texArena, Sqr(sqrtNumEntries));
+    for (u32 entryY = 0; entryY < sqrtNumEntries; entryY++)
+    {
+        for (u32 entryX = 0; entryX < sqrtNumEntries; entryX++)
+        {
+            Vec2u offset(entryX * sizeX * formatSize, entryY * sizeY * formatSize);
+            slab.freeList.Push(offset);
+        }
+    }
+    slab.next              = slabHead;
+    caches[indexX][indexY] = slabIndex;
+
+    Vec2u offset = slab.freeList.Pop();
+    Vec3u result(offset, slab.physicalOffset.z);
+
+    return result;
+}
+
+u64 VirtualTextureManager::CalculateHash(u32 textureIndex, u32 faceIndex, u32 mipLevel,
+                                         u32 tileIndex)
+{
+    u64 bitsToHash = (u64)textureIndex | ((u64)tileIndex << 16) | ((u64)faceID << 32) |
+                     ((u64)mipLevel << 60);
+    u64 hash = MixBits(bitsToHash);
+    return hash;
 }
 
 u32 VirtualTextureManager::UpdateHash(Vec3u packed, u64 hash)
@@ -1544,24 +1612,482 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *tra
     transferCmd->SignalOutsideFrame(uploadSemaphores[currentBuffer]);
     computeCmd->Wait(uploadSemaphores[currentBuffer]);
 
-    // Write last frame's feedback buffer
-    if (device->frameCount >= 2)
-    {
-        u32 numFeedbackRequests = ((u32 *)feedbackBuffers[currentBuffer].mappedPtr)[0];
-        Vec2u *feedbackRequests =
-            PushArrayNoZero(scratch.temp.arena, Vec2u, numFeedbackRequests);
+    // somehow loop over all pending requests
+    u32 numFeedbackRequests = ((u32 *)feedbackBuffers[currentBuffer].mappedPtr)[0];
+    Vec2u *feedbackRequests = PushArrayNoZero(scratch.temp.arena, Vec2u, numFeedbackRequests);
 
-        BeginMutex(&feedbackMutex);
-        feedbackRingBuffer.WriteWithOverwrite(
-            (Vec2u *)((u32 *)feedbackBuffers[currentBuffer].mappedPtr + 1),
-            numFeedbackRequests);
-        EndMutex(&feedbackMutex);
+    // Process feedback requests
+    int textureFeedbackRequest = TIMED_CPU_RANGE_BEGIN();
+    StaticArray<FeedbackRequest> compactedFeedbackRequests(scratch.temp.arena,
+                                                           numFeedbackRequests);
+    u32 hashMapSize = NextPowerOfTwo(numFeedbackRequests);
+    HashIndex pageHashMap(scratch.temp.arena, hashMapSize, hashMapSize);
+
+    // Compact feedback
+    for (int requestIndex = 0; requestIndex < numFeedbackRequests; requestIndex++)
+    {
+        Vec2u &feedbackRequest = feedbackRequests[requestIndex];
+        u32 textureIndex       = BitFieldExtractU32(feedbackRequest.x, 16, 0);
+        u32 tileIndex          = BitFieldExtractU32(feedbackRequest.x, 16, 16);
+        u32 faceID             = BitFieldExtractU32(feedbackRequest.y, 28, 0);
+        u32 mipLevel           = BitFieldExtractU32(feedbackRequest.y, 4, 28);
+
+        u64 packed = ((u64)feedbackRequest.y << 32u) | ((u64)feedbackRequest.x);
+        i32 hash   = (i32)MixBits(packed);
+
+        bool found = false;
+        for (int index = pageHashMap.FirstInHash(hash); index != -1;
+             index     = pageHashMap.NextInHash(index))
+        {
+            FeedbackRequest &fr = compactedFeedbackRequests[index];
+
+            if (fr.packedFeedbackInfo == feedbackRequest)
+            {
+                compactedFeedbackRequests[index].count++;
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+        {
+            u32 index = compactedFeedbackRequests.size();
+            FeedbackRequest request;
+            request.packedFeedbackInfo = feedbackRequest;
+            request.count              = 1;
+            compactedFeedbackRequests.push_back(request);
+            Assert(index == 0 || request.packedFeedbackInfo !=
+                                     compactedFeedbackRequests[index - 1].packedFeedbackInfo);
+            pageHashMap.AddInHash(hash, index);
+        }
     }
 
+    u32 numCompacted = compactedFeedbackRequests.size();
+
+    int lruUsed = -1;
+    // If requested page is resident Update LRU. Otherwise
+    for (int requestIndex = 0; requestIndex < compactedFeedbackRequests.size(); requestIndex++)
+    {
+        FeedbackRequest fr    = compactedFeedbackRequests[requestIndex];
+        Vec2u feedbackRequest = fr.packedFeedbackInfo;
+        u32 textureIndex      = BitFieldExtractU32(feedbackRequest.x, 16, 0);
+        u32 tileIndex         = BitFieldExtractU32(feedbackRequest.x, 16, 16);
+        u32 faceID            = BitFieldExtractU32(feedbackRequest.y, 28, 0);
+        u32 mipLevel          = BitFieldExtractU32(feedbackRequest.y, 4, 28);
+
+        TextureInfo &texInfo = textureInfo[textureIndex];
+
+        u64 bitsToHash = (u64)textureIndex | ((u64)mipLevel << 16) | ((u64)faceID << 32);
+        u64 hash       = MixBits(bitsToHash);
+
+        Vec3u packed;
+        int entryIndex = GetInHash(hash, textureIndex, mipLevel, faceID, packed);
+
+        // Move to head of LRU if requested page is already resident
+        if (entryIndex != -1)
+        {
+            HashTableEntry &entry = cpuPageHashTable[entryIndex];
+            lruUsed               = lruUsed == -1 ? entryIndex : lruUsed;
+            if (entry.lruNext != -1 && entry.lruPrev != -1)
+            {
+                UnlinkLRU(entryIndex);
+                LinkLRU(entryIndex);
+            }
+        }
+        // Otherwise, page needs to be mapped
+        else
+        {
+            compactedFeedbackRequests[numNonResidentFeedback++] = fr;
+        }
+    }
+    compactedFeedbackRequests.size() = numNonResidentFeedback;
+
+    Print("Num feedback: %u, num compacted: %u, num non resident: %u\n", numFeedbackRequests,
+          numCompacted, numNonResidentFeedback);
+
+    StaticArray<PageTableUpdateRequest> evictRequests(scratch.temp.arena,
+                                                      numNonResidentFeedback);
+
+    for (FeedbackRequest fr : compactedFeedbackRequests)
+    {
+        Vec2u feedbackRequest = fr.packedFeedbackInfo;
+        u32 textureIndex      = BitFieldExtractU32(feedbackRequest.x, 16, 0);
+        u32 tileIndex         = BitFieldExtractU32(feedbackRequest.x, 16, 16);
+        u32 faceID            = BitFieldExtractU32(feedbackRequest.y, 28, 0);
+        u32 mipLevel          = BitFieldExtractU32(feedbackRequest.y, 4, 28);
+
+        TextureInfo &texInfo = textureInfo[textureIndex];
+        Ptex::String error;
+        Ptex::PtexTexture *t = cache->get((char *)texInfo.filename.str, error);
+        Assert(t);
+        Ptex::FaceInfo fi = t->getFaceInfo(faceID);
+
+        Assert(mipLevel >= fi.res.ulog2 && mipLevel >= fi.res.vlog2);
+        int log2Width  = fi.res.ulog2 - mipLevel;
+        int log2Height = fi.res.vlog2 - mipLevel;
+
+        bool allocated = AllocateMemory(log2Width, log2Height);
+
+        int entryIndex = -1;
+        if (!allocated)
+        {
+            for (;;)
+            {
+                int entryToEvict = cpuPageHashTable[lruTail].lruPrev;
+                if (entryToEvict == lruUsed)
+                {
+                    ErrorExit(0, "Ran out of entries in the LRU\n");
+                    break;
+                }
+
+                UnlinkLRU(entryToEvict);
+                HashTableEntry &entry = cpuPageHashTable[entryToEvict];
+                Slab &slab            = slabs[entry.slabIndex];
+                int minDim            = Min(log2Width, log2Height);
+                int maxDim            = Max(log2Width, log2Height);
+                if (slab.log2Width == maxDim && slab.log2Height == minDim)
+                {
+                    PageTableUpdateRequest evictRequest;
+                    evictRequest.packed    = Vec3u(~0u);
+                    evictRequest.hashIndex = entryToEvict;
+                    evictRequests.push_back(evictRequest);
+
+                    entryIndex = entryToEvict;
+                    break;
+                }
+            }
+        }
+    }
+
+    Array<PageTableUpdateRequest> mapRequests(scratch.temp.arena, numNonResidentFeedback);
+
+    // TODO:
+    // 1. submit the feedback requests + their destination addresuse to a ring buffer
+    // 2. start worker threads that read some amount of requests, load the data requested and
+    // submit. small allocations are not submitted and instead written back to another ring
+    // buffer accessed by the host. a semaphore is also written back.
+    // 3. after submitting the data, the threads write back small allocation data
+    // 4. in main loop, go through the ring buffer, and if the semaphore is signaled
+    // process the small allocations, and also update the gpu hash table for all mapped entries
+    // 5. if there isn't enough space to put on ring buffer, don't write the entries
+
+    u32 chosenSubmissionIndex = ~0u;
+    for (u32 submissionIndex = 0; submissionIndex < gpuSubmissionStates.Length();
+         submissionIndex++)
+    {
+        GPUSubmissionState &state = gpuSubmissionStates[submissionIndex];
+        for (u32 infoIndex = currentInfoIndex; infoIndex < state.slabAllocInfos.Length();
+             infoIndex++)
+        {
+        }
+        u64 semValue = device->GetSemaphoreValue(gpuSubmissionStates[submissionIndex].sem);
+        if (semValue == gpuSubmissionStates[submissionIndex].sem.signalValue)
+        {
+            chosenSubmissionIndex =
+                chosenSubmissionIndex == ~0u ? submissionIndex : chosenSubmissionIndex;
+
+            for (SlabAllocInfo &info : state.slabAllocInfos)
+            {
+                u64 hash = MixBits((u64)feedbackRequest.x | ((u64)feedbackRequest.y));
+                UpdateHash(
+            }
+
+            for (SmallAllocation &smallAlloc : state.smallAllocs)
+            {
+            }
+
+            for (GPUBuffer &buffer : state.uploadBuffers)
+            {
+                device->DestroyBuffer(&buffer);
+            }
+            for (Semaphore &sem : state.semaphores)
+            {
+                device->DestroySemaphore(sem);
+            }
+            ArenaClear(state.arena);
+            state.smallAllocCount = 0;
+        }
+    }
+
+    if (evictRequests.Length() * sizeof(PageTableUpdateRequest) > evictRequestUploadBuffer)
+    {
+        if (evictRequestUploadBuffer.size)
+        {
+            device->DestroyBuffer(&evictRequestUploadBuffer);
+            device->DestroyBuffer(&evictRequestBuffer);
+        }
+        evictRequestUploadBuffer = device->CreateBuffer(
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            sizeof(PageTableUpdateRequest) * evictRequests.Length(), MemoryUsage::CPU_TO_GPU);
+        evictRequestBuffer =
+            device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                 sizeof(PageTableUpdateRequest) * evictRequests.Length());
+
+        BufferToBufferCopy copy = {};
+        copy.size = sizeof(PageTableUpdateRequest) * evictRequests.Length());
+        MemoryCopy(evictRequestUploadBuffer.mappedPtr, evictRequests.data, copy.size);
+
+        computeCmd->CopyBuffer(&evictRequestBuffer, &evictRequestUploadBuffer, &copy, 1);
+
+        computeCmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                            VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+        computeCmd->FlushBarriers();
+
+        Print("Evicting %u entries\n", evictRequests.Length());
+
+        PageTableUpdatePushConstant pc;
+        pc.numRequests = evictRequests.Length();
+
+        computeCmd->StartBindingCompute(pipeline, &descriptorSetLayout)
+            .Bind(&evictRequestBuffer)
+            .Bind(&pageHashTableBuffer)
+            .PushConstants(&push, &pc)
+            .End();
+        computeCmd->Dispatch((numRequests + 63) >> 6, 1, 1);
+        computeCmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                            VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+        computeCmd->FlushBarriers();
+    }
+
+    // TIMED_RANGE_END(textureFeedbackRequest);
+
+    if (submissionIndex == gpuSubmissionStates.Length()) return;
+
+    u32 totalNumRequests = compactedFeedbackRequests.Length();
+
+    // Calculate size of upload buffer
+    int calculateUploadBufferSizeIndex = TIMED_CPU_RANGE_BEGIN();
+    u32 blockShift                     = GetBlockShift(format);
+    u32 formatSize                     = GetFormatSize(format);
+    u32 totalSize                      = 0;
+    // TIMED_RANGE_END(calculateUploadBufferSizeIndex);
+
+    // Dispatch worker threads to upload data to GPU
+    ParallelForNoWait(
+        0, totalNumRequests, 1024, [&, submissionIndex](u32 jobID, u32 start, u32 count) {
+            GPUSubmissionState &state = gpuSubmissionStates[submissionIndex];
+
+            ScratchArena scratch;
+            ChunkedLinkedList<u8> data(scratch.temp.arena);
+
+            CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Copy);
+
+            struct GPUTextureSubmitInfo
+            {
+                u32 slabIndex;
+                u32 layerIndex;
+                u32 bufferOffset;
+                u32 width;
+                u32 height;
+            };
+
+            StaticArray<GPUTextureSubmitInfo> submitInfos(scratch.temp.arena, count);
+
+            for (u32 requestIndex = start; requestIndex < start + count; requestIndex++)
+            {
+                SlabAllocInfo &slabAllocInfo = state.slabAllocInfos[requestIndex];
+                FeedbackRequest &fr          = slabAllocInfo.feedbackRequest;
+
+                Vec2u feedbackRequest = fr.packedFeedbackInfo;
+                u32 textureIndex      = BitFieldExtractU32(feedbackRequest.x, 16, 0);
+                u32 tileIndex         = BitFieldExtractU32(feedbackRequest.x, 16, 16);
+                u32 faceID            = BitFieldExtractU32(feedbackRequest.y, 28, 0);
+                u32 mipLevel          = BitFieldExtractU32(feedbackRequest.y, 4, 28);
+
+                TextureInfo &texInfo = textureInfo[textureIndex];
+
+                Ptex::String error;
+                Ptex::PtexTexture *t = cache->get((char *)texInfo.filename.str, error);
+                Ptex::FaceInfo fi    = t->getFaceInfo(faceID);
+
+                Assert(mipLevel <= fi.res.ulog2);
+                Assert(mipLevel <= fi.res.vlog2);
+
+                int log2Width  = fi.res.ulog2 - mipLevel;
+                int log2Height = fi.res.vlog2 - mipLevel;
+                Ptex::Res res(fi.res.ulog2 - mipLevel, fi.res.vlog2 - mipLevel);
+                SlabAllocInfo slabAllocInfo = AllocateMemory(log2Width, log2Height);
+
+                Slab &slab = slabs[slabAllocInfo.slabIndex];
+                slab.image;
+
+                Assert(t);
+                Ptex::PtexPtr<Ptex::PtexFaceData> d(t->getData(faceID, res));
+
+                u32 numChannels     = ptx->numChannels();
+                u32 bytesPerChannel = Ptex::DataSize(ptx->dataType());
+                u32 bytesPerPixel   = numChannels * bytesPerChannel;
+                int stride          = fi.res.u() * bytesPerPixel;
+                int size            = stride * fi.res.v();
+
+                char *buffer = PushArrayNoZero(scratch.temp.arena, char, size);
+
+                if (d->isConstant())
+                {
+                    Ptex::PtexUtils::fill(d->getData(), buffer, stride, res.u(), res.v(),
+                                          bytesPerPixel);
+                }
+                else if (d->isTiled())
+                {
+                    // loop over tiles
+                    Ptex::Res tileres = d->tileRes();
+                    int ntilesu       = res.ntilesu(tileres);
+                    int ntilesv       = res.ntilesv(tileres);
+
+                    u32 tileU = tileIndex % ntilesu;
+                    u32 tileV = tileIndex / ntilesu;
+                    Assert(tileU < ntilesu);
+                    Assert(tileV < ntilesv);
+
+                    int tileures     = tileres.u();
+                    int tilevres     = tileres.v();
+                    int tilerowlen   = bytesPerPixel * tileures;
+                    int tile         = 0;
+                    char *dsttilerow = (char *)buffer;
+                    char *dsttile    = dsttilerow;
+
+                    Ptex::PtexPtr<Ptex::PtexFaceData> t(d->getTile(tileIndex));
+                    if (t->isConstant())
+                        Ptex::PtexUtils::fill(t->getData(), dsttile, stride, tileures,
+                                              tilevres, bytesPerPixel);
+                    else
+                        Ptex::PtexUtils::copy(t->getData(), tilerowlen, dsttile, stride,
+                                              tilevres, tilerowlen);
+                }
+                else
+                {
+                    Ptex::PtexUtils::copy(d->getData(), rowlen, buffer, stride, res.v(),
+                                          rowlen);
+                }
+
+                PaddedImg currentFaceImg;
+                currentFaceImg.contents         = 0;
+                currentFaceImg.width            = res.u();
+                currentFaceImg.height           = res.v();
+                currentFaceImg.log2Width        = res.ulog2;
+                currentFaceImg.log2Height       = res.vlog2;
+                currentFaceImg.bytesPerPixel    = bytesPerPixel;
+                currentFaceImg.strideNoBorder   = res.u() * bytesPerPixel;
+                currentFaceImg.borderSize       = 0;
+                currentFaceImg.strideWithBorder = result.strideNoBorder;
+
+                u32 bufferOffset = data.Length();
+                if (ptx->alphaChannel() == -1)
+                {
+                    currentFaceImg.contents = PushArrayNoZero(scratch.temp.arena, char, size);
+                    u32 dstBytesPerPixel    = GetFormatSize(format);
+
+                    auto *node = data.AddNode(size);
+
+                    u32 dstOffset = 0;
+                    u32 srcOffset = 0;
+                    u8 alpha      = 255;
+                    for (int i = 0; i < result.GetPaddedWidth() * result.GetPaddedHeight();
+                         i++)
+                    {
+                        MemoryCopy(finalBuffer + dstOffset, buffer + srcOffset, bytesPerPixel);
+                        MemorySet(finalBuffer + dstOffset + bytesPerPixel, alpha,
+                                  bytesPerChannel);
+                        dstOffset += dstBytesPerPixel;
+                        srcOffset += bytesPerPixel;
+                    }
+                    bytesPerPixel = dstBytesPerPixel;
+                }
+                else
+                {
+                    currentFaceImg.contents = buffer;
+                }
+
+                if (res.u() < res.v())
+                {
+                    PaddedImage img = currentFaceImg;
+                    img.contents    = PushArray(scratch.temp.arena, u8, size);
+                    Swap(img.width, img.height);
+                    Swap(img.log2Width, img.log2Height);
+                    img.strideNoBorder   = img.width * img.bytesPerPixel;
+                    img.strideWithBorder = img.GetPaddedWidth() * img.bytesPerPixel;
+                    img.WriteRotated(currentFaceImg, Vec2u(0, 0), Vec2u(0, 0), 1,
+                                     currentFaceImg.GetPaddedHeight(),
+                                     currentFaceImg.GetPaddedWidth(),
+                                     currentFaceImg.GetPaddedWidth(),
+                                     currentFaceImg.GetPaddedHeight(), Vec2u(0, 0));
+
+                    currentFaceImg = img;
+                }
+                t->release();
+
+                if (currentFaceImg.height < 16)
+                {
+                    char *out = PushArrayNoZero(state.arena, char, size);
+                    MemoryCopy(out, currentFaceImg.contents, size);
+                    u32 smallAllocIndex =
+                        state.smallAllocCount.fetch_add(1, std::memory_order_relaxed);
+                    SmallAllocation smallAlloc;
+                    smallAlloc.info   = state.slabAllocInfos[requestIndex];
+                    smallAlloc.buffer = out;
+
+                    state.smallAllocs[smallAllocIndex] = smallAlloc;
+                }
+                else
+                {
+                    auto *node = data.AddNode(size);
+                    MemoryCopy(node->values, currentFaceImg.contents, size);
+
+                    GPUTextureSubmitInfo submitInfo;
+                    submitInfo.slabIndex    = slabAllocInfo.slabIndex;
+                    submitInfo.layerIndex   = slabAllocInfo.layerIndex;
+                    submitInfo.bufferOffset = bufferOffset;
+                    submitInfo.width        = currentFaceImg.width;
+                    submitInfo.height       = currentFaceImg.height;
+                }
+            }
+
+            for (GPUTextureSubmitInfo &info : submitInfos)
+            {
+                Slab &slab = slabs[info.slabIndex];
+                cmd->Barrier(&slab.image, VK_IMAGE_LAYOUT_UNDEFINED,
+                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_NONE,
+                             VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_NONE,
+                             VK_ACCESS_2_TRANSFER_WRITE_BIT, QueueType_Ignored,
+                             QueueType_Ignored, 0, ~0u, info.layerIndex, 1);
+            }
+            cmd->FlushBarriers();
+
+            GPUBuffer &uploadBuffer = state.uploadBuffer[jobID];
+            if (uploadBuffer.size < data.Length())
+            {
+                if (uploadBuffer.size)
+                {
+                    device->DestroyBuffer(uploadBuffer);
+                }
+                uploadBuffer = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                                    data.Length(), MemoryUsage::CPU_TO_GPU)
+            }
+            data.Flatten((u8 *)uploadBuffer.mappedPtr);
+
+            for (GPUTextureSubmitInfo &info : submitInfos)
+            {
+                BufferImageCopy copy = {};
+                copy.bufferOffset    = info.bufferOffset;
+                copy.baseLayer       = info.layerIndex;
+                copy.layerCount      = 1;
+                copy.offset          = Vec3i(0);
+                copy.extent          = Vec3u(info.width, info.height, 1);
+                cmd->CopyImage(&uploadBuffer, &slab.image, &copy, 1);
+            }
+
+            device->SubmitCommandBuffer(cmd, false, true);
+        });
+
+#if 0
     u64 readIndex  = readSubmission.load(std::memory_order_relaxed);
     u64 writeIndex = writeSubmission.load(std::memory_order_acquire);
     Assert(readIndex <= writeIndex);
     if (readIndex == writeIndex) return;
+
+    u64 semaphoreValue = device->GetSemaphoreValue(submissionSemaphore[readIndex]);
+    if (readIndex >= semaphoreValue - 1) return;
 
     u32 numRequests                        = 0;
     PageTableUpdateRequest *updateRequests = updateRequestRingBuffer.SynchronizedRead(
@@ -1659,27 +2185,28 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *tra
 
     // Make sure all memory writes are visible
     readSubmission.store(readIndex + 1, std::memory_order_release);
+#endif
 }
 
-void VirtualTextureManager::UnlinkLRU(int pageIndex)
+void VirtualTextureManager::UnlinkLRU(int entryIndex)
 {
-    PhysicalPage &page = physicalPages[pageIndex];
-    Assert(page.prevPage != -1 && page.nextPage != -1);
+    HashTableEntry &entry = cpuPageHashTable[entryIndex];
+    Assert(entry.lruPrev != -1 && entry.lruNext != -1);
 
-    int prevPage                     = page.prevPage;
-    int nextPage                     = page.nextPage;
-    physicalPages[prevPage].nextPage = nextPage;
-    physicalPages[nextPage].prevPage = prevPage;
+    int prevEntry                       = entry.lruPrev;
+    int nextEntry                       = entry.lruNext;
+    cpuPageHashTable[prevEntry].lruNext = nextEntry;
+    cpuPageHashTable[nextEntry].lruPrev = prevEntry;
 }
 
 void VirtualTextureManager::LinkLRU(int index)
 {
-    int nextPage                  = physicalPages[lruHead].nextPage;
-    physicalPages[index].nextPage = nextPage;
-    physicalPages[index].prevPage = lruHead;
+    int nextEntry                   = cpuPageHashTable[lruHead].lruNext;
+    cpuPageHashTable[index].lruNext = nextEntry;
+    cpuPageHashTable[index].lruPrev = lruHead;
 
-    physicalPages[nextPage].prevPage = index;
-    physicalPages[lruHead].nextPage  = index;
+    cpuPageHashTable[nextEntry].prevPage = index;
+    cpuPageHashTable[index].lruNext      = index;
 }
 
 // Executes on virtual texture thread
@@ -1689,13 +2216,6 @@ void VirtualTextureManager::Callback()
     {
         u32 sortKey;
         u32 requestIndex;
-    };
-
-    struct FeedbackRequest
-    {
-        Vec2u packedFeedbackInfo;
-        u32 hashIndex;
-        u32 count;
     };
 
     const u32 blockShift    = GetBlockShift(format);
@@ -1724,108 +2244,6 @@ void VirtualTextureManager::Callback()
             continue;
         }
 
-        StaticArray<FeedbackRequest> compactedFeedbackRequests(scratch.temp.arena,
-                                                               numFeedbackRequests);
-
-        u32 hashMapSize = NextPowerOfTwo(numFeedbackRequests);
-        HashIndex pageHashMap(scratch.temp.arena, hashMapSize, hashMapSize);
-
-        // Compact feedback
-        for (int requestIndex = 0; requestIndex < numFeedbackRequests; requestIndex++)
-        {
-            Vec2u &feedbackRequest = feedbackRequests[requestIndex];
-            u32 textureIndex       = feedbackRequest.x & 0xffff;
-            u32 mipLevel           = feedbackRequest.x >> 16;
-            u32 faceID             = feedbackRequest.y;
-
-            u64 packed = ((u64)faceID << 32u) | (mipLevel << 16u) | textureIndex;
-            i32 hash   = (i32)MixBits(packed);
-
-            bool found = false;
-            for (int index = pageHashMap.FirstInHash(hash); index != -1;
-                 index     = pageHashMap.NextInHash(index))
-            {
-                FeedbackRequest &fr = compactedFeedbackRequests[index];
-
-                if (fr.packedFeedbackInfo == feedbackRequest)
-                {
-                    compactedFeedbackRequests[index].count++;
-                    found = true;
-                    break;
-                }
-            }
-            if (!found)
-            {
-                u32 index = compactedFeedbackRequests.size();
-                FeedbackRequest request;
-                request.packedFeedbackInfo = feedbackRequest;
-                request.count              = 1;
-                compactedFeedbackRequests.push_back(request);
-                Assert(index == 0 ||
-                       request.packedFeedbackInfo !=
-                           compactedFeedbackRequests[index - 1].packedFeedbackInfo);
-                pageHashMap.AddInHash(hash, index);
-            }
-        }
-
-        u32 numCompacted = compactedFeedbackRequests.size();
-
-        StaticArray<u32> pagesUsedThisFrame(scratch.temp.arena,
-                                            compactedFeedbackRequests.size());
-
-        // If requested page is resident Update LRU. Otherwise
-        for (int requestIndex = 0; requestIndex < compactedFeedbackRequests.size();
-             requestIndex++)
-        {
-            FeedbackRequest fr    = compactedFeedbackRequests[requestIndex];
-            Vec2u feedbackRequest = fr.packedFeedbackInfo;
-            u32 textureIndex      = feedbackRequest.x & 0xffff;
-            u32 mipLevel          = feedbackRequest.x >> 16;
-            u32 faceID            = feedbackRequest.y;
-
-            TextureInfo &texInfo = textureInfo[textureIndex];
-
-            u64 bitsToHash = (u64)textureIndex | ((u64)mipLevel << 16) | ((u64)faceID << 32);
-            u64 hash       = MixBits(bitsToHash);
-
-            Vec3u packed;
-            int entryIndex = GetInHash(hash, textureIndex, mipLevel, faceID, packed);
-
-            // Move to head of LRU if requested page is already resident
-            if (entryIndex != -1)
-            {
-                u32 layer;
-                Vec4u data        = UnpackPageTableEntry(packed.z, layer);
-                u32 physicalPageX = data.x;
-                u32 physicalPageY = data.y;
-
-                int pageIndex = layer * Sqr(numPhysPagesWidth) +
-                                physicalPageY * numPhysPagesWidth + physicalPageX;
-
-                // If page is not pinned, move to head of LRU
-                PhysicalPage &page = physicalPages[pageIndex];
-                if (!page.usedThisFrame)
-                {
-                    pagesUsedThisFrame.push_back(pageIndex);
-                    page.usedThisFrame = true;
-                }
-                if (page.nextPage != -1 && page.prevPage != -1)
-                {
-                    UnlinkLRU(pageIndex);
-                    LinkLRU(pageIndex);
-                }
-            }
-            // Otherwise, page needs to be mapped
-            else
-            {
-                compactedFeedbackRequests[numNonResidentFeedback++] = fr;
-            }
-        }
-        compactedFeedbackRequests.size() = numNonResidentFeedback;
-
-        Print("Num feedback: %u, num compacted: %u, num non resident: %u\n",
-              numFeedbackRequests, numCompacted, numNonResidentFeedback);
-
         u32 writeDoubleBufferIndex = writeIndex & 1;
 
         StaticArray<BufferImageCopy> copies(scratch.temp.arena, numNonResidentFeedback);
@@ -1841,10 +2259,12 @@ void VirtualTextureManager::Callback()
 
         if (freePage >= physicalPages.size())
         {
+            Assert(0);
             Print("Evicting %u pages\n", numNonResidentFeedback);
         }
 
         // Evict to make space for new entries while populating feedback buffer
+        CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Copy);
         for (FeedbackRequest fr : compactedFeedbackRequests)
         {
             Vec2u feedbackRequest = fr.packedFeedbackInfo;
@@ -1852,6 +2272,8 @@ void VirtualTextureManager::Callback()
             u32 virtualPageY      = feedbackRequest.x >> 16;
             u32 textureIndex      = feedbackRequest.y & 0x00ffffff;
             u32 mipLevel          = feedbackRequest.y >> 24;
+            u32 faceID            = 0;
+            u32 tileIndex         = 0;
 
             TextureInfo &texInfo = textureInfo[textureIndex];
             Assert(mipLevel < texInfo.metadata.numLevels);
@@ -1864,6 +2286,7 @@ void VirtualTextureManager::Callback()
             u32 sqrtLevelNumPages = std::sqrt(levelNumPages);
 
             // If there are still blank entries in the physical pools, then map those
+            // TODO IMPORTANT
 
             u32 pageIndex = ~0u;
             if (freePage < physicalPages.size())
@@ -1883,49 +2306,43 @@ void VirtualTextureManager::Callback()
                 // Replace previously mapped entry with a coarser mip
 
                 UnlinkLRU(pageIndex);
-
-                PageTableUpdateRequest evictRequest;
-                evictRequest.packed    = Vec3u(~0u);
-                evictRequest.hashIndex = ? ;
-                evictRequests.push_back(evictRequest);
             }
 
             Assert(pageIndex != ~0u);
 
-            const Vec2u globalVirtualPage =
-                (texInfo.baseVirtualPage >> mipLevel) + Vec2u(virtualPageX, virtualPageY);
-
             PhysicalPage &page = physicalPages[pageIndex];
-            page.virtualPage   = globalVirtualPage;
+            page.virtualPage   = 0;
             page.level         = mipLevel;
 
-            u32 mapPackedEntry =
-                PackPageTableEntry(page.page.x, page.page.y, mipLevel, page.layer);
+            u32 mapPackedEntry = 0;
+            // PackPageTableEntry(page.page.x, page.page.y, mipLevel, page.layer);
             // Update CPU page table
 
             LinkLRU(pageIndex);
 
-            BufferImageCopy copy = {};
-            copy.bufferOffset    = uploadBuffer.size();
-            copy.baseLayer       = page.layer;
-            copy.layerCount      = 1;
-            copy.offset = Vec3i(page.page.x << PAGE_SHIFT, page.page.y << PAGE_SHIFT, 0);
-            copy.extent = Vec3u(PAGE_WIDTH, PAGE_WIDTH, 1);
+            // Get the ptex data
+            // benefits:
+            // 1. no offline texture processing
+            // 2. downsides: no block compression... so cache fills up faster
+            // note: #2 may not matter. #1 is a definite benefit...
 
-            copies.push_back(copy);
+            // copies.push_back(copy);
 
-            u32 virtualPage = virtualPageY * sqrtLevelNumPages + virtualPageX;
-            u32 pageOffset  = (levelOffset + virtualPage) * pageByteSize;
+            // u32 virtualPage = virtualPageY * sqrtLevelNumPages + virtualPageX;
+            // u32 pageOffset  = (levelOffset + virtualPage) * pageByteSize;
             MemoryCopy(uploadBuffer.data + uploadBuffer.size(), texInfo.contents + pageOffset,
                        pageByteSize);
             uploadBuffer.size() += pageByteSize;
 
             PageTableUpdateRequest mapRequest;
-            mapRequest.virtualPage = globalVirtualPage;
-            mapRequest.mipLevel    = mipLevel;
-            mapRequest.packed      = mapPackedEntry;
+            mapRequest.hashIndex = 0;
+            mapRequest.packed    = mapPackedEntry;
             mapRequests.push_back(mapRequest);
         }
+        Semaphore &sem  = submissionSemaphore[writeDoubleBufferIndex];
+        sem.signalValue = writeIndex + 1;
+        cmd->SignalOutsideFrame(sem);
+        device->SubmitCommandBuffer(cmd, false, true);
 
         // Write evict requests if present
         if (evictRequests.size())

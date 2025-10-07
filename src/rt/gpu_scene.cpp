@@ -472,19 +472,22 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                                rootScene->ptexTextures.size(),
                                                rootScene->ptexTextures.size());
 
+    ImageDesc testDesc(
+        ImageType::Array2D, 1, 1, 1, 1, 1, VK_FORMAT_R8G8B8A8_SRGB, MemoryUsage::GPU_ONLY,
+        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_TILING_OPTIMAL);
+    GPUImage testImage = device->CreateImage(
+        testDesc, -1, QueueFlag_Copy | QueueFlag_Compute | QueueFlag_Graphics);
+
     VirtualTextureManager virtualTextureManager(
         sceneScratch.temp.arena, 131072, 131072, PHYSICAL_POOL_NUM_PAGES_WIDE * PAGE_WIDTH,
-        PHYSICAL_POOL_NUM_PAGES_WIDE * PAGE_WIDTH, 4, VK_FORMAT_BC1_RGB_UNORM_BLOCK);
+        PHYSICAL_POOL_NUM_PAGES_WIDE * PAGE_WIDTH, 4, VK_FORMAT_R8G8B8A8_SRGB);
 
     CommandBuffer *tileCmd          = device->BeginCommandBuffer(QueueType_Compute);
     Semaphore tileSubmitSemaphore   = device->CreateSemaphore();
     tileSubmitSemaphore.signalValue = 1;
     tileCmd->TransferWriteBarrier(&virtualTextureManager.gpuPhysicalPool);
-    tileCmd->Barrier(&virtualTextureManager.pageTable, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                     VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
     tileCmd->FlushBarriers();
     virtualTextureManager.ClearTextures(tileCmd);
-    tileCmd->UAVBarrier(&virtualTextureManager.pageTable);
     tileCmd->FlushBarriers();
     tileCmd->SignalOutsideFrame(tileSubmitSemaphore);
     device->SubmitCommandBuffer(tileCmd);
@@ -559,11 +562,15 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         Vec3u *pinnedPages = (Vec3u *)tokenizer.cursor;
         Advance(&tokenizer, sizeof(Vec3u) * fileHeader.numPinnedPages);
 
-        u32 allocIndex        = 0;
-        Vec2u baseVirtualPage = virtualTextureManager.AllocateVirtualPages(
-            sceneScratch.temp.arena, textureTemp.filename, fileHeader,
-            Vec2u(fileHeader.virtualSqrtNumPages, fileHeader.virtualSqrtNumPages),
-            tokenizer.cursor, allocIndex);
+        u32 *pinnedPagesOffsets = (u32 *)tokenizer.cursor;
+        Advance(&tokenizer, sizeof(u32) * (fileHeader.numPinnedPages + 1));
+
+        u32 *pinnedPagesData = (u32 *)tokenizer.cursor;
+        Advance(&tokenizer, sizeof(u32) * (pinnedPagesOffsets[fileHeader.numPinnedPages]));
+
+        u32 allocIndex = virtualTextureManager.AllocateVirtualPages(
+            sceneScratch.temp.arena, textureTemp.filename, fileHeader, metaData,
+            tokenizer.cursor);
 
         if (i > 0)
         {
@@ -572,8 +579,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         }
         device->ResetDescriptorPool(0);
         CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Compute);
-        virtualTextureManager.PinPages(cmd, allocIndex, pinnedPages,
-                                       fileHeader.numPinnedPages);
+        virtualTextureManager.PinPages(cmd, allocIndex, pinnedPages, pinnedPagesOffsets,
+                                       pinnedPagesData, fileHeader.numPinnedPages);
         texSemaphore.signalValue++;
         cmd->SignalOutsideFrame(texSemaphore);
         cmd->Barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
@@ -591,8 +598,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         for (int faceIndex = 0; faceIndex < fileHeader.numFaces; faceIndex++)
         {
-            maxVirtualOffset = Max(maxVirtualOffset, metaData[faceIndex].offsetX);
-            maxVirtualOffset = Max(maxVirtualOffset, metaData[faceIndex].offsetY);
+            // TODO IMPORTANT
+            maxVirtualOffset = 0; // Max(maxVirtualOffset, metaData[faceIndex].offsetX);
+            maxVirtualOffset = 0; // Max(maxVirtualOffset, metaData[faceIndex].offsetY);
 
             minLog2Dim = Min(minLog2Dim, metaData[faceIndex].log2Width);
             maxLog2Dim = Max(maxLog2Dim, metaData[faceIndex].log2Width);
@@ -615,10 +623,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         for (int faceIndex = 0; faceIndex < fileHeader.numFaces; faceIndex++)
         {
             FaceMetadata2 &faceMetadata = metaData[faceIndex];
-            WriteBits((u32 *)faceDataStream, faceDataBitOffset, faceMetadata.offsetX,
-                      numVirtualOffsetBits);
-            WriteBits((u32 *)faceDataStream, faceDataBitOffset, faceMetadata.offsetY,
-                      numVirtualOffsetBits);
+            // TODO IMPORTANT
+            WriteBits((u32 *)faceDataStream, faceDataBitOffset, 0, numVirtualOffsetBits);
+            WriteBits((u32 *)faceDataStream, faceDataBitOffset, 0, numVirtualOffsetBits);
             WriteBits((u32 *)faceDataStream, faceDataBitOffset,
                       faceMetadata.log2Width - minLog2Dim, numFaceDimBits);
             WriteBits((u32 *)faceDataStream, faceDataBitOffset,
@@ -679,7 +686,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             {
                 VirtualTextureManager::TextureInfo &texInfo =
                     virtualTextureManager.textureInfo[textureInfo.virtualAddressIndex];
-                material.baseVirtualPage      = texInfo.baseVirtualPage;
                 material.textureIndex         = textureInfo.virtualAddressIndex;
                 material.minLog2Dim           = textureInfo.minLog2Dim;
                 material.numVirtualOffsetBits = textureInfo.numVirtualOffsetBits;
@@ -714,9 +720,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                         VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
     newTileCmd->Barrier(
         &virtualTextureManager.gpuPhysicalPool, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_SHADER_READ_BIT);
-    newTileCmd->Barrier(
-        &virtualTextureManager.pageTable, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_SHADER_READ_BIT);
     newTileCmd->FlushBarriers();
     device->SubmitCommandBuffer(newTileCmd);
@@ -1524,7 +1527,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                       .Bind(image)
                       .Bind(&scene)
                       .Bind(&materialBuffer)
-                      .Bind(&virtualTextureManager.pageTable)
+                      .Bind(&virtualTextureManager.pageHashTableBuffer)
                       .Bind(&virtualTextureManager.gpuPhysicalPool)
                       .Bind(&debug)
                       .Bind(&virtualGeometryManager.clusterPageDataBuffer)

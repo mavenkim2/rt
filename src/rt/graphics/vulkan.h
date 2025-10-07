@@ -1115,6 +1115,7 @@ struct Vulkan
     Swapchain CreateSwapchain(OS_Handle window, VkFormat format, u32 width, u32 height);
     ImageLimits GetImageLimits();
     Semaphore CreateSemaphore();
+    void DestroySemaphore(Semaphore sem);
     void AllocateCommandBuffers(ThreadPool &pool, QueueType type);
     void CheckInitializedThreadPool(int threadIndex);
     CommandBuffer *BeginCommandBuffer(QueueType queue, string name = "Command Buffer");
@@ -1224,6 +1225,7 @@ struct Vulkan
     void EndFrame(int queueType);
 
     bool Wait(Semaphore s, u64 val = UINT64_MAX);
+    u64 GetSemaphoreValue(Semaphore s);
 #ifdef USE_DLSS
     void GetDLSSTargetDimensions(u32 &width, u32 &height);
     DLSSTargets InitializeDLSSTargets(GPUImage *inColor, GPUImage *inDiffuseAlbedo,

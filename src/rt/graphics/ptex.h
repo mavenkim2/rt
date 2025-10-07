@@ -147,14 +147,6 @@ enum EdgeId
     e_max,
 };
 
-struct FaceMetadata
-{
-    u32 bufferOffset;
-    u32 totalSize_rotate;
-    int log2Width;
-    int log2Height;
-};
-
 struct FaceMetadata2
 {
     int neighborFaces[4];
@@ -237,9 +229,17 @@ struct AllocationColumn
     u32 maxPageHeight;
 };
 
+struct FeedbackRequest
+{
+    Vec2u packedFeedbackInfo;
+    u32 hashIndex;
+    u32 count;
+};
+
 struct VirtualTextureManager
 {
     static const u32 InvalidPool = ~0u;
+    static const u32 slabSize    = kilobytes(512);
 
     struct RequestHandle
     {
@@ -255,19 +255,81 @@ struct VirtualTextureManager
         u8 *contents;
     };
 
+    struct Slab
+    {
+        Vec3u physicalOffset;
+        u32 sqrtNumEntries;
+
+        int log2Width;
+        int log2Height;
+        StaticArray<Vec3u> freeList;
+
+        GPUImage image;
+        int next;
+    };
+
+    struct SlabAllocInfo
+    {
+        FeedbackRequest feedbackRequest;
+        Vec2u offset;
+        u32 layerIndex;
+        u32 slabIndex;
+    };
+
+    struct HashTableEntry
+    {
+        u32 textureIndex;
+        u32 faceID;
+        u32 tileIndex;
+        u32 mipLevel;
+
+        int slabIndex;
+        int lruPrev;
+        int lruNext;
+    };
+
+    u32 numSlabs;
+
     // struct Sentinel
     // {
     //     int head;
     //     int tail;
     // };
 
+    Arena *texArena;
     VkFormat format;
 
+    Scheduler::Counter counter = {};
     std::vector<TextureInfo> textureInfo;
-    StaticArray<PhysicalPage> physicalPages;
-    // StaticArray<StaticArray<u32>> cpuPageTable;
 
-    StaticArray<Vec3u> cpuPageHashTable;
+    Semaphore submissionSemaphore[2];
+    StaticArray<StaticArray<int>> caches;
+    StaticArray<Slab> slabs;
+    // StaticArray<PhysicalPage> physicalPages;
+
+    struct SmallAllocation
+    {
+        SlabAllocInfo info;
+        u8 *buffer;
+    };
+
+    struct GPUSubmissionState
+    {
+        Arena *arena;
+        StaticArray<SlabAllocInfo> slabAllocInfos;
+        u32 currentInfoIndex;
+
+        StaticArray<SmallAllocation> smallAllocs;
+        std::atomic<u32> smallAllocCount;
+
+        StaticArray<Semaphore> semaphores;
+        StaticArray<GPUBuffer> uploadBuffers;
+    };
+
+    // Ring buffer
+    StaticArray<GPUSubmissionState> gpuSubmissionStates;
+
+    StaticArray<HashTableEntry> cpuPageHashTable;
 
     u32 numPhysPagesWidth;
     u32 numPhysPagesHeight;
@@ -311,7 +373,10 @@ struct VirtualTextureManager
     // Double buffered, updated once per frame
     FixedArray<Semaphore, numPendingSubmissions> uploadSemaphores;
     FixedArray<GPUBuffer, numPendingSubmissions> uploadDeviceBuffers;
-    FixedArray<TransferBuffer, numPendingSubmissions> pageTableRequestBuffers;
+    // FixedArray<TransferBuffer, numPendingSubmissions> pageTableRequestBuffers;
+
+    GPUBuffer evictRequestBuffer;
+    GPUBuffer evictRequestUploadBuffer;
     std::atomic<u64> readSubmission;
 
     Mutex updateRequestMutex;
@@ -320,15 +385,18 @@ struct VirtualTextureManager
     GPUBuffer pageTableUpdateRequestBuffer;
     GPUBuffer pageTableUpdateRequestUploadBuffer;
 
-    Mutex feedbackMutex;
-    FixedArray<TransferBuffer, 2> feedbackBuffers;
-    RingBuffer<Vec2u> feedbackRingBuffer;
+    // Mutex feedbackMutex;
+    // FixedArray<TransferBuffer, 2> feedbackBuffers;
+    // RingBuffer<Vec2u> feedbackRingBuffer;
 
     VirtualTextureManager(Arena *arena, u32 virtualTextureWidth, u32 virtualTextureHeight,
                           u32 physicalTextureWidth, u32 physicalTextureHeight, u32 numPools,
                           VkFormat format);
-    u32 AllocateVirtualPages(Arena *arena, string filename, const TextureMetadata &metadata,
-                             FaceMetadata2 *faceMetadata, u8 *contents);
+    SlabAllocInfo AllocateVirtualPages(Arena *arena, string filename,
+                                       const TextureMetadata &metadata,
+                                       FaceMetadata2 *faceMetadata, u8 *contents);
+    bool AllocateMemory(int logWidth, int logHeight);
+    u64 CalculateHash(u32 textureIndex, u32 faceIndex, u32 mipLevel, u32 tileIndex);
     u32 UpdateHash(Vec3u packed, u64 hash);
     int GetInHash(u64 hash, u32 textureIndex, u32 mipLevel, u32 faceID, Vec3u &packed);
     void PinPages(CommandBuffer *cmd, u32 textureIndex, Vec3u *pinnedPages, u32 *offsets,
