@@ -245,7 +245,9 @@ enum class SubmissionStatus
 struct VirtualTextureManager
 {
     static const u32 InvalidPool = ~0u;
-    static const u32 slabSize    = kilobytes(512);
+
+    static const u32 log2MaxTileDim = 7u;
+    static const u32 maxTileDim     = (1u << log2MaxTileDim);
 
     struct RequestHandle
     {
@@ -256,15 +258,13 @@ struct VirtualTextureManager
     struct TextureInfo
     {
         string filename;
-        FaceMetadata2 *faceMetadata;
-        TextureMetadata metadata;
-        u8 *contents;
+        // FaceMetadata2 *faceMetadata;
+        // TextureMetadata metadata;
+        // u8 *contents;
     };
 
     struct Slab
     {
-        Vec3u physicalOffset;
-
         int log2Width;
         int log2Height;
 
@@ -310,16 +310,11 @@ struct VirtualTextureManager
         }
     };
 
-    u32 numSlabs;
-
-    // struct Sentinel
-    // {
-    //     int head;
-    //     int tail;
-    // };
-
     Arena *texArena;
     VkFormat format;
+
+    u32 slabSize;
+    u32 maxSize;
 
     Scheduler::Counter counter = {};
     std::vector<TextureInfo> textureInfo;
@@ -371,7 +366,6 @@ struct VirtualTextureManager
     int lruHead;
     int lruTail;
 
-    GPUImage gpuPhysicalPool;
     // GPUImage pageTable;
     GPUBuffer pageHashTableBuffer;
 
@@ -396,11 +390,9 @@ struct VirtualTextureManager
 
     FixedArray<TransferBuffer, 2> feedbackBuffers;
 
-    VirtualTextureManager(Arena *arena, u32 virtualTextureWidth, u32 virtualTextureHeight,
-                          u32 physicalTextureWidth, u32 physicalTextureHeight, u32 numPools,
-                          VkFormat format);
-    u32 AllocateVirtualPages(Arena *arena, string filename, const TextureMetadata &metadata,
-                             FaceMetadata2 *faceMetadata, u8 *contents);
+    VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 maxSize, u32 slabSize,
+                                                 VkFormat format);
+    u32 AllocateVirtualPages(Arena *arena, string filename);
     bool AllocateMemory(int logWidth, int logHeight, SlabAllocInfo &info);
     u64 CalculateHash(u32 textureIndex, u32 faceIndex, u32 mipLevel, u32 tileIndex);
     u32 UpdateHash(HashTableEntry entry, u64 hash);

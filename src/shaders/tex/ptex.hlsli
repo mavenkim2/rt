@@ -46,11 +46,14 @@ namespace Ptex
 {
     struct FaceData 
     {
+#if 0
         int4 neighborFaces;
         uint2 faceOffset;
         uint2 log2Dim;
         uint rotateIndices;
         bool rotate;
+#endif
+        uint2 log2Dim;
     };
 
     int GetNeighborIndexFromUV(inout float2 texCoord, float2 faceDim)
@@ -84,6 +87,7 @@ namespace Ptex
 
     FaceData GetFaceData(GPUMaterial material, uint faceID)
     {
+#if 0
         // Load face data
         uint faceDataStride = 2 * (material.numVirtualOffsetBits + material.numFaceDimBits) + 4 * material.numFaceIDBits + 9;
         uint bufferOffset = faceDataStride * faceID;
@@ -106,7 +110,15 @@ namespace Ptex
 
         const uint shift = 32u - material.numFaceIDBits;
         result.neighborFaces = (result.neighborFaces << shift) >> shift;
+#endif
+        uint2 offsets = GetAlignedAddressAndBitOffset(material.faceOffset + faceID, 0);
+        uint data = faceDataBuffer.Load(offsets.x);
+        uint bits = data >> offsets.y;
 
+        FaceData result;
+        result.log2Dim.x = BitFieldExtractU32(bits, 4, 0);
+        result.log2Dim.y = BitFieldExtractU32(bits, 4, 4);
+        
         return result;
     }
 
@@ -114,6 +126,7 @@ namespace Ptex
 
 float4 StochasticCatmullRomBorderlessHelper(GPUMaterial material, Ptex::FaceData faceData, float2 texCoord, float2 texSize, uint mipLevel, float reservoirWeightSum, int faceID)
 {
+#if 0
     // Lookup adjacency information if necessary
     int neighborIndex = Ptex::GetNeighborIndexFromUV(texCoord, texSize);
     Ptex::FaceData neighborData = faceData;
@@ -132,24 +145,26 @@ float4 StochasticCatmullRomBorderlessHelper(GPUMaterial material, Ptex::FaceData
             neighborData = Ptex::GetFaceData(material, neighborFaceID);
         }
     }
-
     const uint2 faceSize = uint2(1u << neighborData.log2Dim.x, 1u << neighborData.log2Dim.y);
     const int rotateIndex = neighborIndex * 4 + BitFieldExtractU32(faceData.rotateIndices, 2, 2 * max(neighborIndex, 0));
-    float2 newUv = texCoord / texSize;
     newUv = neighborIndex == -1 ? newUv : mul(uvRotations[rotateIndex], float3(newUv.x, newUv.y, 1));
-    newUv = neighborData.rotate ? float2(1 - newUv.y, newUv.x) : newUv;
+#endif
+
+    int neighborIndex = -1;
+    texCoord = clamp(texCoord, 0.5, texSize - 0.5);
+
+    const uint2 faceSize = uint2(1u << faceData.log2Dim.x, 1u << faceData.log2Dim.y);
+
+    uint numTilesU = max(faceSize.x / 128, 1.f);
+    uint numTilesV = max(faceSize.y / 128, 1.f);
+    uint tileIndex = numTilesU * uint(texCoord.y / 128) + uint(texCoord.x / 128);
+
+    float2 newUv = texCoord / faceSize;
+    bool rotate = min(faceData.log2Dim.x, 128u) < min(faceData.log2Dim.y, 128u);
+    newUv = rotate ? float2(1 - newUv.y, newUv.x) : newUv;
 
     // Virtual texture lookup
-    float4 result = reservoirWeightSum * VirtualTexture::Sample(material.textureIndex, faceID, mipLevel, newUv, faceSize);//, samplerNearestClamp);
-    //physicalPages.SampleLevel(samplerNearestClamp, fullUv, 0.f);
-
-    if (0)
-    {
-        printf("faceOffset: %u %u, log2Dim: %u %u\nmip: %u, face: %u, uv: %f %f\n "
-                "neighborIndex: %i, weight sum: %f rgb: %f %f %f", 
-                faceData.faceOffset.x, faceData.faceOffset.y, faceData.log2Dim.x, faceData.log2Dim.y, 
-                mipLevel, 0, newUv.x, newUv.y, neighborIndex, reservoirWeightSum, result.x, result.y, result.z);
-    }
+    float4 result = reservoirWeightSum * VirtualTexture::Sample(material.textureIndex, tileIndex, faceID, mipLevel, newUv, faceSize);//, samplerNearestClamp);
 
     return result;
 }
@@ -158,7 +173,6 @@ float4 StochasticCatmullRomBorderlessHelper(GPUMaterial material, Ptex::FaceData
 float4 SampleStochasticCatmullRomBorderless(Ptex::FaceData faceData, GPUMaterial material, uint faceID, float2 uv, uint mipLevel, inout float u, bool debug = false) 
 {
     float2 texSize = float2(1u << (faceData.log2Dim.x - mipLevel), 1u << (faceData.log2Dim.y - mipLevel));
-    texSize = faceData.rotate ? texSize.yx : texSize;
     float2 w[4];
     float2 texPos[4];
 

@@ -3830,11 +3830,11 @@ static void LoadMoanaJSON(SceneLoadState *sls, PBRTFileInfo *base, string direct
     }
 
 #ifdef USE_GPU
-    for (string colorMap : colorMaps)
-    {
-        string textureFilename = StrConcat(scratch.temp.arena, directory, colorMap);
-        Convert(textureFilename);
-    }
+    // for (string colorMap : colorMaps)
+    // {
+    //     string textureFilename = StrConcat(scratch.temp.arena, directory, colorMap);
+    //     Convert(textureFilename);
+    // }
 #endif
 
     scheduler.Wait(&counter);

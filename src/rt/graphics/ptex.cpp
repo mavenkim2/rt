@@ -230,13 +230,27 @@ PaddedImage PtexToImg(Arena *arena, Ptex::PtexTexture *ptx, int faceID, int bord
     {
         // loop over tiles
         Ptex::Res tileres = d->tileRes();
-        int ntilesu       = fi.res.ntilesu(tileres);
-        int ntilesv       = fi.res.ntilesv(tileres);
-        int tileures      = tileres.u();
-        int tilevres      = tileres.v();
-        int tilerowlen    = bytesPerPixel * tileures;
-        int tile          = 0;
-        char *dsttilerow  = (char *)buffer;
+        for (u32 i = 1; i < 4; i++)
+        {
+            Ptex::Res res(fi.res.ulog2 - i, fi.res.vlog2 - i);
+            Ptex::PtexPtr<Ptex::PtexFaceData> test(ptx->getData(faceID, res));
+
+            int testU = -1;
+            int testV = -1;
+            if (test->isTiled())
+            {
+                testU = test->tileRes().u();
+                testV = test->tileRes().v();
+            }
+            int stop = 5;
+        }
+        int ntilesu      = fi.res.ntilesu(tileres);
+        int ntilesv      = fi.res.ntilesv(tileres);
+        int tileures     = tileres.u();
+        int tilevres     = tileres.v();
+        int tilerowlen   = bytesPerPixel * tileures;
+        int tile         = 0;
+        char *dsttilerow = (char *)buffer;
         for (int i = 0; i < ntilesv; i++)
         {
             char *dsttile = dsttilerow;
@@ -369,11 +383,11 @@ void Convert(string filename)
 
     Print("starting conversion for %S\n", filename);
 
-    // if (OS_FileExists(outFilename))
-    // {
-    //     Print("skipping conversion for %S\n", filename);
-    //     return;
-    // }
+    if (OS_FileExists(outFilename))
+    {
+        Print("skipping conversion for %S\n", filename);
+        return;
+    }
 
     size_t maxMem = gigabytes(4);
 
@@ -1211,12 +1225,9 @@ T *RingBuffer<T>::SynchronizedRead(Mutex *mutex, Arena *arena, u32 &num)
     return result;
 }
 
-VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWidth,
-                                             u32 virtualTextureHeight,
-                                             u32 physicalTextureWidth,
-                                             u32 physicalTextureHeight, u32 numPools,
+VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 maxSize, u32 slabSize,
                                              VkFormat format)
-    : format(format), slabAllocInfoRingBuffer(arena, 1u << 20u)
+    : format(format), slabAllocInfoRingBuffer(arena, 1u << 20u), slabSize(slabSize)
 {
     string shaderName = "../src/shaders/update_page_tables.spv";
     string data       = OS_ReadFile(arena, shaderName);
@@ -1241,13 +1252,9 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
     clearPageTablePipeline =
         device->CreateComputePipeline(&clearPageTableShader, &clearPageTableLayout);
 
-    ImageLimits limits = device->GetImageLimits();
-    // Allocate page table
-    const u32 numMips =
-        Log2Int(Max(virtualTextureWidth, virtualTextureHeight) >> PAGE_SHIFT) + 1;
-    numVirtPagesWide     = virtualTextureWidth >> PAGE_SHIFT;
-    u32 numVirtPagesHigh = virtualTextureHeight >> PAGE_SHIFT;
+    // ImageLimits limits = device->GetImageLimits();
 
+    // Allocate page table
     pageHashTableBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                                sizeof(Vec4u) * MAX_LEVEL * (1u << 20u));
 
@@ -1255,10 +1262,6 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
     cpuPageHashTable =
         StaticArray<HashTableEntry>(arena, MAX_LEVEL * (1u << 20u), MAX_LEVEL * (1u << 20u));
     MemorySet(cpuPageHashTable.data, 0xff, sizeof(HashTableEntry) * MAX_LEVEL * (1u << 20u));
-
-    Assert(IsPow2(physicalTextureWidth) && IsPow2(physicalTextureHeight));
-    numPhysPagesWidth  = physicalTextureWidth / PAGE_WIDTH;
-    numPhysPagesHeight = physicalTextureHeight / PAGE_WIDTH;
 
     gpuSubmissionStates = StaticArray<GPUSubmissionState>(arena, 1024);
     for (u32 i = 0; i < 1024; i++)
@@ -1273,34 +1276,19 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
 
     // Slabs
     {
-        numPools = Min(numPools, limits.maxNumLayers);
-        Assert(physicalTextureWidth <= limits.max2DImageDim);
-        Assert(physicalTextureHeight <= limits.max2DImageDim);
-        physicalTextureWidth  = Min(physicalTextureWidth, limits.max2DImageDim);
-        physicalTextureHeight = Min(physicalTextureHeight, limits.max2DImageDim);
-
-        numSlabs = physicalTextureWidth * physicalTextureHeight * GetFormatSize(format) *
-                   numPools / slabSize;
-        slabs    = StaticArray<Slab>(arena, numSlabs);
-        texArena = ArenaAlloc();
-
-        u32 slabTexelWidth =
-            Sqrt(slabSize / GetFormatSize(format)) * Sqr(GetBlockSize(format));
-        u32 numSlabsX = physicalTextureWidth / slabTexelWidth;
-        u32 numSlabsY = physicalTextureHeight / slabTexelWidth;
-        for (u32 layerIndex = 0; layerIndex < numPools; layerIndex++)
+        u32 numSlabs = maxSize / slabSize;
+        slabs        = StaticArray<Slab>(arena, numSlabs);
+        caches       = StaticArray<StaticArray<int>>(arena, log2MaxTileDim + 1);
+        for (int i = 0; i <= log2MaxTileDim; i++)
         {
-            for (u32 slabIndexY = 0; slabIndexY < numSlabsY; slabIndexY++)
+            caches.Push(StaticArray<int>(arena, log2MaxTileDim + 1));
+            for (int j = 0; j <= log2MaxTileDim; j++)
             {
-                for (u32 slabIndexX = 0; slabIndexX < numSlabsX; slabIndexX++)
-                {
-                    Slab slab           = {};
-                    slab.physicalOffset = Vec3u(slabIndexX * slabTexelWidth,
-                                                slabIndexY * slabTexelWidth, layerIndex);
-                    slabs.Push(slab);
-                }
+                caches[i].Push(-1);
             }
         }
+
+        texArena = ArenaAlloc();
 
         lruHead = 0;
         lruTail = 1;
@@ -1323,15 +1311,10 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
     }
 }
 
-u32 VirtualTextureManager::AllocateVirtualPages(Arena *arena, string filename,
-                                                const TextureMetadata &metadata,
-                                                FaceMetadata2 *faceMetadata, u8 *contents)
+u32 VirtualTextureManager::AllocateVirtualPages(Arena *arena, string filename)
 {
     TextureInfo texInfo;
-    texInfo.filename     = PushStr8Copy(arena, filename);
-    texInfo.faceMetadata = faceMetadata;
-    texInfo.metadata     = metadata;
-    texInfo.contents     = contents;
+    texInfo.filename = PushStr8Copy(arena, filename);
     textureInfo.push_back(texInfo);
 
     return textureInfo.size() - 1;
@@ -1378,16 +1361,16 @@ bool VirtualTextureManager::AllocateMemory(int logWidth, int logHeight, SlabAllo
     u32 entrySizeX = 1u << newLogWidth;
     u32 entrySizeY = 1u << newLogHeight;
 
-    if (numSlabs == slabs.Length()) return false;
+    if (slabs.Length() == slabs.capacity) return false;
 
-    slabIndex = numSlabs++;
+    slabIndex = slabs.Length();
 
     u32 numLayers  = slabSize / (sizeX * sizeY * formatSize);
     u32 entriesX   = sizeX / (1u << logWidth);
     u32 entriesY   = sizeY / (1u << logHeight);
     u32 numEntries = entriesX * entriesY * numLayers;
 
-    Slab &slab    = slabs[slabIndex];
+    Slab slab     = slabs[slabIndex];
     slab.entries  = StaticArray<Vec3u>(texArena, numEntries);
     slab.freeList = StaticArray<int>(texArena, numEntries);
 
@@ -1424,6 +1407,7 @@ bool VirtualTextureManager::AllocateMemory(int logWidth, int logHeight, SlabAllo
     result.entryIndex = freeListIndex;
 
     info = result;
+    slabs.Push(slab);
 
     return true;
 }
@@ -1725,12 +1709,14 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
         Assert(t);
         Ptex::FaceInfo fi = t->getFaceInfo(faceID);
 
-        Assert(mipLevel >= fi.res.ulog2 && mipLevel >= fi.res.vlog2);
-        int log2Width  = fi.res.ulog2 - mipLevel;
-        int log2Height = fi.res.vlog2 - mipLevel;
+        Assert(mipLevel >= fi.res.ulog2 || mipLevel >= fi.res.vlog2);
+        int log2Width  = Clamp((int)fi.res.ulog2 - (int)mipLevel, 0, (int)log2MaxTileDim);
+        int log2Height = Clamp((int)fi.res.vlog2 - (int)mipLevel, 0, (int)log2MaxTileDim);
+        int minDim     = Min(log2Width, log2Height);
+        int maxDim     = Max(log2Width, log2Height);
 
         SlabAllocInfo info;
-        bool allocated = AllocateMemory(log2Width, log2Height, info);
+        bool allocated = AllocateMemory(maxDim, minDim, info);
 
         int entryIndex = -1;
         if (!allocated)
@@ -1747,8 +1733,6 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                 UnlinkLRU(entryToEvict);
                 HashTableEntry &entry = cpuPageHashTable[entryToEvict];
                 Slab &slab            = slabs[entry.slabIndex];
-                int minDim            = Min(log2Width, log2Height);
-                int maxDim            = Max(log2Width, log2Height);
                 slab.freeList.Push(entry.slabEntryIndex);
 
                 if (slab.log2Width == maxDim && slab.log2Height == minDim)
@@ -1759,7 +1743,7 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                     updateRequests.Push(evictRequest);
 
                     entryIndex = entryToEvict;
-                    allocated  = AllocateMemory(log2Width, log2Height, info);
+                    allocated  = AllocateMemory(maxDim, minDim, info);
                     Assert(allocated);
                     break;
                 }
@@ -2041,9 +2025,9 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                     Assert(mipLevel <= fi.res.ulog2);
                     Assert(mipLevel <= fi.res.vlog2);
 
-                    int log2Width  = fi.res.ulog2 - mipLevel;
-                    int log2Height = fi.res.vlog2 - mipLevel;
-                    Ptex::Res res(fi.res.ulog2 - mipLevel, fi.res.vlog2 - mipLevel);
+                    int log2Width  = Max((int)fi.res.ulog2 - (int)mipLevel, 0);
+                    int log2Height = Max((int)fi.res.vlog2 - (int)mipLevel, 0);
+                    Ptex::Res res(log2Width, log2Height);
 
                     Assert(t);
                     Ptex::PtexPtr<Ptex::PtexFaceData> d(t->getData(faceID, res));
@@ -2057,6 +2041,15 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
 
                     char *buffer = PushArrayNoZero(scratch.temp.arena, char, size);
 
+                    u32 numTilesU = Max(res.u() >> 7u, 1);
+                    u32 numTilesV = Max(res.v() >> 7u, 1);
+
+                    u32 offsetU = 128u * (tileIndex % numTilesU);
+                    u32 offsetV = 128u * (tileIndex / numTilesU);
+
+                    int dataResU = res.u();
+                    int dataResV = res.v();
+
                     if (d->isConstant())
                     {
                         Ptex::PtexUtils::fill(d->getData(), buffer, stride, res.u(), res.v(),
@@ -2068,20 +2061,21 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                         Ptex::Res tileres = d->tileRes();
                         int ntilesu       = res.ntilesu(tileres);
                         int ntilesv       = res.ntilesv(tileres);
+                        int tileures      = tileres.u();
+                        int tilevres      = tileres.v();
 
-                        u32 tileU = tileIndex % ntilesu;
-                        u32 tileV = tileIndex / ntilesu;
-                        Assert(tileU < ntilesu);
-                        Assert(tileV < ntilesv);
+                        u32 ptexTileIndex =
+                            ntilesu * (offsetV / tilevres) + offsetU / tileures;
 
-                        int tileures     = tileres.u();
-                        int tilevres     = tileres.v();
+                        dataResU = tileures;
+                        dataResV = tilevres;
+
                         int tilerowlen   = bytesPerPixel * tileures;
                         int tile         = 0;
                         char *dsttilerow = (char *)buffer;
                         char *dsttile    = dsttilerow;
 
-                        Ptex::PtexPtr<Ptex::PtexFaceData> t(d->getTile(tileIndex));
+                        Ptex::PtexPtr<Ptex::PtexFaceData> t(d->getTile(ptexTileIndex));
                         if (t->isConstant())
                             Ptex::PtexUtils::fill(t->getData(), dsttile, stride, tileures,
                                                   tilevres, bytesPerPixel);
@@ -2095,14 +2089,33 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                                               rowlen);
                     }
 
+                    if (dataResU >= maxTileDim || dataResV >= maxTileDim)
+                    {
+                        int dstStride = Min(stride, int(maxTileDim * bytesPerPixel));
+                        int vres      = Min(dataResV, int(maxTileDim));
+
+                        char *newBuffer =
+                            PushArrayNoZero(scratch.temp.arena, char, dstStride *vres);
+
+                        Utils::Copy(buffer, stride, newBuffer, dstStride, vres, dstStride);
+
+                        stride = dstStride;
+                        rowlen = dstStride;
+
+                        dataResU = Min(dataResU, (int)maxTileDim);
+                        dataResV = Min(dataResV, (int)maxTileDim);
+                        buffer   = newBuffer;
+                    }
+
                     PaddedImage currentFaceImg;
-                    currentFaceImg.contents         = 0;
-                    currentFaceImg.width            = res.u();
-                    currentFaceImg.height           = res.v();
-                    currentFaceImg.log2Width        = res.ulog2;
-                    currentFaceImg.log2Height       = res.vlog2;
-                    currentFaceImg.bytesPerPixel    = GetFormatSize(format);
-                    currentFaceImg.strideNoBorder   = res.u() * currentFaceImg.bytesPerPixel;
+                    currentFaceImg.contents      = 0;
+                    currentFaceImg.width         = dataResU;
+                    currentFaceImg.height        = dataResV;
+                    currentFaceImg.log2Width     = Log2Int(dataResU);
+                    currentFaceImg.log2Height    = Log2Int(dataResV);
+                    currentFaceImg.bytesPerPixel = GetFormatSize(format);
+                    currentFaceImg.strideNoBorder =
+                        currentFaceImg.width * currentFaceImg.bytesPerPixel;
                     currentFaceImg.borderSize       = 0;
                     currentFaceImg.strideWithBorder = currentFaceImg.strideNoBorder;
 
@@ -2136,7 +2149,7 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                         currentFaceImg.contents = (u8 *)buffer;
                     }
 
-                    if (res.u() < res.v())
+                    if (dataResU < dataResV)
                     {
                         PaddedImage img = currentFaceImg;
                         img.contents    = PushArray(scratch.temp.arena, u8, size);

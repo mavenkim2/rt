@@ -26,11 +26,12 @@ struct GPUMaterial
 
     // Virtual texture info
     int textureIndex;
-    uint minLog2Dim;
-    uint numVirtualOffsetBits;
-    uint numFaceDimBits;
-    uint numFaceIDBits;
-    uint faceDataOffset;
+    int faceOffset;
+
+    // uint numVirtualOffsetBits;
+    // uint numFaceDimBits;
+    // uint numFaceIDBits;
+    // uint faceDataOffset;
 
     float diffTrans;
     float4 baseColor;
