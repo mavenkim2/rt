@@ -35,7 +35,7 @@ struct PageTableUpdateRequest
     //  uint mipLevel;
 
     uint hashIndex;
-    uint3 packed;
+    uint4 packed;
 };
 
 struct GPUFaceData
@@ -46,25 +46,44 @@ struct GPUFaceData
     uint rotate;
 };
 
+struct TextureHashTableEntry
+{
+    uint2 offset;
+    uint mip;
+    uint layer;
+    uint bindlessIndex;
+
+    uint textureIndex;
+    uint tileIndex;
+    uint faceID;
+};
+
 #ifdef __cplusplus
-inline uint4 UnpackPageTableEntry(uint packedPageTableEntry, uint &outLayer)
+inline TextureHashTableEntry UnpackPageTableEntry(uint4 packedPageTableEntry)
 #else
-inline uint4 UnpackPageTableEntry(uint packedPageTableEntry, out uint outLayer)
+inline TextureHashTableEntry UnpackPageTableEntry(uint4 packedPageTableEntry)
 #endif
 {
-    uint pageX =
-        BitFieldExtractU32(packedPageTableEntry, PHYSICAL_POOL_NUM_PAGES_WIDE_BITS, 0);
-    uint pageY = BitFieldExtractU32(packedPageTableEntry, PHYSICAL_POOL_NUM_PAGES_WIDE_BITS,
-                                    PHYSICAL_POOL_NUM_PAGES_WIDE_BITS);
-    uint offsetInPageX = BitFieldExtractU32(packedPageTableEntry, PAGE_SHIFT,
-                                            2 * PHYSICAL_POOL_NUM_PAGES_WIDE_BITS);
-    uint offsetInPageY = BitFieldExtractU32(
-        packedPageTableEntry, PAGE_SHIFT, 2 * PHYSICAL_POOL_NUM_PAGES_WIDE_BITS + PAGE_SHIFT);
+    TextureHashTableEntry result;
 
-    uint layer = BitFieldExtractU32(packedPageTableEntry, 4,
-                                    2 * PHYSICAL_POOL_NUM_PAGES_WIDE_BITS + 2 * PAGE_SHIFT);
-    outLayer   = layer;
-    return uint4(pageX, pageY, offsetInPageX, offsetInPageY);
+    uint textureIndex  = BitFieldExtractU32(packedPageTableEntry.x, 16, 0);
+    uint tileIndex     = BitFieldExtractU32(packedPageTableEntry.x, 16, 16);
+    uint faceID        = BitFieldExtractU32(packedPageTableEntry.y, 28, 0);
+    uint mipLevel      = BitFieldExtractU32(packedPageTableEntry.y, 28, 0);
+    uint bindlessIndex = packedPageTableEntry.z;
+    uint layerIndex    = BitFieldExtractU32(packedPageTableEntry.w, 12, 0);
+    uint offsetX       = BitFieldExtractU32(packedPageTableEntry.w, 4, 12);
+    uint offsetY       = BitFieldExtractU32(packedPageTableEntry.w, 4, 16);
+
+    result.offset        = uint2(offsetX, offsetY);
+    result.mip           = mipLevel;
+    result.layer         = layerIndex;
+    result.bindlessIndex = bindlessIndex;
+    result.textureIndex  = textureIndex;
+    result.tileIndex     = tileIndex;
+    result.faceID        = faceID;
+
+    return result;
 }
 
 inline uint PackPageTableEntry(uint pageLocationX, uint pageLocationY, uint offsetInPageX,

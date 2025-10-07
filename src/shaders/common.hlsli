@@ -12,6 +12,8 @@ static const float OneMinusEpsilon = 0x1.fffffep-1;
 
 Texture2D bindlessTextures[] : register(t0, texture2DSpace);
 Texture2D<float3> bindlessFloat3Textures[] : register(t0, texture2DSpace);
+Texture2D<float4> bindlessFloat4Textures[] : register(t0, texture2DSpace);
+Texture2DArray<float4> bindlessFloat4ArrayTextures[] : register(t0, texture2DSpace);
 StructuredBuffer<float3> bindlessFloat3s[] : register(t0, structuredBufferSpace);
 StructuredBuffer<uint> bindlessUints[] : register(t0, structuredBufferSpace);
 

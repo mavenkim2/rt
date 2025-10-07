@@ -232,8 +232,14 @@ struct AllocationColumn
 struct FeedbackRequest
 {
     Vec2u packedFeedbackInfo;
-    u32 hashIndex;
     u32 count;
+};
+
+enum class SubmissionStatus
+{
+    None,
+    Empty,
+    Pending,
 };
 
 struct VirtualTextureManager
@@ -258,22 +264,25 @@ struct VirtualTextureManager
     struct Slab
     {
         Vec3u physicalOffset;
-        u32 sqrtNumEntries;
 
         int log2Width;
         int log2Height;
-        StaticArray<Vec3u> freeList;
 
+        StaticArray<Vec3u> entries;
+        StaticArray<int> freeList;
+
+        int bindlessIndex;
         GPUImage image;
         int next;
     };
 
     struct SlabAllocInfo
     {
-        FeedbackRequest feedbackRequest;
+        Vec2u feedbackRequest;
         Vec2u offset;
         u32 layerIndex;
         u32 slabIndex;
+        u32 entryIndex;
     };
 
     struct HashTableEntry
@@ -284,8 +293,21 @@ struct VirtualTextureManager
         u32 mipLevel;
 
         int slabIndex;
+        int slabEntryIndex;
+        Vec3u offset;
+
         int lruPrev;
         int lruNext;
+
+        HashTableEntry() {}
+
+        HashTableEntry(u32 textureIndex, u32 faceID, u32 tileIndex, u32 mipLevel,
+                       int slabIndex, int slabEntryIndex, Vec3u offset)
+            : textureIndex(textureIndex), faceID(faceID), tileIndex(tileIndex),
+              mipLevel(mipLevel), slabIndex(slabIndex), slabEntryIndex(slabEntryIndex),
+              offset(offset), lruPrev(-1), lruNext(-1)
+        {
+        }
     };
 
     u32 numSlabs;
@@ -311,23 +333,31 @@ struct VirtualTextureManager
     {
         SlabAllocInfo info;
         u8 *buffer;
+        u32 size;
+        u32 width;
+        u32 height;
     };
 
     struct GPUSubmissionState
     {
         Arena *arena;
         StaticArray<SlabAllocInfo> slabAllocInfos;
-        u32 currentInfoIndex;
-
         StaticArray<SmallAllocation> smallAllocs;
-        std::atomic<u32> smallAllocCount;
 
-        StaticArray<Semaphore> semaphores;
-        StaticArray<GPUBuffer> uploadBuffers;
+        SubmissionStatus status;
+        Semaphore semaphore;
+        GPUBuffer uploadBuffer;
     };
 
     // Ring buffer
+    Mutex slabInfoMutex;
+    RingBuffer<SlabAllocInfo> slabAllocInfoRingBuffer;
+
     StaticArray<GPUSubmissionState> gpuSubmissionStates;
+
+    Mutex submissionMutex;
+    u64 submissionReadIndex;
+    u64 submissionWriteIndex;
 
     StaticArray<HashTableEntry> cpuPageHashTable;
 
@@ -361,54 +391,30 @@ struct VirtualTextureManager
     static const u32 maxCopies             = 1u << 20u;
     static const u32 maxFeedback           = 4 * 1024 * 1024;
 
-    // Clock replacement
-    u32 clockPoolIndex;
-    u32 clockPageIndex;
+    GPUBuffer requestBuffer;
+    GPUBuffer requestUploadBuffer;
 
-    // Double buffered, update once per virtual texture thread tick
-    FixedArray<StaticArray<u8>, numPendingSubmissions> uploadBuffers;
-    FixedArray<StaticArray<BufferImageCopy>, numPendingSubmissions> uploadCopyCommands;
-    std::atomic<u64> writeSubmission;
-
-    // Double buffered, updated once per frame
-    FixedArray<Semaphore, numPendingSubmissions> uploadSemaphores;
-    FixedArray<GPUBuffer, numPendingSubmissions> uploadDeviceBuffers;
-    // FixedArray<TransferBuffer, numPendingSubmissions> pageTableRequestBuffers;
-
-    GPUBuffer evictRequestBuffer;
-    GPUBuffer evictRequestUploadBuffer;
-    std::atomic<u64> readSubmission;
-
-    Mutex updateRequestMutex;
-    RingBuffer<PageTableUpdateRequest> updateRequestRingBuffer;
-
-    GPUBuffer pageTableUpdateRequestBuffer;
-    GPUBuffer pageTableUpdateRequestUploadBuffer;
-
-    // Mutex feedbackMutex;
-    // FixedArray<TransferBuffer, 2> feedbackBuffers;
-    // RingBuffer<Vec2u> feedbackRingBuffer;
+    FixedArray<TransferBuffer, 2> feedbackBuffers;
 
     VirtualTextureManager(Arena *arena, u32 virtualTextureWidth, u32 virtualTextureHeight,
                           u32 physicalTextureWidth, u32 physicalTextureHeight, u32 numPools,
                           VkFormat format);
-    SlabAllocInfo AllocateVirtualPages(Arena *arena, string filename,
-                                       const TextureMetadata &metadata,
-                                       FaceMetadata2 *faceMetadata, u8 *contents);
-    bool AllocateMemory(int logWidth, int logHeight);
+    u32 AllocateVirtualPages(Arena *arena, string filename, const TextureMetadata &metadata,
+                             FaceMetadata2 *faceMetadata, u8 *contents);
+    bool AllocateMemory(int logWidth, int logHeight, SlabAllocInfo &info);
     u64 CalculateHash(u32 textureIndex, u32 faceIndex, u32 mipLevel, u32 tileIndex);
-    u32 UpdateHash(Vec3u packed, u64 hash);
-    int GetInHash(u64 hash, u32 textureIndex, u32 mipLevel, u32 faceID, Vec3u &packed);
-    void PinPages(CommandBuffer *cmd, u32 textureIndex, Vec3u *pinnedPages, u32 *offsets,
-                  u32 *data, u32 numPages);
+    u32 UpdateHash(HashTableEntry entry, u64 hash);
+    int GetInHash(u32 textureIndex, u32 tileIndex, u32 faceID, u32 mipLevel);
+    // void PinPages(CommandBuffer *cmd, u32 textureIndex, Vec3u *pinnedPages, u32 *offsets,
+    //               u32 *data, u32 numPages);
     void ClearTextures(CommandBuffer *cmd);
 
     // Streaming
-    void Update(CommandBuffer *computeCmd, CommandBuffer *transferCmd,
-                CommandBuffer *transitionCmd, QueueType computeCmdQueue);
+    Vec4u PackHashTableEntry(HashTableEntry &entry);
+    void Update(CommandBuffer *computeCmd);
     void UnlinkLRU(int index);
     void LinkLRU(int index);
-    void Callback();
+    // void Callback();
 };
 
 void InitializePtex(u32 maxFiles = 400, u64 maxMem = gigabytes(8));

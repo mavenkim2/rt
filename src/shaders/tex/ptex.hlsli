@@ -140,8 +140,8 @@ float4 StochasticCatmullRomBorderlessHelper(GPUMaterial material, Ptex::FaceData
     newUv = neighborData.rotate ? float2(1 - newUv.y, newUv.x) : newUv;
 
     // Virtual texture lookup
-    const float3 fullUv = VirtualTexture::GetPhysicalUV(material.textureIndex, faceID, mipLevel, newUv, faceSize);
-    float4 result = reservoirWeightSum * physicalPages.SampleLevel(samplerNearestClamp, fullUv, 0.f);
+    float4 result = reservoirWeightSum * VirtualTexture::Sample(material.textureIndex, faceID, mipLevel, newUv, faceSize);//, samplerNearestClamp);
+    //physicalPages.SampleLevel(samplerNearestClamp, fullUv, 0.f);
 
     if (0)
     {

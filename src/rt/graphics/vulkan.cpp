@@ -1215,10 +1215,7 @@ Semaphore Vulkan::CreateSemaphore()
     return semaphore;
 }
 
-void Vulkan::DestroySemaphore(Semaphore sem)
-{
-    vkDestroySemaphore(device, sem.semaphore, 0);
-}
+void Vulkan::DestroySemaphore(Semaphore sem) { vkDestroySemaphore(device, sem.semaphore, 0); }
 
 void Vulkan::AllocateCommandBuffers(ThreadPool &pool, QueueType type)
 {
@@ -2139,6 +2136,26 @@ int Vulkan::BindlessIndex(GPUImage *image)
     VkDescriptorImageInfo info = {};
     info.imageView             = image->imageView;
     info.imageLayout           = image->lastLayout;
+
+    VkWriteDescriptorSet writeSet = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    writeSet.dstSet               = descriptorPool.set;
+    writeSet.descriptorCount      = 1;
+    writeSet.dstArrayElement      = index;
+    writeSet.descriptorType       = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    writeSet.pImageInfo           = &info;
+
+    vkUpdateDescriptorSets(device, 1, &writeSet, 0, 0);
+    return index;
+}
+
+int Vulkan::BindlessIndex(GPUImage *image, VkImageLayout layout)
+{
+    BindlessDescriptorPool &descriptorPool = bindlessDescriptorPools[0];
+    int index                              = descriptorPool.Allocate();
+
+    VkDescriptorImageInfo info = {};
+    info.imageView             = image->imageView;
+    info.imageLayout           = layout;
 
     VkWriteDescriptorSet writeSet = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     writeSet.dstSet               = descriptorPool.set;

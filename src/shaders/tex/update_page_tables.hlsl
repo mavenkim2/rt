@@ -2,7 +2,7 @@
 #include "../../rt/shader_interop/virtual_textures_shaderinterop.h"
 
 StructuredBuffer<PageTableUpdateRequest> requests : register(t0);
-RWStructuredBuffer<uint3> pageHashTable : register(u1);
+RWStructuredBuffer<uint4> pageHashTable : register(u1);
 
 [[vk::push_constant]] PageTableUpdatePushConstant pc;
 

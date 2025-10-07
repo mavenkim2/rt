@@ -572,6 +572,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             sceneScratch.temp.arena, textureTemp.filename, fileHeader, metaData,
             tokenizer.cursor);
 
+#if 0
         if (i > 0)
         {
             bool result = device->Wait(texSemaphore, 10e9);
@@ -589,6 +590,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                      VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT);
         cmd->FlushBarriers();
         device->SubmitCommandBuffer(cmd);
+#endif
 
         // Pack ptex face metadata into FaceData bitstream
         u32 maxVirtualOffset = neg_inf;
@@ -1347,8 +1349,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                   device->frameCount);
         CommandBuffer *transitionCmd =
             device->BeginCommandBuffer(QueueType_Graphics, cmdBufferName);
-        virtualTextureManager.Update(cmd, virtualTextureCopyCmd, transitionCmd,
-                                     QueueType_Graphics);
+        virtualTextureManager.Update(cmd);
         device->SubmitCommandBuffer(transitionCmd);
         device->SubmitCommandBuffer(virtualTextureCopyCmd);
 
