@@ -409,7 +409,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     layout.AddBinding((u32)RTBindings::Image, DescriptorType::StorageImage, flags);
     layout.AddBinding((u32)RTBindings::Scene, DescriptorType::UniformBuffer, flags);
     layout.AddBinding((u32)RTBindings::GPUMaterial, DescriptorType::StorageBuffer, flags);
-    layout.AddBinding((u32)RTBindings::PageTable, DescriptorType::SampledImage, flags);
+    layout.AddBinding((u32)RTBindings::PageTable, DescriptorType::StorageBuffer, flags);
     layout.AddBinding((u32)RTBindings::ShaderDebugInfo, DescriptorType::UniformBuffer, flags);
     layout.AddBinding((u32)RTBindings::ClusterPageData, DescriptorType::StorageBuffer, flags);
     layout.AddBinding((u32)RTBindings::PtexFaceData, DescriptorType::StorageBuffer, flags);
@@ -1385,17 +1385,19 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         }
 
         // Virtual texture system
-        cmdBufferName = PushStr8F(frameScratch.temp.arena, "Virtual Texture Async Copy Cmd %u",
-                                  device->frameCount);
-        CommandBuffer *virtualTextureCopyCmd =
-            device->BeginCommandBuffer(QueueType_Copy, cmdBufferName);
-        cmdBufferName = PushStr8F(frameScratch.temp.arena, "Virtual Texture Transition Cmd %u",
-                                  device->frameCount);
-        CommandBuffer *transitionCmd =
-            device->BeginCommandBuffer(QueueType_Graphics, cmdBufferName);
+        // cmdBufferName = PushStr8F(frameScratch.temp.arena, "Virtual Texture Async Copy Cmd
+        // %u",
+        //                           device->frameCount);
+        // CommandBuffer *virtualTextureCopyCmd =
+        //     device->BeginCommandBuffer(QueueType_Copy, cmdBufferName);
+        // cmdBufferName = PushStr8F(frameScratch.temp.arena, "Virtual Texture Transition Cmd
+        // %u",
+        //                           device->frameCount);
+        // CommandBuffer *transitionCmd =
+        //     device->BeginCommandBuffer(QueueType_Graphics, cmdBufferName);
         virtualTextureManager.Update(cmd);
-        device->SubmitCommandBuffer(transitionCmd);
-        device->SubmitCommandBuffer(virtualTextureCopyCmd);
+        // device->SubmitCommandBuffer(transitionCmd);
+        // device->SubmitCommandBuffer(virtualTextureCopyCmd);
 
         rg->StartPass(2,
                       [&clasGlobals      = virtualGeometryManager.clasGlobalsBuffer,

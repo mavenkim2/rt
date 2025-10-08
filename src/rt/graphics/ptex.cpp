@@ -1209,7 +1209,7 @@ T *RingBuffer<T>::Read(Arena *arena, u32 &num)
         {
             MemoryCopy(vals + numToEnd, entries.data, sizeof(T) * numToRead - numToEnd);
         }
-        readOffset = writeOffset;
+        readOffset += numToRead;
     }
     num = numToRead;
     // EndMutex(&mutex);
@@ -1227,7 +1227,8 @@ T *RingBuffer<T>::SynchronizedRead(Mutex *mutex, Arena *arena, u32 &num)
 
 VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 maxSize, u32 slabSize,
                                              VkFormat format)
-    : format(format), slabAllocInfoRingBuffer(arena, 1u << 20u), slabSize(slabSize)
+    : format(format), slabAllocInfoRingBuffer(arena, 1u << 20u), slabSize(slabSize),
+      submissionReadIndex(0), submissionWriteIndex(0)
 {
     string shaderName = "../src/shaders/update_page_tables.spv";
     string data       = OS_ReadFile(arena, shaderName);
@@ -1268,10 +1269,11 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 maxSize, u32 slab
     {
         GPUSubmissionState state    = {};
         state.arena                 = ArenaAlloc();
-        state.status                = SubmissionStatus::None;
+        state.status                = SubmissionStatus::Empty;
         state.semaphore             = device->CreateSemaphore();
         state.semaphore.signalValue = 1;
         state.uploadBuffer.size     = {};
+        gpuSubmissionStates.Push(state);
     }
 
     // Slabs
@@ -1308,6 +1310,9 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 maxSize, u32 slab
             device->GetReadbackBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, megabytes(8));
         feedbackBuffers[1] =
             device->GetReadbackBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, megabytes(8));
+
+        requestUploadBuffer = {};
+        requestBuffer       = {};
     }
 }
 
@@ -1334,13 +1339,15 @@ bool VirtualTextureManager::AllocateMemory(int logWidth, int logHeight, SlabAllo
         if (slab.freeList.Length())
         {
             u32 entryIndex = slab.freeList.Pop();
-            Vec3u offset   = slab.entries[entryIndex];
+
+            Vec3u offset = slab.entries[entryIndex].offset;
 
             SlabAllocInfo result;
-            result.offset     = offset.xy;
-            result.layerIndex = offset.z;
-            result.slabIndex  = slabIndex;
-            result.entryIndex = entryIndex;
+            result.offset        = offset.xy;
+            result.bindlessIndex = slab.entries[entryIndex].bindlessIndex;
+            result.slabIndex     = slabIndex;
+            result.entryIndex    = entryIndex;
+            result.layerIndex    = offset.z;
 
             info = result;
 
@@ -1370,26 +1377,32 @@ bool VirtualTextureManager::AllocateMemory(int logWidth, int logHeight, SlabAllo
     u32 entriesY   = sizeY / (1u << logHeight);
     u32 numEntries = entriesX * entriesY * numLayers;
 
-    Slab slab     = slabs[slabIndex];
-    slab.entries  = StaticArray<Vec3u>(texArena, numEntries);
-    slab.freeList = StaticArray<int>(texArena, numEntries);
+    Slab slab;
+    slab.log2Width  = logWidth;
+    slab.log2Height = logHeight;
+    slab.entries    = StaticArray<SlabEntry>(texArena, numEntries);
+    slab.freeList   = StaticArray<int>(texArena, numEntries);
 
     ImageDesc desc(
         ImageType::Type2D, sizeX, sizeY, 1, 1, numLayers, format, MemoryUsage::GPU_ONLY,
         VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_TILING_OPTIMAL);
 
-    slab.image = device->CreateImage(desc);
-    slab.bindlessIndex =
-        device->BindlessIndex(&slab.image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    slab.image = device->CreateImage(desc, numLayers);
 
     for (u32 layer = 0; layer < numLayers; layer++)
     {
+        int subresourceIndex = device->CreateSubresource(&slab.image, 0, ~0u, layer, 1);
+        int bindlessIndex    = device->BindlessIndex(
+            &slab.image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, subresourceIndex);
+
         for (u32 entryY = 0; entryY < entriesY; entryY++)
         {
             for (u32 entryX = 0; entryX < entriesX; entryX++)
             {
                 Vec3u offset(entryX * entrySizeX, entryY * entrySizeY, layer);
-                slab.entries.Push(offset);
+
+                SlabEntry entry = {offset, bindlessIndex, VK_IMAGE_LAYOUT_UNDEFINED};
+                slab.entries.Push(entry);
                 slab.freeList.Push(slab.entries.Length() - 1);
             }
         }
@@ -1398,13 +1411,14 @@ bool VirtualTextureManager::AllocateMemory(int logWidth, int logHeight, SlabAllo
     caches[indexX][indexY] = slabIndex;
 
     u32 freeListIndex = slab.freeList.Pop();
-    Vec3u offset      = slab.entries[freeListIndex];
+    Vec3u offset      = slab.entries[freeListIndex].offset;
 
     SlabAllocInfo result;
-    result.offset     = offset.xy;
-    result.layerIndex = offset.z;
-    result.slabIndex  = slabIndex;
-    result.entryIndex = freeListIndex;
+    result.offset        = offset.xy;
+    result.bindlessIndex = slab.entries[freeListIndex].bindlessIndex;
+    result.slabIndex     = slabIndex;
+    result.entryIndex    = freeListIndex;
+    result.layerIndex    = offset.z;
 
     info = result;
     slabs.Push(slab);
@@ -1421,9 +1435,11 @@ u64 VirtualTextureManager::CalculateHash(u32 textureIndex, u32 faceIndex, u32 mi
     return hash;
 }
 
-u32 VirtualTextureManager::UpdateHash(HashTableEntry entry, u64 hash)
+u32 VirtualTextureManager::UpdateHash(HashTableEntry entry)
 {
-    u64 hashIndex = hash % cpuPageHashTable.Length();
+    u64 hash =
+        CalculateHash(entry.textureIndex, entry.faceID, entry.mipLevel, entry.tileIndex);
+    u64 hashIndex = hash % u64(cpuPageHashTable.Length());
     for (;;)
     {
         if (cpuPageHashTable[hashIndex].textureIndex == ~0u)
@@ -1594,8 +1610,8 @@ Vec4u VirtualTextureManager::PackHashTableEntry(HashTableEntry &entry)
     Vec4u packed;
     packed.x = entry.textureIndex | (entry.tileIndex << 16u);
     packed.y = entry.faceID | (entry.mipLevel << 28u);
-    packed.z = slabs[entry.slabIndex].bindlessIndex;
-    packed.w = entry.offset.z | (entry.offset.x << 12u) | (entry.offset.y << 16u);
+    packed.z = entry.bindlessIndex;
+    packed.w = entry.offset.x | (entry.offset.y << 4u);
     return packed;
 }
 // Executes on main thread
@@ -1603,13 +1619,13 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
 {
     // Update page table
     ScratchArena scratch;
-    u32 currentBuffer = device->frameCount & 1;
+    u32 currentBuffer = !(device->frameCount & 1);
 
     u32 numFeedbackRequests = ((u32 *)feedbackBuffers[currentBuffer].mappedPtr)[0];
-    Vec2u *feedbackRequests = PushArrayNoZero(scratch.temp.arena, Vec2u, numFeedbackRequests);
+    Vec2u *feedbackRequests = (Vec2u *)((u32 *)feedbackBuffers[currentBuffer].mappedPtr + 1);
 
     // Process feedback requests
-    int textureFeedbackRequest = TIMED_CPU_RANGE_BEGIN();
+    int textureFeedbackRequest = TIMED_CPU_RANGE_NAME_BEGIN("compact requests");
     StaticArray<FeedbackRequest> compactedFeedbackRequests(scratch.temp.arena,
                                                            numFeedbackRequests);
     u32 hashMapSize = NextPowerOfTwo(numFeedbackRequests);
@@ -1653,6 +1669,10 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
         }
     }
 
+    TIMED_RANGE_END(textureFeedbackRequest);
+
+    int textureFeedbackRequest4 = TIMED_CPU_RANGE_NAME_BEGIN("update lru");
+
     u32 numCompacted           = compactedFeedbackRequests.size();
     u32 numNonResidentFeedback = 0;
 
@@ -1692,8 +1712,13 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
     Print("Num feedback: %u, num compacted: %u, num non resident: %u\n", numFeedbackRequests,
           numCompacted, numNonResidentFeedback);
 
+    TIMED_RANGE_END(textureFeedbackRequest4);
+
+    int textureFeedbackRequest3 = TIMED_CPU_RANGE_NAME_BEGIN("allocate memory");
+
     Array<PageTableUpdateRequest> updateRequests(scratch.temp.arena, numNonResidentFeedback);
     StaticArray<SlabAllocInfo> newSlabAllocInfo(scratch.temp.arena, numNonResidentFeedback);
+    u32 numEvicted = 0;
 
     for (FeedbackRequest fr : compactedFeedbackRequests)
     {
@@ -1709,7 +1734,7 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
         Assert(t);
         Ptex::FaceInfo fi = t->getFaceInfo(faceID);
 
-        Assert(mipLevel >= fi.res.ulog2 || mipLevel >= fi.res.vlog2);
+        Assert(mipLevel <= fi.res.ulog2 || mipLevel <= fi.res.vlog2);
         int log2Width  = Clamp((int)fi.res.ulog2 - (int)mipLevel, 0, (int)log2MaxTileDim);
         int log2Height = Clamp((int)fi.res.vlog2 - (int)mipLevel, 0, (int)log2MaxTileDim);
         int minDim     = Min(log2Width, log2Height);
@@ -1735,13 +1760,17 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                 Slab &slab            = slabs[entry.slabIndex];
                 slab.freeList.Push(entry.slabEntryIndex);
 
+                PageTableUpdateRequest evictRequest;
+                evictRequest.packed    = Vec4u(~0u);
+                evictRequest.hashIndex = entryToEvict;
+                updateRequests.Push(evictRequest);
+
+                cpuPageHashTable[entryToEvict].textureIndex = ~0u;
+
+                numEvicted++;
+
                 if (slab.log2Width == maxDim && slab.log2Height == minDim)
                 {
-                    PageTableUpdateRequest evictRequest;
-                    evictRequest.packed    = Vec4u(~0u);
-                    evictRequest.hashIndex = entryToEvict;
-                    updateRequests.Push(evictRequest);
-
                     entryIndex = entryToEvict;
                     allocated  = AllocateMemory(maxDim, minDim, info);
                     Assert(allocated);
@@ -1749,54 +1778,51 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                 }
             }
         }
+
+        // TODO: what if the LRU gets evicted before the data is uploaded?
+        HashTableEntry entry(textureIndex, faceID, tileIndex, mipLevel, info.slabIndex,
+                             info.entryIndex, info.offset, info.bindlessIndex);
+        u32 hashIndex = UpdateHash(entry);
+        LinkLRU(hashIndex);
+
         info.feedbackRequest = feedbackRequest;
         newSlabAllocInfo.Push(info);
     }
 
-    // TODO:
-    // 1. submit the feedback requests + their destination addresuse to a ring buffer
-    // 2. start worker threads that read some amount of requests, load the data requested and
-    // submit. small allocations are not submitted and instead written back to another ring
-    // buffer accessed by the host. a semaphore is also written back.
-    // 3. after submitting the data, the threads write back small allocation data
-    // 4. in main loop, go through the ring buffer, and if the semaphore is signaled
-    // process the small allocations, and also update the gpu hash table for all mapped entries
-    // 5. if there isn't enough space to put on ring buffer, don't write the entries
+    Print("Evicting %u entries\n", numEvicted);
 
-    // TODO: this stalls  if the ring buffer is full...
+    TIMED_RANGE_END(textureFeedbackRequest3);
+
     slabAllocInfoRingBuffer.SynchronizedWrite(&slabInfoMutex, newSlabAllocInfo.data,
                                               newSlabAllocInfo.Length());
+
+    int textureFeedback2 = TIMED_CPU_RANGE_NAME_BEGIN("texture update");
 
     for (;;)
     {
         BeginMutex(&submissionMutex);
         u32 submissionIndex               = submissionReadIndex % gpuSubmissionStates.Length();
+        u64 readIndex                     = submissionReadIndex;
+        u64 writeIndex                    = submissionWriteIndex;
         GPUSubmissionState &state         = gpuSubmissionStates[submissionIndex];
         SubmissionStatus submissionStatus = state.status;
         EndMutex(&submissionMutex);
 
-        if (submissionStatus == SubmissionStatus::None) break;
-        else if (submissionStatus == SubmissionStatus::Empty)
-        {
-            BeginMutex(&submissionMutex);
-            submissionReadIndex++;
-            EndMutex(&submissionMutex);
-            continue;
-        }
+        if (readIndex >= writeIndex) break;
+        Assert(submissionStatus == SubmissionStatus::Pending);
 
-        state.status = SubmissionStatus::Empty;
         u64 semValue =
             device->GetSemaphoreValue(gpuSubmissionStates[submissionIndex].semaphore);
 
         if (state.semaphore.signalValue == semValue)
         {
+            state.status = SubmissionStatus::Empty;
             state.semaphore.signalValue++;
 
             // Update hash table
             for (SlabAllocInfo &info : state.slabAllocInfos)
             {
                 Vec2u fr = info.feedbackRequest;
-                u64 hash = MixBits((u64)fr.x | ((u64)fr.y));
 
                 u32 textureIndex = BitFieldExtractU32(fr.x, 16, 0);
                 u32 tileIndex    = BitFieldExtractU32(fr.x, 16, 16);
@@ -1804,10 +1830,10 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                 u32 mipLevel     = BitFieldExtractU32(fr.y, 4, 28);
 
                 HashTableEntry entry(textureIndex, faceID, tileIndex, mipLevel, info.slabIndex,
-                                     info.entryIndex, Vec3u(info.offset, info.layerIndex));
+                                     info.entryIndex, info.offset, info.bindlessIndex);
 
-                u32 hashIndex = UpdateHash(entry, hash);
-                LinkLRU(hashIndex);
+                int hashIndex = GetInHash(textureIndex, tileIndex, faceID, mipLevel);
+                Assert(hashIndex != -1);
 
                 PageTableUpdateRequest request;
                 request.packed    = PackHashTableEntry(entry);
@@ -1826,42 +1852,51 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
             // Allocate small entries
             for (SmallAllocation &info : state.smallAllocs)
             {
-                Slab &slab = slabs[info.info.slabIndex];
-                // TODO
-                if (slab.image.lastLayout != VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+                Slab &slab       = slabs[info.info.slabIndex];
+                SlabEntry &entry = slab.entries[info.info.entryIndex];
+                if (entry.layout != VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
                 {
-                    computeCmd->Barrier(&slab.image, VK_IMAGE_LAYOUT_UNDEFINED,
-                                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                        VK_PIPELINE_STAGE_2_NONE,
-                                        VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_NONE,
-                                        VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                    computeCmd->Barrier(
+                        &slab.image, entry.layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                        VK_ACCESS_2_NONE, VK_ACCESS_2_TRANSFER_WRITE_BIT, QueueType_Ignored,
+                        QueueType_Ignored, 0, ~0u, info.info.layerIndex, 1);
+                    entry.layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
                 }
             }
             computeCmd->FlushBarriers();
 
-            device->DestroyBuffer(&state.uploadBuffer);
             GPUBuffer &uploadBuffer = state.uploadBuffer;
-            u32 maxSmallUploadSize =
-                state.smallAllocs.Length() * 8 * 16 * GetFormatSize(format);
-            uploadBuffer = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                                maxSmallUploadSize, MemoryUsage::CPU_TO_GPU);
-
-            u32 bufferOffset = 0;
-            for (SmallAllocation &info : state.smallAllocs)
+            u32 bufferOffset        = 0;
+            if (uploadBuffer.size)
             {
-                Slab &slab = slabs[info.info.slabIndex];
-                MemoryCopy((u8 *)uploadBuffer.mappedPtr + bufferOffset, info.buffer,
-                           info.size);
+                device->DestroyBuffer(&uploadBuffer);
+                uploadBuffer.size = 0;
+            }
+            if (state.smallAllocs.Length())
+            {
+                u32 maxSmallUploadSize =
+                    state.smallAllocs.Length() * 8 * 16 * GetFormatSize(format);
+                uploadBuffer =
+                    device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, maxSmallUploadSize,
+                                         MemoryUsage::CPU_TO_GPU);
 
-                BufferImageCopy copy = {};
-                copy.bufferOffset    = bufferOffset;
-                copy.baseLayer       = info.info.layerIndex;
-                copy.layerCount      = 1;
-                copy.offset          = Vec3i(info.info.offset.x, info.info.offset.y, 0);
-                copy.extent          = Vec3u(info.width, info.height, 1);
-                computeCmd->CopyImage(&uploadBuffer, &slab.image, &copy, 1);
+                for (SmallAllocation &info : state.smallAllocs)
+                {
+                    Slab &slab = slabs[info.info.slabIndex];
+                    MemoryCopy((u8 *)uploadBuffer.mappedPtr + bufferOffset, info.buffer,
+                               info.size);
 
-                bufferOffset += info.size;
+                    BufferImageCopy copy = {};
+                    copy.bufferOffset    = bufferOffset;
+                    copy.baseLayer       = info.info.layerIndex;
+                    copy.layerCount      = 1;
+                    copy.offset          = Vec3i(info.info.offset.x, info.info.offset.y, 0);
+                    copy.extent          = Vec3u(info.width, info.height, 1);
+                    computeCmd->CopyImage(&uploadBuffer, &slab.image, &copy, 1);
+
+                    bufferOffset += info.size;
+                }
             }
 
             Print("num small allocs: %u, size: %u\n", state.smallAllocs.Length(),
@@ -1870,9 +1905,8 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
             for (SmallAllocation &info : state.smallAllocs)
             {
                 Slab &slab = slabs[info.info.slabIndex];
-                Vec2u fr   = info.info.feedbackRequest;
 
-                u64 hash = MixBits((u64)fr.x | ((u64)fr.y));
+                Vec2u fr = info.info.feedbackRequest;
 
                 u32 textureIndex = BitFieldExtractU32(fr.x, 16, 0);
                 u32 tileIndex    = BitFieldExtractU32(fr.x, 16, 16);
@@ -1881,23 +1915,27 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
 
                 HashTableEntry entry(textureIndex, faceID, tileIndex, mipLevel,
                                      info.info.slabIndex, info.info.entryIndex,
-                                     Vec3u(info.info.offset, info.info.layerIndex));
+                                     info.info.offset, info.info.bindlessIndex);
 
-                u32 hashIndex = UpdateHash(entry, hash);
-                LinkLRU(hashIndex);
+                int hashIndex = GetInHash(textureIndex, tileIndex, faceID, mipLevel);
+                Assert(hashIndex != -1);
 
                 PageTableUpdateRequest request;
                 request.packed    = PackHashTableEntry(entry);
                 request.hashIndex = hashIndex;
                 updateRequests.Push(request);
 
-                if (slab.image.lastLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+                SlabEntry &slabEntry = slab.entries[info.info.entryIndex];
+                if (slabEntry.layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
                 {
                     computeCmd->Barrier(
                         &slab.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                        VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+                        VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT,
+                        QueueType_Ignored, QueueType_Ignored, 0, ~0u, info.info.layerIndex, 1);
+
+                    slabEntry.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
                 }
             }
             computeCmd->FlushBarriers();
@@ -1927,7 +1965,10 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
         requestBuffer =
             device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                  sizeof(PageTableUpdateRequest) * updateRequests.Length());
+    }
 
+    if (updateRequests.Length())
+    {
         BufferToBufferCopy copy = {};
         copy.size               = sizeof(PageTableUpdateRequest) * updateRequests.Length();
         MemoryCopy(requestUploadBuffer.mappedPtr, updateRequests.data, copy.size);
@@ -1938,8 +1979,6 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                             VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
         computeCmd->FlushBarriers();
-
-        Print("Evicting %u entries\n", updateRequests.Length());
 
         PageTableUpdatePushConstant pc;
         pc.numRequests = updateRequests.Length();
@@ -1954,44 +1993,112 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                             VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
         computeCmd->FlushBarriers();
+
+        // if (debug) // numBlas - 1)
+        // {
+        //     // RenderGraph *rg   = GetRenderGraph();
+        //     GPUBuffer readback0 =
+        //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        //                              pageHashTableBuffer.size, MemoryUsage::GPU_TO_CPU);
+        //     computeCmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        //                         VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        //                         VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+        //                         VK_ACCESS_2_TRANSFER_READ_BIT);
+        //     computeCmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        //                         VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        //                         VK_ACCESS_2_SHADER_WRITE_BIT,
+        //                         VK_ACCESS_2_TRANSFER_READ_BIT);
+        //     // computeCmd->Barrier(
+        //     //     img, VK_IMAGE_LAYOUT_GENERAL,
+        //     //     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        //     //     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        //     // VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        //     //     VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+        //     //     QueueType_Ignored, QueueType_Ignored, level, 1);
+        //
+        //     // computeCmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+        //     //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        //     //     // VK_ACCESS_2_SHADER_WRITE_BIT,
+        //     //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
+        //     computeCmd->FlushBarriers();
+        //
+        //     // BufferImageCopy copy = {};
+        //     // copy.mipLevel        = level;
+        //     // copy.extent          = Vec3u(width, height, 1);
+        //
+        //     computeCmd->CopyBuffer(&readback0, &pageHashTableBuffer);
+        //     // computeCmd->CopyBuffer(&readback2, buffer1);
+        //     // computeCmd->CopyImageToBuffer(&readback0, img, &copy, 1);
+        //     Semaphore testSemaphore   = device->CreateSemaphore();
+        //     testSemaphore.signalValue = 1;
+        //     computeCmd->SignalOutsideFrame(testSemaphore);
+        //     device->SubmitCommandBuffer(computeCmd);
+        //     device->Wait(testSemaphore);
+        //
+        //     Vec4u *data = (Vec4u *)readback0.mappedPtr;
+        //
+        //     // for (u32 i = 0; i < updateRequests.Length(); i++)
+        //     // {
+        //     //     Vec4u &packed    = updateRequests[i].packed;
+        //     //     u32 textureIndex = BitFieldExtractU32(packed.x, 16, 0);
+        //     //     u32 tileIndex    = BitFieldExtractU32(packed.x, 16, 16);
+        //     //     u32 faceID       = BitFieldExtractU32(packed.y, 28, 0);
+        //     //     u32 mipLevel     = BitFieldExtractU32(packed.y, 4, 28);
+        //     //
+        //     //     u64 bitsToHash = (u64)textureIndex | ((u64)tileIndex << 16) |
+        //     //                      ((u64)faceID << 32) | ((u64)mipLevel << 60);
+        //     //     u64 hash = MixBits(bitsuintToHash);
+        //     //     int stop = 5;
+        //     // }
+        //
+        //     int stop = 5;
+        // }
     }
 
-    TIMED_RANGE_END(textureFeedbackRequest);
+    TIMED_RANGE_END(textureFeedback2);
 
     u32 totalNumRequests = newSlabAllocInfo.Length();
 
     // Dispatch worker threads to upload data to GPU
     u32 maxThreads = OS_NumProcessors();
-    u32 numThreads = Min(maxThreads, totalNumRequests / 1024);
+    u32 numThreads = Min(maxThreads, (totalNumRequests + 1023) / 1024);
     for (u32 i = 0; i < numThreads; i++)
     {
         scheduler.Schedule([&](u32 jobID) {
             for (;;)
             {
-                BeginMutex(&submissionMutex);
-                if (submissionWriteIndex + 1 >=
-                    submissionReadIndex + gpuSubmissionStates.Length())
-                {
-                    EndMutex(&submissionMutex);
-                    return;
-                }
-                u32 submissionIndex               = submissionWriteIndex++;
-                GPUSubmissionState &state         = gpuSubmissionStates[submissionIndex];
-                SubmissionStatus submissionStatus = state.status;
-                Assert(submissionStatus == SubmissionStatus::Empty);
-                EndMutex(&submissionMutex);
-
-                u32 num = 1024;
-                SlabAllocInfo *infos =
-                    slabAllocInfoRingBuffer.SynchronizedRead(&slabInfoMutex, state.arena, num);
+                ScratchArena scratch;
+                u32 num              = 1024;
+                SlabAllocInfo *infos = slabAllocInfoRingBuffer.SynchronizedRead(
+                    &slabInfoMutex, scratch.temp.arena, num);
 
                 if (!infos) return;
+
+                u32 submissionIndex = ~0u;
+                for (;;)
+                {
+                    BeginMutex(&submissionMutex);
+                    if (submissionWriteIndex + 1 <
+                        submissionReadIndex + gpuSubmissionStates.Length())
+                    {
+                        submissionIndex =
+                            submissionWriteIndex++ % gpuSubmissionStates.Length();
+                        GPUSubmissionState &state = gpuSubmissionStates[submissionIndex];
+                        SubmissionStatus submissionStatus = state.status;
+                        Assert(submissionStatus == SubmissionStatus::Empty);
+                        state.status = SubmissionStatus::Pending;
+                        EndMutex(&submissionMutex);
+                        break;
+                    }
+                    EndMutex(&submissionMutex);
+                    std::this_thread::yield();
+                }
+                GPUSubmissionState &state = gpuSubmissionStates[submissionIndex];
 
                 state.status         = SubmissionStatus::Pending;
                 state.smallAllocs    = StaticArray<SmallAllocation>(state.arena, num);
                 state.slabAllocInfos = StaticArray<SlabAllocInfo>(state.arena, num);
 
-                ScratchArena scratch;
                 ChunkedLinkedList<u8> data(scratch.temp.arena);
 
                 CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Copy);
@@ -2022,8 +2129,7 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                     Ptex::PtexTexture *t = cache->get((char *)texInfo.filename.str, error);
                     Ptex::FaceInfo fi    = t->getFaceInfo(faceID);
 
-                    Assert(mipLevel <= fi.res.ulog2);
-                    Assert(mipLevel <= fi.res.vlog2);
+                    Assert(mipLevel <= fi.res.ulog2 || mipLevel <= fi.res.vlog2);
 
                     int log2Width  = Max((int)fi.res.ulog2 - (int)mipLevel, 0);
                     int log2Height = Max((int)fi.res.vlog2 - (int)mipLevel, 0);
@@ -2035,23 +2141,28 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                     u32 numChannels     = t->numChannels();
                     u32 bytesPerChannel = Ptex::DataSize(t->dataType());
                     u32 bytesPerPixel   = numChannels * bytesPerChannel;
-                    int stride          = fi.res.u() * bytesPerPixel;
+                    int stride          = res.u() * bytesPerPixel;
                     int rowlen          = stride;
-                    int size            = stride * fi.res.v();
 
-                    char *buffer = PushArrayNoZero(scratch.temp.arena, char, size);
+                    int size = stride * res.v();
 
-                    u32 numTilesU = Max(res.u() >> 7u, 1);
-                    u32 numTilesV = Max(res.v() >> 7u, 1);
+                    char *buffer = 0;
 
-                    u32 offsetU = 128u * (tileIndex % numTilesU);
-                    u32 offsetV = 128u * (tileIndex / numTilesU);
+                    u32 numTilesU = Max(res.u() >> log2MaxTileDim, 1);
+                    u32 numTilesV = Max(res.v() >> log2MaxTileDim, 1);
+
+                    u32 offsetU = maxTileDim * (tileIndex % numTilesU);
+                    u32 offsetV = maxTileDim * (tileIndex / numTilesU);
 
                     int dataResU = res.u();
                     int dataResV = res.v();
 
+                    Assert(offsetU < dataResU);
+                    Assert(offsetV < dataResV);
+
                     if (d->isConstant())
                     {
+                        buffer = PushArrayNoZero(scratch.temp.arena, char, size);
                         Ptex::PtexUtils::fill(d->getData(), buffer, stride, res.u(), res.v(),
                                               bytesPerPixel);
                     }
@@ -2070,6 +2181,11 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                         dataResU = tileures;
                         dataResV = tilevres;
 
+                        stride = tileures * bytesPerPixel;
+                        size   = stride * tilevres;
+                        rowlen = stride;
+                        buffer = PushArrayNoZero(scratch.temp.arena, char, size);
+
                         int tilerowlen   = bytesPerPixel * tileures;
                         int tile         = 0;
                         char *dsttilerow = (char *)buffer;
@@ -2082,9 +2198,13 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                         else
                             Ptex::PtexUtils::copy(t->getData(), tilerowlen, dsttile, stride,
                                                   tilevres, tilerowlen);
+
+                        offsetU = offsetU % tileures;
+                        offsetV = offsetV % tilevres;
                     }
                     else
                     {
+                        buffer = PushArrayNoZero(scratch.temp.arena, char, size);
                         Ptex::PtexUtils::copy(d->getData(), rowlen, buffer, stride, res.v(),
                                               rowlen);
                     }
@@ -2093,11 +2213,12 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                     {
                         int dstStride = Min(stride, int(maxTileDim * bytesPerPixel));
                         int vres      = Min(dataResV, int(maxTileDim));
+                        size          = dstStride * vres;
 
-                        char *newBuffer =
-                            PushArrayNoZero(scratch.temp.arena, char, dstStride *vres);
+                        char *newBuffer = PushArrayNoZero(scratch.temp.arena, char, size);
+                        char *src       = buffer + stride * offsetV + offsetU * bytesPerPixel;
 
-                        Utils::Copy(buffer, stride, newBuffer, dstStride, vres, dstStride);
+                        Utils::Copy(src, stride, newBuffer, dstStride, vres, dstStride);
 
                         stride = dstStride;
                         rowlen = dstStride;
@@ -2119,14 +2240,12 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                     currentFaceImg.borderSize       = 0;
                     currentFaceImg.strideWithBorder = currentFaceImg.strideNoBorder;
 
-                    u32 bufferOffset = data.Length();
                     if (t->alphaChannel() == -1)
                     {
+                        u32 dstBytesPerPixel = GetFormatSize(format);
+                        size = currentFaceImg.width * currentFaceImg.height * dstBytesPerPixel;
                         currentFaceImg.contents =
                             PushArrayNoZero(scratch.temp.arena, u8, size);
-                        u32 dstBytesPerPixel = GetFormatSize(format);
-
-                        auto *node = data.AddNode(size);
 
                         u32 dstOffset = 0;
                         u32 srcOffset = 0;
@@ -2173,7 +2292,7 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                         MemoryCopy(out, currentFaceImg.contents, size);
 
                         SmallAllocation smallAlloc;
-                        smallAlloc.info   = state.slabAllocInfos[requestIndex];
+                        smallAlloc.info   = infos[requestIndex];
                         smallAlloc.buffer = (u8 *)out;
                         smallAlloc.size   = size;
                         smallAlloc.width  = currentFaceImg.width;
@@ -2183,7 +2302,8 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                     }
                     else
                     {
-                        auto *node = data.AddNode(size);
+                        u32 bufferOffset = data.Length();
+                        auto *node       = data.AddNode(size);
                         MemoryCopy(node->values, currentFaceImg.contents, size);
 
                         GPUTextureSubmitInfo submitInfo;
@@ -2194,6 +2314,7 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                         submitInfo.height       = currentFaceImg.height;
 
                         submitInfos.Push(submitInfo);
+                        state.slabAllocInfos.Push(slabAllocInfo);
                     }
                 }
 
@@ -2213,20 +2334,25 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                 if (uploadBuffer.size)
                 {
                     device->DestroyBuffer(&uploadBuffer);
+                    uploadBuffer.size = 0;
                 }
-                uploadBuffer = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                                    data.Length(), MemoryUsage::CPU_TO_GPU);
-                data.Flatten((u8 *)uploadBuffer.mappedPtr);
-
-                for (GPUTextureSubmitInfo &info : submitInfos)
+                if (data.Length())
                 {
-                    BufferImageCopy copy = {};
-                    copy.bufferOffset    = info.bufferOffset;
-                    copy.baseLayer       = info.layerIndex;
-                    copy.layerCount      = 1;
-                    copy.offset          = Vec3i(0);
-                    copy.extent          = Vec3u(info.width, info.height, 1);
-                    cmd->CopyImage(&uploadBuffer, &slabs[info.slabIndex].image, &copy, 1);
+                    uploadBuffer =
+                        device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, data.Length(),
+                                             MemoryUsage::CPU_TO_GPU);
+                    data.Flatten((u8 *)uploadBuffer.mappedPtr);
+
+                    for (GPUTextureSubmitInfo &info : submitInfos)
+                    {
+                        BufferImageCopy copy = {};
+                        copy.bufferOffset    = info.bufferOffset;
+                        copy.baseLayer       = info.layerIndex;
+                        copy.layerCount      = 1;
+                        copy.offset          = Vec3i(0);
+                        copy.extent          = Vec3u(info.width, info.height, 1);
+                        cmd->CopyImage(&uploadBuffer, &slabs[info.slabIndex].image, &copy, 1);
+                    }
                 }
 
                 cmd->SignalOutsideFrame(state.semaphore);
@@ -2442,7 +2568,6 @@ void VirtualTextureManager::Callback()
             u32 sqrtLevelNumPages = std::sqrt(levelNumPages);
 
             // If there are still blank entries in the physical pools, then map those
-            // TODO IMPORTANT
 
             u32 pageIndex = ~0u;
             if (freePage < physicalPages.size())

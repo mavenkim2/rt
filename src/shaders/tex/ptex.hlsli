@@ -124,7 +124,7 @@ namespace Ptex
 
 }
 
-float4 StochasticCatmullRomBorderlessHelper(GPUMaterial material, Ptex::FaceData faceData, float2 texCoord, float2 texSize, uint mipLevel, float reservoirWeightSum, int faceID)
+float4 StochasticCatmullRomBorderlessHelper(GPUMaterial material, Ptex::FaceData faceData, float2 texCoord, float2 texSize, uint mipLevel, float reservoirWeightSum, int faceID, out uint outTileIndex)
 {
 #if 0
     // Lookup adjacency information if necessary
@@ -153,26 +153,30 @@ float4 StochasticCatmullRomBorderlessHelper(GPUMaterial material, Ptex::FaceData
     int neighborIndex = -1;
     texCoord = clamp(texCoord, 0.5, texSize - 0.5);
 
-    const uint2 faceSize = uint2(1u << faceData.log2Dim.x, 1u << faceData.log2Dim.y);
-
-    uint numTilesU = max(faceSize.x / 128, 1.f);
-    uint numTilesV = max(faceSize.y / 128, 1.f);
+    uint numTilesU = max(texSize.x / 128, 1.f);
+    uint numTilesV = max(texSize.y / 128, 1.f);
     uint tileIndex = numTilesU * uint(texCoord.y / 128) + uint(texCoord.x / 128);
+    // so this is just wrong/bugged somehow 
+    outTileIndex = tileIndex;
 
-    float2 newUv = texCoord / faceSize;
-    bool rotate = min(faceData.log2Dim.x, 128u) < min(faceData.log2Dim.y, 128u);
+    float2 newUv = texCoord / texSize;
+    bool rotate = min(faceData.log2Dim.x, 7u) < min(faceData.log2Dim.y, 7u);
     newUv = rotate ? float2(1 - newUv.y, newUv.x) : newUv;
+    texSize = rotate ? texSize.yx : texSize;
 
     // Virtual texture lookup
-    float4 result = reservoirWeightSum * VirtualTexture::Sample(material.textureIndex, tileIndex, faceID, mipLevel, newUv, faceSize);//, samplerNearestClamp);
+    float4 result = reservoirWeightSum * VirtualTexture::Sample(material.textureIndex, tileIndex, faceID, mipLevel, newUv, texSize);//, samplerNearestClamp);
 
     return result;
 }
 
 // https://research.nvidia.com/labs/rtr/publication/pharr2024stochtex/stochtex.pdf
-float4 SampleStochasticCatmullRomBorderless(Ptex::FaceData faceData, GPUMaterial material, uint faceID, float2 uv, uint mipLevel, inout float u, bool debug = false) 
+float4 SampleStochasticCatmullRomBorderless(Ptex::FaceData faceData, GPUMaterial material, uint faceID, float2 uv, uint mipLevel, inout float u, out uint tileIndex)
 {
-    float2 texSize = float2(1u << (faceData.log2Dim.x - mipLevel), 1u << (faceData.log2Dim.y - mipLevel));
+    int log2Width = max((int)faceData.log2Dim.x - (int)mipLevel, 0);
+    int log2Height = max((int)faceData.log2Dim.y - (int)mipLevel, 0);
+
+    float2 texSize = float2(1u << log2Width, 1u << log2Height);
     float2 w[4];
     float2 texPos[4];
 
@@ -219,12 +223,13 @@ float4 SampleStochasticCatmullRomBorderless(Ptex::FaceData faceData, GPUMaterial
     float4 result = 0.f;
     float2 posCoord = float2(texPos[reservoir[0].x].x, texPos[reservoir[0].y].y);
     result += StochasticCatmullRomBorderlessHelper(material, faceData, posCoord, 
-                                                   texSize, mipLevel, weightsSum[0], faceID);
+                                                   texSize, mipLevel, weightsSum[0], faceID, tileIndex);
     if (weightsSum[1] != 0.f)
     {
         float2 negCoord = float2(texPos[reservoir[1].x].x, texPos[reservoir[1].y].y);
+        uint temp;
         result -= StochasticCatmullRomBorderlessHelper(material, faceData, negCoord, 
-                                                       texSize, mipLevel, weightsSum[1], faceID);
+                                                       texSize, mipLevel, weightsSum[1], faceID, temp);
     }
 
     return result;

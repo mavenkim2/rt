@@ -1094,53 +1094,6 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, ResourceHandle
                   GPUBuffer *buffer = GetRenderGraph()->GetBuffer(allocatedInstancesBuffer);
                   cmd->CopyBuffer(debug, buffer);
                   device->EndEvent(cmd);
-
-                  // if (debug) // numBlas - 1)
-                  // {
-                  //     // RenderGraph *rg   = GetRenderGraph();
-                  //     GPUBuffer readback0 = device->CreateBuffer(
-                  //         VK_BUFFER_USAGE_TRANSFER_DST_BIT, clasGlobalsBuffer.size,
-                  //         MemoryUsage::GPU_TO_CPU);
-                  //     cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                  //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                  //                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                  //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-                  //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                  //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                  //                  VK_ACCESS_2_SHADER_WRITE_BIT,
-                  //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-                  //     // cmd->Barrier(
-                  //     //     img, VK_IMAGE_LAYOUT_GENERAL,
-                  //     //     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                  //     //     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                  //     // VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                  //     //     VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-                  //     //     QueueType_Ignored, QueueType_Ignored, level, 1);
-                  //
-                  //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                  //     //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                  //     //     // VK_ACCESS_2_SHADER_WRITE_BIT,
-                  //     //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-                  //     cmd->FlushBarriers();
-                  //
-                  //     // BufferImageCopy copy = {};
-                  //     // copy.mipLevel        = level;
-                  //     // copy.extent          = Vec3u(width, height, 1);
-                  //
-                  //     cmd->CopyBuffer(&readback0, &clasGlobalsBuffer);
-                  //     // cmd->CopyBuffer(&readback2, buffer1);
-                  //     // cmd->CopyImageToBuffer(&readback0, img, &copy, 1);
-                  //     Semaphore testSemaphore   = device->CreateSemaphore();
-                  //     testSemaphore.signalValue = 1;
-                  //     cmd->SignalOutsideFrame(testSemaphore);
-                  //     device->SubmitCommandBuffer(cmd);
-                  //     device->Wait(testSemaphore);
-                  //
-                  //     u32 *data = (u32 *)readback0.mappedPtr;
-                  //     Print("%u\n", data[GLOBALS_ALLOCATED_INSTANCE_COUNT_INDEX]);
-                  //
-                  //     int stop = 5;
-                  // }
               })
             .AddHandle(visiblePartitionsBuffer, ResourceUsageType::Read)
             .AddHandle(clasGlobalsBufferHandle, ResourceUsageType::RW)
@@ -1508,11 +1461,6 @@ bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
             ref.maxY   = bounds.maxP[1];
             ref.maxZ   = bounds.maxP[2];
             ref.primID = i;
-
-            if (ref.minX > 1e10)
-            {
-                int stop = 5;
-            }
 
             refs.Push(ref);
 

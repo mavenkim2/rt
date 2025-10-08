@@ -413,13 +413,14 @@ void main()
             rayCone.Propagate(surfaceSpreadAngle, rayT);
             float lambda = rayCone.ComputeTextureLOD(hitInfo.p0, hitInfo.p1, hitInfo.p2, hitInfo.uv0, hitInfo.uv1, hitInfo.uv2, dir, hitInfo.n, dim, printDebug);
             uint mipLevel = (uint)lambda;
-            reflectance = SampleStochasticCatmullRomBorderless(faceData, material, hitInfo.faceID, hitInfo.uv, mipLevel, filterU, printDebug);
+            mipLevel = min(mipLevel, max(faceData.log2Dim.x, faceData.log2Dim.y));
+            uint tileIndex = 0;
+            reflectance = SampleStochasticCatmullRomBorderless(faceData, material, hitInfo.faceID, hitInfo.uv, mipLevel, filterU, tileIndex);
 
             if (depth == 1)
             {
                 //float2 newUv = faceData.rotate ? float2(1 - hitInfo.uv.y, hitInfo.uv.x) : hitInfo.uv;
-                const uint feedbackMipLevel = min(mipLevel, min(faceData.log2Dim.x, faceData.log2Dim.y));
-                feedbackRequest = uint2(material.textureIndex | (feedbackMipLevel << 16u), hitInfo.faceID);
+                feedbackRequest = uint2(material.textureIndex | (tileIndex << 16u), hitInfo.faceID | (mipLevel << 28u));
             }
         }
         else 

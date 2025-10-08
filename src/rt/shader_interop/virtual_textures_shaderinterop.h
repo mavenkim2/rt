@@ -50,7 +50,6 @@ struct TextureHashTableEntry
 {
     uint2 offset;
     uint mip;
-    uint layer;
     uint bindlessIndex;
 
     uint textureIndex;
@@ -69,15 +68,13 @@ inline TextureHashTableEntry UnpackPageTableEntry(uint4 packedPageTableEntry)
     uint textureIndex  = BitFieldExtractU32(packedPageTableEntry.x, 16, 0);
     uint tileIndex     = BitFieldExtractU32(packedPageTableEntry.x, 16, 16);
     uint faceID        = BitFieldExtractU32(packedPageTableEntry.y, 28, 0);
-    uint mipLevel      = BitFieldExtractU32(packedPageTableEntry.y, 28, 0);
+    uint mipLevel      = BitFieldExtractU32(packedPageTableEntry.y, 4, 28);
     uint bindlessIndex = packedPageTableEntry.z;
-    uint layerIndex    = BitFieldExtractU32(packedPageTableEntry.w, 12, 0);
-    uint offsetX       = BitFieldExtractU32(packedPageTableEntry.w, 4, 12);
-    uint offsetY       = BitFieldExtractU32(packedPageTableEntry.w, 4, 16);
+    uint offsetX       = BitFieldExtractU32(packedPageTableEntry.w, 4, 0);
+    uint offsetY       = BitFieldExtractU32(packedPageTableEntry.w, 4, 4);
 
     result.offset        = uint2(offsetX, offsetY);
     result.mip           = mipLevel;
-    result.layer         = layerIndex;
     result.bindlessIndex = bindlessIndex;
     result.textureIndex  = textureIndex;
     result.tileIndex     = tileIndex;

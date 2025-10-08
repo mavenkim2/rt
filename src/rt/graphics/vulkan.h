@@ -1157,7 +1157,7 @@ struct Vulkan
     void DestroyAccelerationStructure(VkAccelerationStructureKHR as);
     void DestroyPool(VkDescriptorPool pool);
     int BindlessIndex(GPUImage *image);
-    int BindlessIndex(GPUImage *image, VkImageLayout layout);
+    int BindlessIndex(GPUImage *image, VkImageLayout layout, int subresourceIndex = -1);
     int BindlessStorageIndex(GPUImage *image, int subresourceIndex = -1);
     int BindlessStorageIndex(GPUBuffer *buffer, size_t offset = 0,
                              size_t range = VK_WHOLE_SIZE);

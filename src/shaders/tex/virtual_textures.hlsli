@@ -15,32 +15,33 @@ namespace VirtualTexture
         uint64_t hash = MixBits(bitsToHash);
 
         uint maxHashSize = (1u << 24u);
-        uint hashIndex = uint(hash % maxHashSize);
+        uint mask = maxHashSize - 1;
+        uint hashIndex = uint(hash) & mask;
+
+        float4 outC = 1;
 
         for (;;)
         {
             uint4 hashValue = pageHashTable[hashIndex];
             if (hashValue.x != ~0u)
             {
+                outC = float4(0, 0, 1, 1);
                 TextureHashTableEntry pageTableEntry = UnpackPageTableEntry(hashValue);
-                if (pageTableEntry.faceID == faceID && pageTableEntry.textureIndex == textureIndex && pageTableEntry.mip == mip)
+                if (pageTableEntry.faceID == faceID && pageTableEntry.textureIndex == textureIndex && pageTableEntry.mip == mip && pageTableEntry.tileIndex == tileIndex)
                 {
-                    uint width, height, layers;
-                    bindlessFloat4ArrayTextures[NonUniformResourceIndex(pageTableEntry.bindlessIndex)].GetDimensions(width, height, layers);
+                    uint width, height;
+                    bindlessFloat4Textures[NonUniformResourceIndex(pageTableEntry.bindlessIndex)].GetDimensions(width, height);
 
-                    float2 texel = float2(pageTableEntry.offset) + uv * uint2(width, height);
-                    float3 texCoord = float3(texel / float2(width, height), pageTableEntry.layer);
-                    float4 result = bindlessFloat4ArrayTextures[NonUniformResourceIndex(pageTableEntry.bindlessIndex)].SampleLevel(samplerNearestClamp, texCoord, 0.f);
-
-                    //float4 result = 0;
+                    float2 texel = float2(pageTableEntry.offset) + uv * texSize;
+                    float2 texCoord = texel / float2(width, height);
+                    float4 result = bindlessFloat4Textures[NonUniformResourceIndex(pageTableEntry.bindlessIndex)].SampleLevel(samplerNearestClamp, texCoord, 0.f);
 
                     return result;
                 }
             }
             else 
             {
-                return 0;
-                //break;
+                return outC;
             }
             hashIndex = (hashIndex + 1) % maxHashSize;
         }

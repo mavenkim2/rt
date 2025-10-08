@@ -237,7 +237,6 @@ struct FeedbackRequest
 
 enum class SubmissionStatus
 {
-    None,
     Empty,
     Pending,
 };
@@ -263,15 +262,21 @@ struct VirtualTextureManager
         // u8 *contents;
     };
 
+    struct SlabEntry
+    {
+        Vec3u offset;
+        int bindlessIndex;
+        VkImageLayout layout;
+    };
+
     struct Slab
     {
         int log2Width;
         int log2Height;
 
-        StaticArray<Vec3u> entries;
+        StaticArray<SlabEntry> entries;
         StaticArray<int> freeList;
 
-        int bindlessIndex;
         GPUImage image;
         int next;
     };
@@ -280,9 +285,10 @@ struct VirtualTextureManager
     {
         Vec2u feedbackRequest;
         Vec2u offset;
-        u32 layerIndex;
+        u32 bindlessIndex;
         u32 slabIndex;
         u32 entryIndex;
+        int layerIndex;
     };
 
     struct HashTableEntry
@@ -294,7 +300,8 @@ struct VirtualTextureManager
 
         int slabIndex;
         int slabEntryIndex;
-        Vec3u offset;
+        Vec2u offset;
+        int bindlessIndex;
 
         int lruPrev;
         int lruNext;
@@ -302,10 +309,10 @@ struct VirtualTextureManager
         HashTableEntry() {}
 
         HashTableEntry(u32 textureIndex, u32 faceID, u32 tileIndex, u32 mipLevel,
-                       int slabIndex, int slabEntryIndex, Vec3u offset)
+                       int slabIndex, int slabEntryIndex, Vec2u offset, int bindlessIndex)
             : textureIndex(textureIndex), faceID(faceID), tileIndex(tileIndex),
               mipLevel(mipLevel), slabIndex(slabIndex), slabEntryIndex(slabEntryIndex),
-              offset(offset), lruPrev(-1), lruNext(-1)
+              offset(offset), bindlessIndex(bindlessIndex), lruPrev(-1), lruNext(-1)
         {
         }
     };
@@ -395,7 +402,7 @@ struct VirtualTextureManager
     u32 AllocateVirtualPages(Arena *arena, string filename);
     bool AllocateMemory(int logWidth, int logHeight, SlabAllocInfo &info);
     u64 CalculateHash(u32 textureIndex, u32 faceIndex, u32 mipLevel, u32 tileIndex);
-    u32 UpdateHash(HashTableEntry entry, u64 hash);
+    u32 UpdateHash(HashTableEntry entry);
     int GetInHash(u32 textureIndex, u32 tileIndex, u32 faceID, u32 mipLevel);
     // void PinPages(CommandBuffer *cmd, u32 textureIndex, Vec3u *pinnedPages, u32 *offsets,
     //               u32 *data, u32 numPages);

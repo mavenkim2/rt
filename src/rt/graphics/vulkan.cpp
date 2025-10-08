@@ -711,8 +711,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
             else if (types[type] == DescriptorType::SampledImage)
             {
                 poolSize.descriptorCount =
-                    Min(10000u,
-                        deviceProperties.properties.limits.maxDescriptorSetSampledImages / 4);
+                    deviceProperties.properties.limits.maxDescriptorSetSampledImages / 2;
             }
             else if (types[type] == DescriptorType::StorageImage)
             {
@@ -1476,7 +1475,8 @@ void CommandBuffer::Barrier(GPUImage *image, VkImageLayout oldLayout, VkImageLay
 {
     VkImageMemoryBarrier2 barrier = device->ImageMemoryBarrier(
         image->image, oldLayout, newLayout, srcStageMask, dstStageMask, srcAccessMask,
-        dstAccessMask, image->aspect, fromQueue, toQueue);
+        dstAccessMask, image->aspect, fromQueue, toQueue, baseMipLevel, levelCount,
+        baseArrayLayer, layerCount);
 
     imageBarriers.push_back(barrier);
 
@@ -2133,6 +2133,8 @@ int Vulkan::BindlessIndex(GPUImage *image)
     BindlessDescriptorPool &descriptorPool = bindlessDescriptorPools[0];
     int index                              = descriptorPool.Allocate();
 
+    Assert(index != -1);
+
     VkDescriptorImageInfo info = {};
     info.imageView             = image->imageView;
     info.imageLayout           = image->lastLayout;
@@ -2148,13 +2150,14 @@ int Vulkan::BindlessIndex(GPUImage *image)
     return index;
 }
 
-int Vulkan::BindlessIndex(GPUImage *image, VkImageLayout layout)
+int Vulkan::BindlessIndex(GPUImage *image, VkImageLayout layout, int subresourceIndex)
 {
     BindlessDescriptorPool &descriptorPool = bindlessDescriptorPools[0];
     int index                              = descriptorPool.Allocate();
 
     VkDescriptorImageInfo info = {};
-    info.imageView             = image->imageView;
+    info.imageView             = subresourceIndex == -1 ? image->imageView
+                                                        : image->subresources[subresourceIndex].imageView;
     info.imageLayout           = layout;
 
     VkWriteDescriptorSet writeSet = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
