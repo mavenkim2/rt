@@ -155,12 +155,14 @@ float4 StochasticCatmullRomBorderlessHelper(GPUMaterial material, Ptex::FaceData
 
     uint numTilesU = max(texSize.x / 128, 1.f);
     uint numTilesV = max(texSize.y / 128, 1.f);
-    uint tileIndex = numTilesU * uint(texCoord.y / 128) + uint(texCoord.x / 128);
-    // so this is just wrong/bugged somehow 
+    uint tileIndex = numTilesU * uint(texCoord.y / 128.f) + uint(texCoord.x / 128.f);
     outTileIndex = tileIndex;
 
+    texCoord = texCoord % 128.f;
+    texSize = min(texSize, 128);
+
     float2 newUv = texCoord / texSize;
-    bool rotate = min(faceData.log2Dim.x, 7u) < min(faceData.log2Dim.y, 7u);
+    bool rotate = texSize.x < texSize.y; //min(faceData.log2Dim.x, 7u) < min(faceData.log2Dim.y, 7u);
     newUv = rotate ? float2(1 - newUv.y, newUv.x) : newUv;
     texSize = rotate ? texSize.yx : texSize;
 

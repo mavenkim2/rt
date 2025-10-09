@@ -19,13 +19,13 @@ namespace VirtualTexture
         uint hashIndex = uint(hash) & mask;
 
         float4 outC = 1;
+        outC = float4(0, 0, 1, 1);
 
         for (;;)
         {
             uint4 hashValue = pageHashTable[hashIndex];
             if (hashValue.x != ~0u)
             {
-                outC = float4(0, 0, 1, 1);
                 TextureHashTableEntry pageTableEntry = UnpackPageTableEntry(hashValue);
                 if (pageTableEntry.faceID == faceID && pageTableEntry.textureIndex == textureIndex && pageTableEntry.mip == mip && pageTableEntry.tileIndex == tileIndex)
                 {

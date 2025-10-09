@@ -257,6 +257,7 @@ struct VirtualTextureManager
     struct TextureInfo
     {
         string filename;
+        u8 *faceDataSizes;
         // FaceMetadata2 *faceMetadata;
         // TextureMetadata metadata;
         // u8 *contents;
@@ -266,7 +267,6 @@ struct VirtualTextureManager
     {
         Vec3u offset;
         int bindlessIndex;
-        VkImageLayout layout;
     };
 
     struct Slab
@@ -275,6 +275,7 @@ struct VirtualTextureManager
         int log2Height;
 
         StaticArray<SlabEntry> entries;
+        StaticArray<VkImageLayout> layerLayouts;
         StaticArray<int> freeList;
 
         GPUImage image;
@@ -399,7 +400,7 @@ struct VirtualTextureManager
 
     VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 maxSize, u32 slabSize,
                                                  VkFormat format);
-    u32 AllocateVirtualPages(Arena *arena, string filename);
+    u32 AllocateVirtualPages(Arena *arena, string filename, u8 *faceData);
     bool AllocateMemory(int logWidth, int logHeight, SlabAllocInfo &info);
     u64 CalculateHash(u32 textureIndex, u32 faceIndex, u32 mipLevel, u32 tileIndex);
     u32 UpdateHash(HashTableEntry entry);

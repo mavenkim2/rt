@@ -35,6 +35,9 @@ StructuredBuffer<GPUMaterial> materials : register(t4);
 ConstantBuffer<ShaderDebugInfo> debugInfo: register(b7);
 
 RWStructuredBuffer<uint> feedbackBuffer : register(u12);
+
+RWStructuredBuffer<uint> debugBuffer : register(u13);
+
 StructuredBuffer<GPUInstance> gpuInstances : register(t14);
 StructuredBuffer<GPUTruncatedEllipsoid> truncatedEllipsoids : register(t16);
 StructuredBuffer<GPUTransform> instanceTransforms : register(t17);
@@ -167,18 +170,6 @@ void main()
                     float c = dot(rayPos, rayPos) - ellipsoid.sphere.w * ellipsoid.sphere.w;
                     float l = length(rayPos - b / (2.f * a) * rayDir);
                     float discrim = 4 * a * (ellipsoid.sphere.w + l) * (ellipsoid.sphere.w - l);
-
-#if 0
-                    if (depth == 1)
-                    {
-                        uint debugIndex;
-                        InterlockedAdd(globals[GLOBALS_DEBUG], 1, debugIndex);
-                        if (debugIndex < 1u << 21u)
-                        {
-                            debugBuffer[debugIndex] = float2(objectFromWorld[0][3], objectFromWorld[1][3]);
-                        }
-                    }
-#endif
 
                     if (discrim < 0.f)
                     {
@@ -360,8 +351,6 @@ void main()
 
             hitInfo = CalculateTriangleHitInfo(p0, p1, p2, n0, n1, n2, gn, uv0, uv1, uv2, bary);
             hitInfo.faceID = faceID;
-
-            //hitInfo.gn = dot(hitInfo.gn, 
         }
         else if (query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
         {
@@ -419,7 +408,6 @@ void main()
 
             if (depth == 1)
             {
-                //float2 newUv = faceData.rotate ? float2(1 - hitInfo.uv.y, hitInfo.uv.x) : hitInfo.uv;
                 feedbackRequest = uint2(material.textureIndex | (tileIndex << 16u), hitInfo.faceID | (mipLevel << 28u));
             }
         }

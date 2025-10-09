@@ -1316,10 +1316,11 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 maxSize, u32 slab
     }
 }
 
-u32 VirtualTextureManager::AllocateVirtualPages(Arena *arena, string filename)
+u32 VirtualTextureManager::AllocateVirtualPages(Arena *arena, string filename, u8 *faceData)
 {
     TextureInfo texInfo;
-    texInfo.filename = PushStr8Copy(arena, filename);
+    texInfo.filename      = PushStr8Copy(arena, filename);
+    texInfo.faceDataSizes = faceData;
     textureInfo.push_back(texInfo);
 
     return textureInfo.size() - 1;
@@ -1378,10 +1379,11 @@ bool VirtualTextureManager::AllocateMemory(int logWidth, int logHeight, SlabAllo
     u32 numEntries = entriesX * entriesY * numLayers;
 
     Slab slab;
-    slab.log2Width  = logWidth;
-    slab.log2Height = logHeight;
-    slab.entries    = StaticArray<SlabEntry>(texArena, numEntries);
-    slab.freeList   = StaticArray<int>(texArena, numEntries);
+    slab.log2Width    = logWidth;
+    slab.log2Height   = logHeight;
+    slab.entries      = StaticArray<SlabEntry>(texArena, numEntries);
+    slab.freeList     = StaticArray<int>(texArena, numEntries);
+    slab.layerLayouts = StaticArray<VkImageLayout>(texArena, numLayers);
 
     ImageDesc desc(
         ImageType::Type2D, sizeX, sizeY, 1, 1, numLayers, format, MemoryUsage::GPU_ONLY,
@@ -1394,6 +1396,7 @@ bool VirtualTextureManager::AllocateMemory(int logWidth, int logHeight, SlabAllo
         int subresourceIndex = device->CreateSubresource(&slab.image, 0, ~0u, layer, 1);
         int bindlessIndex    = device->BindlessIndex(
             &slab.image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, subresourceIndex);
+        slab.layerLayouts.Push(VK_IMAGE_LAYOUT_UNDEFINED);
 
         for (u32 entryY = 0; entryY < entriesY; entryY++)
         {
@@ -1401,7 +1404,7 @@ bool VirtualTextureManager::AllocateMemory(int logWidth, int logHeight, SlabAllo
             {
                 Vec3u offset(entryX * entrySizeX, entryY * entrySizeY, layer);
 
-                SlabEntry entry = {offset, bindlessIndex, VK_IMAGE_LAYOUT_UNDEFINED};
+                SlabEntry entry = {offset, bindlessIndex};
                 slab.entries.Push(entry);
                 slab.freeList.Push(slab.entries.Length() - 1);
             }
@@ -1608,6 +1611,12 @@ void VirtualTextureManager::ClearTextures(CommandBuffer *cmd)
 Vec4u VirtualTextureManager::PackHashTableEntry(HashTableEntry &entry)
 {
     Vec4u packed;
+    Assert(entry.textureIndex < (1u << 16u));
+    Assert(entry.tileIndex < (1u << 16u));
+    Assert(entry.faceID < (1u << 28u));
+    Assert(entry.mipLevel < (1u << 4u));
+    Assert(entry.offset.x < 16 && entry.offset.y < 16);
+
     packed.x = entry.textureIndex | (entry.tileIndex << 16u);
     packed.y = entry.faceID | (entry.mipLevel << 28u);
     packed.z = entry.bindlessIndex;
@@ -1625,6 +1634,7 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
     Vec2u *feedbackRequests = (Vec2u *)((u32 *)feedbackBuffers[currentBuffer].mappedPtr + 1);
 
     // Process feedback requests
+    // TODO IMPORTANT: offload this to another thread
     int textureFeedbackRequest = TIMED_CPU_RANGE_NAME_BEGIN("compact requests");
     StaticArray<FeedbackRequest> compactedFeedbackRequests(scratch.temp.arena,
                                                            numFeedbackRequests);
@@ -1729,14 +1739,14 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
         u32 mipLevel          = BitFieldExtractU32(feedbackRequest.y, 4, 28);
 
         TextureInfo &texInfo = textureInfo[textureIndex];
-        Ptex::String error;
-        Ptex::PtexTexture *t = cache->get((char *)texInfo.filename.str, error);
-        Assert(t);
-        Ptex::FaceInfo fi = t->getFaceInfo(faceID);
+        u8 faceSizes         = texInfo.faceDataSizes[faceID];
 
-        Assert(mipLevel <= fi.res.ulog2 || mipLevel <= fi.res.vlog2);
-        int log2Width  = Clamp((int)fi.res.ulog2 - (int)mipLevel, 0, (int)log2MaxTileDim);
-        int log2Height = Clamp((int)fi.res.vlog2 - (int)mipLevel, 0, (int)log2MaxTileDim);
+        int ulog2 = (int)BitFieldExtractU32(faceSizes, 4, 0);
+        int vlog2 = (int)BitFieldExtractU32(faceSizes, 4, 4);
+
+        Assert(mipLevel <= ulog2 || mipLevel <= vlog2);
+        int log2Width  = Clamp((int)ulog2 - (int)mipLevel, 0, (int)log2MaxTileDim);
+        int log2Height = Clamp((int)vlog2 - (int)mipLevel, 0, (int)log2MaxTileDim);
         int minDim     = Min(log2Width, log2Height);
         int maxDim     = Max(log2Width, log2Height);
 
@@ -1749,6 +1759,9 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
             for (;;)
             {
                 int entryToEvict = cpuPageHashTable[lruTail].lruPrev;
+
+                // TODO: instead of failing, if an exact match isn't found use a slab with
+                // larger entries
                 if (entryToEvict == lruUsed)
                 {
                     ErrorExit(0, "Ran out of entries in the LRU\n");
@@ -1844,24 +1857,25 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                 computeCmd->Barrier(
                     &slab.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    VK_ACCESS_2_SHADER_READ_BIT, QueueType_Ignored, QueueType_Ignored, 0, ~0u,
-                    info.layerIndex, 1);
+                    VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                    VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT,
+                    QueueType_Ignored, QueueType_Ignored, 0, ~0u, info.layerIndex, 1);
             }
 
             // Allocate small entries
             for (SmallAllocation &info : state.smallAllocs)
             {
-                Slab &slab       = slabs[info.info.slabIndex];
-                SlabEntry &entry = slab.entries[info.info.entryIndex];
-                if (entry.layout != VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+                Slab &slab            = slabs[info.info.slabIndex];
+                SlabEntry &entry      = slab.entries[info.info.entryIndex];
+                VkImageLayout &layout = slab.layerLayouts[info.info.layerIndex];
+                if (layout != VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
                 {
                     computeCmd->Barrier(
-                        &slab.image, entry.layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        &slab.image, layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                         VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                         VK_ACCESS_2_NONE, VK_ACCESS_2_TRANSFER_WRITE_BIT, QueueType_Ignored,
                         QueueType_Ignored, 0, ~0u, info.info.layerIndex, 1);
-                    entry.layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                    layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
                 }
             }
             computeCmd->FlushBarriers();
@@ -1873,17 +1887,53 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                 device->DestroyBuffer(&uploadBuffer);
                 uploadBuffer.size = 0;
             }
+
             if (state.smallAllocs.Length())
             {
+                struct Handle
+                {
+                    u32 sortKey;
+                    int index;
+                };
+
+                // Generate radix sort keys
+                Handle *handles =
+                    PushArrayNoZero(scratch.temp.arena, Handle, state.smallAllocs.Length());
+
+                for (int index = 0; index < state.smallAllocs.Length(); index++)
+                {
+                    SmallAllocation &info  = state.smallAllocs[index];
+                    handles[index].sortKey = info.info.slabIndex;
+                    handles[index].index   = index;
+                }
+
+                SortHandles<Handle, false>(handles, state.smallAllocs.Length());
+
                 u32 maxSmallUploadSize =
                     state.smallAllocs.Length() * 8 * 16 * GetFormatSize(format);
                 uploadBuffer =
                     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, maxSmallUploadSize,
                                          MemoryUsage::CPU_TO_GPU);
 
-                for (SmallAllocation &info : state.smallAllocs)
+                int slabIndex = state.smallAllocs[handles[0].index].info.slabIndex;
+
+                BufferImageCopy *copies = PushArrayNoZero(scratch.temp.arena, BufferImageCopy,
+                                                          state.smallAllocs.Length());
+                u32 numCopies           = 0;
+
+                for (int index = 0; index < state.smallAllocs.Length(); index++)
                 {
-                    Slab &slab = slabs[info.info.slabIndex];
+                    SmallAllocation &info = state.smallAllocs[handles[index].index];
+                    if (info.info.slabIndex != slabIndex)
+                    {
+                        Slab &slab = slabs[slabIndex];
+                        computeCmd->CopyImage(&uploadBuffer, &slab.image, copies, numCopies);
+
+                        slabIndex = info.info.slabIndex;
+                        numCopies = 0;
+                    }
+
+                    u32 copyIndex = numCopies++;
                     MemoryCopy((u8 *)uploadBuffer.mappedPtr + bufferOffset, info.buffer,
                                info.size);
 
@@ -1893,10 +1943,13 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                     copy.layerCount      = 1;
                     copy.offset          = Vec3i(info.info.offset.x, info.info.offset.y, 0);
                     copy.extent          = Vec3u(info.width, info.height, 1);
-                    computeCmd->CopyImage(&uploadBuffer, &slab.image, &copy, 1);
+                    copies[copyIndex]    = copy;
 
                     bufferOffset += info.size;
                 }
+
+                Slab &slab = slabs[slabIndex];
+                computeCmd->CopyImage(&uploadBuffer, &slab.image, copies, numCopies);
             }
 
             Print("num small allocs: %u, size: %u\n", state.smallAllocs.Length(),
@@ -1925,8 +1978,9 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                 request.hashIndex = hashIndex;
                 updateRequests.Push(request);
 
-                SlabEntry &slabEntry = slab.entries[info.info.entryIndex];
-                if (slabEntry.layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+                VkImageLayout &layout = slab.layerLayouts[info.info.layerIndex];
+
+                if (layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
                 {
                     computeCmd->Barrier(
                         &slab.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -1935,7 +1989,7 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                         VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT,
                         QueueType_Ignored, QueueType_Ignored, 0, ~0u, info.info.layerIndex, 1);
 
-                    slabEntry.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
                 }
             }
             computeCmd->FlushBarriers();
@@ -2136,6 +2190,10 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                     Ptex::Res res(log2Width, log2Height);
 
                     Assert(t);
+                    if (faceID == 673)
+                    {
+                        int stop = 5;
+                    }
                     Ptex::PtexPtr<Ptex::PtexFaceData> d(t->getData(faceID, res));
 
                     u32 numChannels     = t->numChannels();
@@ -2157,6 +2215,7 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                     int dataResU = res.u();
                     int dataResV = res.v();
 
+                    Assert(tileIndex < numTilesU * numTilesV);
                     Assert(offsetU < dataResU);
                     Assert(offsetV < dataResV);
 
@@ -2209,7 +2268,7 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                                               rowlen);
                     }
 
-                    if (dataResU >= maxTileDim || dataResV >= maxTileDim)
+                    if (dataResU > maxTileDim || dataResV > maxTileDim)
                     {
                         int dstStride = Min(stride, int(maxTileDim * bytesPerPixel));
                         int vres      = Min(dataResV, int(maxTileDim));
@@ -2274,6 +2333,7 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                         img.contents    = PushArray(scratch.temp.arena, u8, size);
                         Swap(img.width, img.height);
                         Swap(img.log2Width, img.log2Height);
+                        Assert(img.width > img.height);
                         img.strideNoBorder   = img.width * img.bytesPerPixel;
                         img.strideWithBorder = img.GetPaddedWidth() * img.bytesPerPixel;
                         img.WriteRotated(currentFaceImg, Vec2u(0, 0), Vec2u(0, 0), 1,
@@ -2283,6 +2343,8 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                                          currentFaceImg.GetPaddedHeight(), Vec2u(0, 0));
 
                         currentFaceImg = img;
+
+                        // MemorySet(currentFaceImg.contents, 0xff, size);
                     }
                     t->release();
 
@@ -2360,113 +2422,6 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
             }
         });
     }
-
-#if 0
-    u64 readIndex  = readSubmission.load(std::memory_order_relaxed);
-    u64 writeIndex = writeSubmission.load(std::memory_order_acquire);
-    Assert(readIndex <= writeIndex);
-    if (readIndex == writeIndex) return;
-
-    u64 semaphoreValue = device->GetSemaphoreValue(submissionSemaphore[readIndex]);
-    if (readIndex >= semaphoreValue - 1) return;
-
-    u32 numRequests                        = 0;
-    PageTableUpdateRequest *updateRequests = updateRequestRingBuffer.SynchronizedRead(
-        &updateRequestMutex, scratch.temp.arena, numRequests);
-
-    if (numRequests)
-    {
-        Assert(updateRequests);
-
-        TransferBuffer *pageTableRequestBuffer = &pageTableRequestBuffers[currentBuffer];
-        MemoryCopy(pageTableRequestBuffer->mappedPtr, updateRequests,
-                   sizeof(PageTableUpdateRequest) * numRequests);
-        computeCmd->SubmitTransfer(pageTableRequestBuffer);
-
-        // WAR for page table (only execution dependency), RAW for transfer buffer
-        // (memory + execution dependency)
-        computeCmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                            VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-        computeCmd->FlushBarriers();
-
-        PageTableUpdatePushConstant pc;
-        pc.numRequests                 = numRequests;
-        pc.bindlessPageTableStartIndex = bindlessPageTableStartIndex;
-
-        DescriptorSet updatePageTableDescriptorSet = descriptorSetLayout.CreateDescriptorSet();
-        updatePageTableDescriptorSet.Bind(0, &pageTableRequestBuffer->buffer);
-        computeCmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-        computeCmd->PushConstants(&push, &pc, descriptorSetLayout.pipelineLayout);
-        computeCmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE,
-                                       &updatePageTableDescriptorSet,
-                                       descriptorSetLayout.pipelineLayout);
-        computeCmd->Dispatch((numRequests + 63) >> 6, 1, 1);
-
-        // RAW for page table
-        computeCmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                            VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-        computeCmd->FlushBarriers();
-    }
-
-    // Update physical texture with new entries
-    u32 readDoubleBufferIndex = readIndex & 1;
-
-    StaticArray<BufferImageCopy> &writtenCopyCommands =
-        uploadCopyCommands[readDoubleBufferIndex];
-    u32 numCopies = writtenCopyCommands.size();
-
-    if (numCopies)
-    {
-        StaticArray<u8> &uploadBuffer = uploadBuffers[readDoubleBufferIndex];
-        // Queue family transfer to async copy queue
-        transitionCmd->Barrier(&gpuPhysicalPool, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                               VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                               VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_SHADER_READ_BIT,
-                               VK_ACCESS_2_NONE, computeCmdQueue, QueueType_Copy);
-        transferCmd->Barrier(&gpuPhysicalPool, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_NONE,
-                             VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_NONE,
-                             VK_ACCESS_2_TRANSFER_WRITE_BIT, computeCmdQueue, QueueType_Copy);
-        transitionCmd->FlushBarriers();
-        transferCmd->FlushBarriers();
-
-        // Copy data to staging buffer
-        GPUBuffer *uploadDeviceBuffer = &uploadDeviceBuffers[currentBuffer];
-        if (uploadDeviceBuffer->size < uploadBuffer.size())
-        {
-            if (uploadDeviceBuffer->size)
-            {
-                device->DestroyBuffer(uploadDeviceBuffer);
-            }
-            *uploadDeviceBuffer =
-                device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, uploadBuffer.size(),
-                                     MemoryUsage::CPU_TO_GPU);
-        }
-
-        MemoryCopy(uploadDeviceBuffer->mappedPtr, uploadBuffer.data, uploadBuffer.size());
-        transferCmd->CopyImage(uploadDeviceBuffer, &gpuPhysicalPool, writtenCopyCommands.data,
-                               numCopies);
-
-        // Queue family transfer back to source queue
-        transferCmd->Barrier(&gpuPhysicalPool, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                             VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_NONE,
-                             VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_NONE, QueueType_Copy,
-                             computeCmdQueue);
-        computeCmd->Barrier(&gpuPhysicalPool, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_NONE,
-                            VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_NONE,
-                            VK_ACCESS_2_SHADER_READ_BIT, QueueType_Copy, computeCmdQueue);
-        transferCmd->FlushBarriers();
-        computeCmd->FlushBarriers();
-    }
-
-    // Make sure all memory writes are visible
-    readSubmission.store(readIndex + 1, std::memory_order_release);
-#endif
 }
 
 void VirtualTextureManager::UnlinkLRU(int entryIndex)
@@ -2487,167 +2442,7 @@ void VirtualTextureManager::LinkLRU(int index)
     cpuPageHashTable[index].lruPrev = lruHead;
 
     cpuPageHashTable[nextEntry].lruPrev = index;
-    cpuPageHashTable[index].lruNext     = index;
+    cpuPageHashTable[lruHead].lruNext   = index;
 }
-
-#if 0
-// Executes on virtual texture thread
-void VirtualTextureManager::Callback()
-{
-    struct SortKey
-    {
-        u32 sortKey;
-        u32 requestIndex;
-    };
-
-    const u32 blockShift    = GetBlockShift(format);
-    const u32 bytesPerBlock = GetFormatSize(format);
-
-    const int pageTexelWidth = PAGE_WIDTH;
-    const int pageBlockWidth = pageTexelWidth >> blockShift;
-    const int pageByteSize   = Sqr(pageBlockWidth) * bytesPerBlock;
-
-    for (;;)
-    {
-        ScratchArena scratch;
-        // Get feedback requests
-
-        u32 numFeedbackRequests = 0;
-        Vec2u *feedbackRequests = feedbackRingBuffer.SynchronizedRead(
-            &feedbackMutex, scratch.temp.arena, numFeedbackRequests);
-        u32 numNonResidentFeedback = 0;
-
-        // Wait until the transfer buffer is read on the GPU before writing new data
-        u64 writeIndex = writeSubmission.load(std::memory_order_relaxed);
-        u64 readIndex  = readSubmission.load(std::memory_order_acquire);
-        if (readIndex + numPendingSubmissions <= writeIndex || numFeedbackRequests == 0)
-        {
-            std::this_thread::yield();
-            continue;
-        }
-
-        u32 writeDoubleBufferIndex = writeIndex & 1;
-
-        StaticArray<BufferImageCopy> copies(scratch.temp.arena, numNonResidentFeedback);
-
-        StaticArray<PageTableUpdateRequest> evictRequests(scratch.temp.arena,
-                                                          numNonResidentFeedback);
-
-        StaticArray<PageTableUpdateRequest> mapRequests(scratch.temp.arena,
-                                                        numNonResidentFeedback);
-
-        auto &uploadBuffer  = uploadBuffers[writeDoubleBufferIndex];
-        uploadBuffer.size() = 0;
-
-        if (freePage >= physicalPages.size())
-        {
-            Assert(0);
-            Print("Evicting %u pages\n", numNonResidentFeedback);
-        }
-
-        // Evict to make space for new entries while populating feedback buffer
-        CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Copy);
-        for (FeedbackRequest fr : compactedFeedbackRequests)
-        {
-            Vec2u feedbackRequest = fr.packedFeedbackInfo;
-            u32 virtualPageX      = feedbackRequest.x & 0xffff;
-            u32 virtualPageY      = feedbackRequest.x >> 16;
-            u32 textureIndex      = feedbackRequest.y & 0x00ffffff;
-            u32 mipLevel          = feedbackRequest.y >> 24;
-            u32 faceID            = 0;
-            u32 tileIndex         = 0;
-
-            TextureInfo &texInfo = textureInfo[textureIndex];
-            Assert(mipLevel < texInfo.metadata.numLevels);
-            TextureMetadata &textureMetadata = texInfo.metadata;
-            u32 levelOffset = mipLevel == 0 ? 0 : textureMetadata.mipPageOffsets[mipLevel - 1];
-            u32 levelNumPages     = mipLevel == 0
-                                        ? textureMetadata.mipPageOffsets[0]
-                                        : textureMetadata.mipPageOffsets[mipLevel] -
-                                          textureMetadata.mipPageOffsets[mipLevel - 1];
-            u32 sqrtLevelNumPages = std::sqrt(levelNumPages);
-
-            // If there are still blank entries in the physical pools, then map those
-
-            u32 pageIndex = ~0u;
-            if (freePage < physicalPages.size())
-            {
-                pageIndex          = freePage;
-                PhysicalPage &page = physicalPages[pageIndex];
-                freePage++;
-            }
-            else
-            {
-                // Otherwise, evict old entires
-                pageIndex                  = physicalPages[lruTail].prevPage;
-                PhysicalPage &physicalPage = physicalPages[pageIndex];
-                Vec2u virtualPage          = physicalPage.virtualPage;
-                u32 level                  = physicalPage.level;
-
-                // Replace previously mapped entry with a coarser mip
-
-                UnlinkLRU(pageIndex);
-            }
-
-            Assert(pageIndex != ~0u);
-
-            PhysicalPage &page = physicalPages[pageIndex];
-            page.virtualPage   = 0;
-            page.level         = mipLevel;
-
-            u32 mapPackedEntry = 0;
-            // PackPageTableEntry(page.page.x, page.page.y, mipLevel, page.layer);
-            // Update CPU page table
-
-            LinkLRU(pageIndex);
-
-            // Get the ptex data
-            // benefits:
-            // 1. no offline texture processing
-            // 2. downsides: no block compression... so cache fills up faster
-            // note: #2 may not matter. #1 is a definite benefit...
-
-            // copies.push_back(copy);
-
-            // u32 virtualPage = virtualPageY * sqrtLevelNumPages + virtualPageX;
-            // u32 pageOffset  = (levelOffset + virtualPage) * pageByteSize;
-            MemoryCopy(uploadBuffer.data + uploadBuffer.size(), texInfo.contents + pageOffset,
-                       pageByteSize);
-            uploadBuffer.size() += pageByteSize;
-
-            PageTableUpdateRequest mapRequest;
-            mapRequest.hashIndex = 0;
-            mapRequest.packed    = mapPackedEntry;
-            mapRequests.push_back(mapRequest);
-        }
-        Semaphore &sem  = submissionSemaphore[writeDoubleBufferIndex];
-        sem.signalValue = writeIndex + 1;
-        cmd->SignalOutsideFrame(sem);
-        device->SubmitCommandBuffer(cmd, false, true);
-
-        // Write evict requests if present
-        if (evictRequests.size())
-        {
-            updateRequestRingBuffer.SynchronizedWrite(&updateRequestMutex, evictRequests.data,
-                                                      evictRequests.size());
-        }
-
-        // Write copy commands
-        auto &copyCommands = uploadCopyCommands[writeDoubleBufferIndex];
-        Assert(copies.size() < copyCommands.capacity);
-        MemoryCopy(copyCommands.data, copies.data, sizeof(BufferImageCopy) * copies.size());
-        copyCommands.size() = copies.size();
-
-        writeSubmission.store(writeIndex + 1, std::memory_order_release);
-
-        // Write map requests
-        if (mapRequests.size())
-        {
-            updateRequestRingBuffer.SynchronizedWrite(&updateRequestMutex, mapRequests.data,
-                                                      mapRequests.size());
-        }
-    }
-}
-#endif
 
 } // namespace rt

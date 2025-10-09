@@ -181,7 +181,7 @@ void DebugState::PrintDebugRecords()
         f64 avg            = 0;
         f32 avgInvocations = 0;
         u64 num            = Min(size, record->count);
-        f32 time           = record->totalTimes[record->count % size];
+        f32 time           = record->totalTimes[(record->count - 1) % size];
         for (u32 timeIndex = 0; timeIndex < num; timeIndex++)
         {
             avg += record->totalTimes[timeIndex];

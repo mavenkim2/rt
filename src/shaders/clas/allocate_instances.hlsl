@@ -50,7 +50,6 @@ void main(uint3 dtID : SV_DispatchThreadID)
         InterlockedAdd(instanceFreeList[0], -1, instanceFreeListIndex);
         if (instanceFreeListIndex < 1)
         { 
-            InterlockedAdd(globals[GLOBALS_DEBUG], numTransforms - i);
             return;
         }
         uint instanceIndex = instanceFreeList[instanceFreeListIndex];

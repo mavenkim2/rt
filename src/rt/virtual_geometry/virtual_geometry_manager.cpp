@@ -972,7 +972,7 @@ void VirtualGeometryManager::ReprojectDepth(u32 targetWidth, u32 targetHeight,
 }
 
 void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, ResourceHandle sceneBuffer,
-                                              bool ptlas, GPUBuffer *debug)
+                                              bool ptlas)
 {
     RenderGraph *rg = GetRenderGraph();
     MergedInstancesPushConstant pc;
@@ -992,8 +992,7 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, ResourceHandle
               [maxPartitions = this->maxPartitions, &infos = this->partitionInfosBuffer,
                sceneBuffer, visiblePartitions              = this->visiblePartitionsBuffer,
                freePartitions           = this->evictedPartitionsBuffer,
-               allocatedInstancesBuffer = this->allocatedInstancesBuffer,
-               debug](CommandBuffer *cmd) {
+               allocatedInstancesBuffer = this->allocatedInstancesBuffer](CommandBuffer *cmd) {
                   device->BeginEvent(cmd, "Merged Instances Test");
                   cmd->Dispatch((maxPartitions + 31) / 32, 1, 1);
 
@@ -1047,8 +1046,7 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, ResourceHandle
 
         rg->StartComputePass(
               compactFreeListPipeline, compactFreeListLayout, 3,
-              [maxInstances = this->maxInstances, instanceFreeList0,
-               debug](CommandBuffer *cmd) {
+              [maxInstances = this->maxInstances, instanceFreeList0](CommandBuffer *cmd) {
                   device->BeginEvent(cmd, "Compact free list");
                   cmd->Dispatch(maxInstances / 128, 1, 1);
                   cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -1065,8 +1063,6 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, ResourceHandle
                                VK_ACCESS_2_TRANSFER_READ_BIT);
                   cmd->FlushBarriers();
 
-                  // GPUBuffer *buffer = GetRenderGraph()->GetBuffer(instanceFreeList0);
-                  // cmd->CopyBuffer(debug, buffer);
                   device->EndEvent(cmd);
               })
             .AddHandle(instanceFreeList0, ResourceUsageType::Read)
@@ -1077,8 +1073,7 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, ResourceHandle
               allocateInstancesPipeline, allocateInstancesLayout, 10,
               [maxPartitions            = this->maxPartitions,
                &clasGlobalsBuffer       = this->clasGlobalsBuffer,
-               allocatedInstancesBuffer = this->allocatedInstancesBuffer,
-               debug](CommandBuffer *cmd) {
+               allocatedInstancesBuffer = this->allocatedInstancesBuffer](CommandBuffer *cmd) {
                   device->BeginEvent(cmd, "Allocate instances");
                   cmd->Dispatch((maxPartitions + 31) / 32, 1, 1);
                   cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -1091,8 +1086,6 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, ResourceHandle
                                VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_TRANSFER_READ_BIT);
                   cmd->FlushBarriers();
 
-                  GPUBuffer *buffer = GetRenderGraph()->GetBuffer(allocatedInstancesBuffer);
-                  cmd->CopyBuffer(debug, buffer);
                   device->EndEvent(cmd);
               })
             .AddHandle(visiblePartitionsBuffer, ResourceUsageType::Read)
@@ -1144,8 +1137,6 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *debug)
                            VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT |
                                VK_ACCESS_2_TRANSFER_READ_BIT);
               cmd->FlushBarriers();
-
-              cmd->CopyBuffer(debug, &clasGlobalsBuffer);
           })
         .AddHandle(clasGlobalsBufferHandle, ResourceUsageType::RW)
         .AddHandle(ptlasWriteInfosBuffer, ResourceUsageType::Write)

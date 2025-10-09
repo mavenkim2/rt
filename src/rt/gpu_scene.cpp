@@ -413,7 +413,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     layout.AddBinding((u32)RTBindings::ShaderDebugInfo, DescriptorType::UniformBuffer, flags);
     layout.AddBinding((u32)RTBindings::ClusterPageData, DescriptorType::StorageBuffer, flags);
     layout.AddBinding((u32)RTBindings::PtexFaceData, DescriptorType::StorageBuffer, flags);
-    // layout.AddBinding(13, DescriptorType::StorageBuffer, flags);
+    layout.AddBinding(13, DescriptorType::StorageBuffer, flags);
     layout.AddBinding(14, DescriptorType::StorageBuffer, flags);
     // layout.AddBinding(15, DescriptorType::StorageBuffer, flags);
     layout.AddBinding(16, DescriptorType::StorageBuffer, flags);
@@ -539,8 +539,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         }
         t->release();
 
-        u32 allocIndex = virtualTextureManager.AllocateVirtualPages(sceneScratch.temp.arena,
-                                                                    ptexTexture.filename);
+        u32 allocIndex = virtualTextureManager.AllocateVirtualPages(
+            sceneScratch.temp.arena, ptexTexture.filename, faceDataStream);
 
         GPUTextureInfo info;
         info.textureIndex   = allocIndex;
@@ -972,11 +972,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     int envMapBindlessIndex;
 
     ViewCamera camera = {};
-    // camera.pitch      = 0.0536022522f;
-    // camera.yaw        = 1.15505993f;
-    // camera.position   = Vec3f(5518.85205f, 1196.14368f, -11135.9834f);
-    // camera.forward    = Vec3f(0.403283596f, 0.0535765812f, -0.913505197f);
-    // camera.right      = Vec3f(0.911113858f, 0.0692767054f, 0.406290948f);
+    // camera.position       = Vec3f(5441.899414, -224.013306, -10116.300781);
+    // camera.pitch          = -0.138035f;
+    // camera.yaw            = 1.092227f;
+    ViewCamera prevCamera = {};
 
 #if 1
     camera.position = Vec3f(0);
@@ -1050,9 +1049,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     GPUBuffer readback = device->CreateBuffer(
         VK_BUFFER_USAGE_TRANSFER_DST_BIT, sizeof(u32) * GLOBALS_SIZE, MemoryUsage::GPU_TO_CPU);
-    GPUBuffer readback2 = device->CreateBuffer(
-        VK_BUFFER_USAGE_TRANSFER_DST_BIT, sizeof(u32) * (virtualGeometryManager.maxInstances),
-        MemoryUsage::GPU_TO_CPU);
+
+    GPUBuffer debugBuffer =
+        device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT, sizeof(u32) * GLOBALS_SIZE);
 
     Semaphore transferSem   = device->CreateSemaphore();
     transferSem.signalValue = 1;
@@ -1060,7 +1059,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     u32 testCount            = 0;
     u32 maxUnused            = 0;
     f32 speed                = 5000.f;
-    u32 numFramesAccumulated = 0.f;
+    u32 numFramesAccumulated = 0;
     for (;;)
     {
         ScratchArena frameScratch;
@@ -1117,15 +1116,13 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             MemoryZero(dir, sizeof(dir));
         }
 
-        if (dMouseP[0] == 0 && dMouseP[1] == 0 && dir[0] == 0 && dir[1] == 0 && dir[2] == 0 &&
-            dir[3] == 0)
+        if (!(prevCamera.position == camera.position && prevCamera.yaw == camera.yaw &&
+              prevCamera.pitch == camera.pitch))
         {
-            numFramesAccumulated++;
+            numFramesAccumulated = 0;
         }
-        else
-        {
-            numFramesAccumulated = 1;
-        }
+
+        numFramesAccumulated++;
 
         events.Clear();
 
@@ -1144,6 +1141,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         // Input
         {
+            prevCamera = camera;
 
             f32 rotationSpeed = 0.001f * PI;
             camera.RotateCamera(dMouseP, rotationSpeed);
@@ -1212,25 +1210,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         gpuScene.dispatchDimX = dispatchDimX;
         gpuScene.dispatchDimY = dispatchDimY;
 
-        u32 *data  = (u32 *)readback.mappedPtr;
-        u32 *data2 = (u32 *)readback2.mappedPtr;
+        u32 *data = (u32 *)readback.mappedPtr;
         if (!device->BeginFrame(false))
         {
             ScratchArena scratch;
-            BitVector bits(scratch.temp.arena, virtualGeometryManager.maxInstances);
-            for (u32 i = 0; i < data[GLOBALS_ALLOCATED_INSTANCE_COUNT_INDEX]; i++)
-            {
-                if (bits.GetBit(data2[i]))
-                {
-                    Print("duplicate: %u\n", data2[i]);
-                }
-                bits.SetBit(data2[i]);
-            }
-            // Print("%u\n", data2[0]);
-            // for (u32 i = 0; i < data2[0]; i++)
-            // {
-            //     Print("%u ", data2[i + 1]);
-            // }
             Print("freed partition count: %u visible count: %u, writes: %u updates %u, "
                   "allocate: "
                   "%u freed: %u unused: %u debug: %u, free list count: %u, x: %u, y: %u, z: "
@@ -1281,123 +1264,13 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         u32 currentBuffer   = device->frameCount & 1;
         u32 lastFrameBuffer = device->frameCount == 0 ? 0 : !currentBuffer;
 
-        if (0) // device->frameCount == 0)
-        {
-            CommandBuffer *computeCmd =
-                device->BeginCommandBuffer(QueueType_Compute, "cmd populate readback");
+        MemoryCopy(sceneTransferBuffers[currentBuffer].mappedPtr, &gpuScene, sizeof(GPUScene));
+        cmd->SubmitTransfer(&sceneTransferBuffers[currentBuffer]);
+        MemoryCopy(shaderDebugBuffers[currentBuffer].mappedPtr, &shaderDebug,
+                   sizeof(ShaderDebugInfo));
+        cmd->SubmitTransfer(&shaderDebugBuffers[currentBuffer]);
 
-            MemoryCopy(sceneTransferBuffers[currentBuffer].mappedPtr, &gpuScene,
-                       sizeof(GPUScene));
-            computeCmd->SubmitTransfer(&sceneTransferBuffers[currentBuffer]);
-            MemoryCopy(shaderDebugBuffers[currentBuffer].mappedPtr, &shaderDebug,
-                       sizeof(ShaderDebugInfo));
-            computeCmd->SubmitTransfer(&shaderDebugBuffers[currentBuffer]);
-
-            rg->StartPass(2,
-                          [&clasGlobals = virtualGeometryManager.clasGlobalsBuffer,
-                           pyramid = virtualGeometryManager.depthPyramid](CommandBuffer *cmd) {
-                              RenderGraph *rg = GetRenderGraph();
-
-                              cmd->ClearBuffer(&clasGlobals, 0);
-
-                              GPUImage *image = rg->GetImage(pyramid);
-
-                              cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                           VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                                           VK_ACCESS_2_SHADER_WRITE_BIT |
-                                               VK_ACCESS_2_SHADER_READ_BIT);
-                              cmd->Barrier(image, VK_IMAGE_LAYOUT_UNDEFINED,
-                                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                           VK_PIPELINE_STAGE_2_NONE,
-                                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                           VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_READ_BIT);
-                              cmd->FlushBarriers();
-                          })
-                .AddHandle(virtualGeometryManager.clasGlobalsBufferHandle,
-                           ResourceUsageType::Write)
-                .AddHandle(virtualGeometryManager.depthPyramid, ResourceUsageType::Write);
-
-            computeCmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                                VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
-            computeCmd->Barrier(&depthBuffer, VK_IMAGE_LAYOUT_UNDEFINED,
-                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                VK_PIPELINE_STAGE_2_NONE,
-                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_NONE,
-                                VK_ACCESS_2_SHADER_READ_BIT);
-            computeCmd->FlushBarriers();
-
-            virtualGeometryManager.PrepareInstances(
-                computeCmd, sceneTransferBufferHandles[currentBuffer], false, &readback2);
-
-            // rg->StartPass(2,
-            //               [&readback = virtualGeometryManager.readbackBuffer,
-            //                requests  = virtualGeometryManager.streamingRequestsBuffer](
-            //                   CommandBuffer *cmd) {
-            //                   u32 srcOffset, srcSize;
-            //                   RenderGraph *rg = GetRenderGraph();
-            //                   GPUBuffer *requestsBuffer =
-            //                       rg->GetBuffer(requests, srcOffset, srcSize);
-            //                   BufferToBufferCopy copy;
-            //                   copy.srcOffset = srcOffset;
-            //                   copy.dstOffset = 0;
-            //                   copy.size      = srcSize;
-            //                   cmd->CopyBuffer(&readback, requestsBuffer, &copy, 1);
-            //                   cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-            //                                    VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-            //                                VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
-            //                                VK_ACCESS_2_TRANSFER_WRITE_BIT,
-            //                                VK_ACCESS_2_NONE);
-            //                   cmd->FlushBarriers();
-            //               })
-            //     .AddHandle(virtualGeometryManager.readbackBufferHandle,
-            //                ResourceUsageType::Write)
-            //     .AddHandle(virtualGeometryManager.streamingRequestsBuffer,
-            //                ResourceUsageType::Read);
-
-            rg->Compile();
-            rg->Execute(computeCmd);
-            rg->EndFrame();
-
-            Semaphore sem   = device->CreateSemaphore();
-            sem.signalValue = 1;
-            computeCmd->SignalOutsideFrame(sem);
-            device->SubmitCommandBuffer(computeCmd);
-            device->Wait(sem);
-
-            rg->BeginFrame();
-        }
-        else
-        {
-            MemoryCopy(sceneTransferBuffers[currentBuffer].mappedPtr, &gpuScene,
-                       sizeof(GPUScene));
-            cmd->SubmitTransfer(&sceneTransferBuffers[currentBuffer]);
-            MemoryCopy(shaderDebugBuffers[currentBuffer].mappedPtr, &shaderDebug,
-                       sizeof(ShaderDebugInfo));
-            cmd->SubmitTransfer(&shaderDebugBuffers[currentBuffer]);
-
-            // cmd->Barrier(&sceneTransferBuffers[currentBuffer].buffer, flags,
-            //              VK_ACCESS_2_SHADER_WRITE_BIT);
-            // cmd->Barrier(&shaderDebugBuffers[currentBuffer].buffer, flags,
-            //              VK_ACCESS_2_SHADER_WRITE_BIT);
-        }
-
-        // Virtual texture system
-        // cmdBufferName = PushStr8F(frameScratch.temp.arena, "Virtual Texture Async Copy Cmd
-        // %u",
-        //                           device->frameCount);
-        // CommandBuffer *virtualTextureCopyCmd =
-        //     device->BeginCommandBuffer(QueueType_Copy, cmdBufferName);
-        // cmdBufferName = PushStr8F(frameScratch.temp.arena, "Virtual Texture Transition Cmd
-        // %u",
-        //                           device->frameCount);
-        // CommandBuffer *transitionCmd =
-        //     device->BeginCommandBuffer(QueueType_Graphics, cmdBufferName);
         virtualTextureManager.Update(cmd);
-        // device->SubmitCommandBuffer(transitionCmd);
-        // device->SubmitCommandBuffer(virtualTextureCopyCmd);
 
         rg->StartPass(2,
                       [&clasGlobals      = virtualGeometryManager.clasGlobalsBuffer,
@@ -1448,32 +1321,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         // Instance culling
         {
             virtualGeometryManager.PrepareInstances(
-                cmd, sceneTransferBufferHandles[currentBuffer], true, &readback2);
+                cmd, sceneTransferBufferHandles[currentBuffer], true);
         }
-
-        // rg->StartPass(
-        //       2,
-        //       [&readback = virtualGeometryManager.readbackBuffer,
-        //        requests = virtualGeometryManager.streamingRequestsBuffer](CommandBuffer
-        //        *cmd) {
-        //           u32 srcOffset, srcSize;
-        //           RenderGraph *rg           = GetRenderGraph();
-        //           GPUBuffer *requestsBuffer = rg->GetBuffer(requests, srcOffset, srcSize);
-        //           BufferToBufferCopy copy;
-        //           copy.srcOffset = srcOffset;
-        //           copy.dstOffset = 0;
-        //           copy.size      = srcSize;
-        //           cmd->CopyBuffer(&readback, requestsBuffer, &copy, 1);
-        //           cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-        //                            VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //                        VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
-        //                        VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_NONE);
-        //           cmd->FlushBarriers();
-        //       })
-        //     .AddHandle(virtualGeometryManager.readbackBufferHandle,
-        //     ResourceUsageType::Write)
-        //     .AddHandle(virtualGeometryManager.streamingRequestsBuffer,
-        //                ResourceUsageType::Read);
 
         rg->StartComputePass(prepareIndirectPipeline, prepareIndirectLayout, 1,
                              [](CommandBuffer *cmd) {
@@ -1526,8 +1375,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                imageHandle = image, imageOutHandle = imageOut, &depthBuffer,
                normalRoughnessHandle = normalRoughness, diffuseAlbedoHandle = diffuseAlbedo,
                specularAlbedoHandle      = specularAlbedo,
-               specularHitDistanceHandle = specularHitDistance,
-               currentBuffer](CommandBuffer *cmd) {
+               specularHitDistanceHandle = specularHitDistance, currentBuffer, &debugBuffer,
+               &readback](CommandBuffer *cmd) {
                   RenderGraph *rg               = GetRenderGraph();
                   GPUImage *image               = rg->GetImage(imageHandle);
                   GPUImage *imageOut            = rg->GetImage(imageOutHandle);
@@ -1578,6 +1427,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                       .Bind(&debug)
                       .Bind(&virtualGeometryManager.clusterPageDataBuffer)
                       .Bind(&faceDataBuffer)
+                      .Bind(&debugBuffer)
                       .Bind(&virtualGeometryManager.instancesBuffer)
                       .Bind(&virtualGeometryManager.resourceTruncatedEllipsoidsBuffer)
                       .Bind(&virtualGeometryManager.instanceTransformsBuffer)
@@ -1597,6 +1447,12 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                   // cmd->Dispatch(dispatchDimX, dispatchDimY, 1);
                   cmd->TraceRays(&rts, targetWidth, targetHeight, 1);
                   TIMED_RANGE_END(beginIndex);
+
+                  cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                               VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                               VK_ACCESS_2_TRANSFER_READ_BIT);
+                  cmd->FlushBarriers();
+                  cmd->CopyBuffer(&readback, &debugBuffer);
               })
             .AddHandle(image, ResourceUsageType::Write)
             .AddHandle(imageOut, ResourceUsageType::Write)
