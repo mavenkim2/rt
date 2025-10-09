@@ -124,7 +124,14 @@ namespace Ptex
 
 }
 
-float4 StochasticCatmullRomBorderlessHelper(GPUMaterial material, Ptex::FaceData faceData, float2 texCoord, float2 texSize, uint mipLevel, float reservoirWeightSum, int faceID, out uint outTileIndex)
+float GetFilterPMF(float2 texelFloatCoords, int2 texelIntCoords)
+{
+    float2 texelDistance = texelFloatCoords - texelIntCoords ;
+    float2 filterPdf = clamp (1 - abs ( texelDistance ) , 0, 1) ;
+    return filterPdf .x * filterPdf .y;
+}
+
+float4 StochasticCatmullRomBorderlessHelper(GPUMaterial material, Ptex::FaceData faceData, float2 texCoord, float2 texSize, uint mipLevel, float reservoirWeightSum, int faceID, out uint outTileIndex, uint maxMip)
 {
 #if 0
     // Lookup adjacency information if necessary
@@ -167,7 +174,7 @@ float4 StochasticCatmullRomBorderlessHelper(GPUMaterial material, Ptex::FaceData
     texSize = rotate ? texSize.yx : texSize;
 
     // Virtual texture lookup
-    float4 result = reservoirWeightSum * VirtualTexture::Sample(material.textureIndex, tileIndex, faceID, mipLevel, newUv, texSize);//, samplerNearestClamp);
+    float4 result = reservoirWeightSum * VirtualTexture::Sample(material.textureIndex, tileIndex, faceID, mipLevel, newUv, texSize, maxMip);//, samplerNearestClamp);
 
     return result;
 }
@@ -177,6 +184,8 @@ float4 SampleStochasticCatmullRomBorderless(Ptex::FaceData faceData, GPUMaterial
 {
     int log2Width = max((int)faceData.log2Dim.x - (int)mipLevel, 0);
     int log2Height = max((int)faceData.log2Dim.y - (int)mipLevel, 0);
+
+    uint maxMip = max(faceData.log2Dim.x, faceData.log2Dim.y);
 
     float2 texSize = float2(1u << log2Width, 1u << log2Height);
     float2 w[4];
@@ -225,14 +234,34 @@ float4 SampleStochasticCatmullRomBorderless(Ptex::FaceData faceData, GPUMaterial
     float4 result = 0.f;
     float2 posCoord = float2(texPos[reservoir[0].x].x, texPos[reservoir[0].y].y);
     result += StochasticCatmullRomBorderlessHelper(material, faceData, posCoord, 
-                                                   texSize, mipLevel, weightsSum[0], faceID, tileIndex);
+                                                   texSize, mipLevel, weightsSum[0], faceID, tileIndex, maxMip);
     if (weightsSum[1] != 0.f)
     {
         float2 negCoord = float2(texPos[reservoir[1].x].x, texPos[reservoir[1].y].y);
         uint temp;
         result -= StochasticCatmullRomBorderlessHelper(material, faceData, negCoord, 
-                                                       texSize, mipLevel, weightsSum[1], faceID, temp);
+                                                       texSize, mipLevel, weightsSum[1], faceID, temp, maxMip);
     }
+
+#if 0
+    float p_sampled_uv = GetFilterPMF ( posCoord , sampled_uv );
+    //float4 T = texture [ sampled_uv ];
+
+    // https://research.nvidia.com/labs/rtr/publication/wronski2025stfreuse/stf_sample_reuse.pdf
+    float4 sum_w_i_T_i = 0.0 f;
+    float sum_w_i = 0.0 f;
+    for ( uint i = 0; i < FOOTPRINT_SIZE ; ++ i) {
+        uint laneIdx = waveLaneSet [ currentLaneIdx ][ i ];
+        int2 uv_i = WaveReadLaneAt ( sampled_uv , laneIdx );
+        float p_i = WaveReadLaneAt ( p_sampled_uv , laneIdx );
+        float4 T_i = WaveReadLaneAt (result , laneIdx );
+        float p_c = GetFilterPMF ( texelFloatCoords , uv_i );
+        float w_i = p_c / p_i ;
+        sum_w_i_T_i += w_i * T_i ;
+        sum_w_i += w_i ;
+    }
+    return sum_w_i_T_i / sum_w_i;
+#endif
 
     return result;
 }

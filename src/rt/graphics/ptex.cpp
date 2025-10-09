@@ -1311,17 +1311,143 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 maxSize, u32 slab
         feedbackBuffers[1] =
             device->GetReadbackBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, megabytes(8));
 
-        requestUploadBuffer = {};
-        requestBuffer       = {};
+        highestMipUploadBuffer = {};
+        requestUploadBuffer    = {};
+        requestBuffer          = {};
     }
 }
 
-u32 VirtualTextureManager::AllocateVirtualPages(Arena *arena, string filename, u8 *faceData)
+u32 VirtualTextureManager::AllocateVirtualPages(Arena *arena, string filename, u8 *faceData,
+                                                u32 numFaces, CommandBuffer *cmd)
 {
     TextureInfo texInfo;
     texInfo.filename      = PushStr8Copy(arena, filename);
     texInfo.faceDataSizes = faceData;
     textureInfo.push_back(texInfo);
+
+    u32 textureIndex = textureInfo.size() - 1;
+
+    ScratchArena scratch;
+
+    Ptex::String error;
+    Ptex::PtexTexture *t = cache->get((char *)texInfo.filename.str, error);
+
+    BufferImageCopy *copies = PushArrayNoZero(scratch.temp.arena, BufferImageCopy, numFaces);
+    StaticArray<PageTableUpdateRequest> updateRequests(scratch.temp.arena, numFaces);
+    u32 numCopies = 0;
+    int slabIndex = -1;
+
+    if (numFaces * GetFormatSize(format) > highestMipUploadBuffer.size)
+    {
+        if (highestMipUploadBuffer.size)
+        {
+            device->DestroyBuffer(&highestMipUploadBuffer);
+        }
+        highestMipUploadBuffer =
+            device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                 numFaces * GetFormatSize(format), MemoryUsage::CPU_TO_GPU);
+    }
+    u32 bufferOffset = 0;
+    for (u32 faceID = 0; faceID < numFaces; faceID++)
+    {
+        Ptex::FaceInfo fi = t->getFaceInfo(faceID);
+        Ptex::Res res(0, 0);
+        u32 mipLevel = Max(fi.res.ulog2, fi.res.vlog2);
+        Ptex::PtexPtr<Ptex::PtexFaceData> d(t->getData(faceID, res));
+        Assert(d->isConstant());
+
+        char *buffer = PushArrayNoZero(scratch.temp.arena, char, GetFormatSize(format));
+
+        u32 numChannels     = t->numChannels();
+        u32 bytesPerChannel = Ptex::DataSize(t->dataType());
+        u32 bytesPerPixel   = numChannels * bytesPerChannel;
+
+        int stride = res.u() * bytesPerPixel;
+        int rowlen = stride;
+
+        Ptex::PtexUtils::fill(d->getData(), buffer, stride, 1, 1, bytesPerPixel);
+
+        if (t->alphaChannel() == -1)
+        {
+            buffer[3] = 255;
+        }
+
+        MemoryCopy((u8 *)highestMipUploadBuffer.mappedPtr + bufferOffset, buffer,
+                   GetFormatSize(format));
+        bufferOffset += GetFormatSize(format);
+
+        SlabAllocInfo info;
+        bool allocated = AllocateMemory(0, 0, info);
+        HashTableEntry entry(textureIndex, faceID, 0, mipLevel, info.slabIndex,
+                             info.entryIndex, info.offset, info.bindlessIndex);
+        u32 hashIndex = UpdateHash(entry);
+        if (slabIndex == -1)
+        {
+            slabIndex = info.slabIndex;
+        }
+        if (info.slabIndex != slabIndex)
+        {
+            cmd->CopyImage(&highestMipUploadBuffer, &slabs[slabIndex].image, copies,
+                           numCopies);
+            numCopies = 0;
+        }
+
+        u32 copyIndex = numCopies++;
+
+        BufferImageCopy copy = {};
+        copy.bufferOffset    = bufferOffset;
+        copy.baseLayer       = info.layerIndex;
+        copy.layerCount      = 1;
+        copy.offset          = Vec3i(info.offset.x, info.offset.y, 0);
+        copy.extent          = Vec3u(1, 1, 1);
+        copies[copyIndex]    = copy;
+
+        PageTableUpdateRequest request;
+        request.packed    = PackHashTableEntry(entry);
+        request.hashIndex = hashIndex;
+        updateRequests.Push(request);
+
+        Assert(allocated);
+    }
+    cmd->CopyImage(&highestMipUploadBuffer, &slabs[slabIndex].image, copies, numCopies);
+
+    if (updateRequests.Length() * sizeof(PageTableUpdateRequest) > requestUploadBuffer.size)
+    {
+        if (requestUploadBuffer.size)
+        {
+            device->DestroyBuffer(&requestUploadBuffer);
+            device->DestroyBuffer(&requestBuffer);
+        }
+        requestUploadBuffer = device->CreateBuffer(
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            sizeof(PageTableUpdateRequest) * updateRequests.Length(), MemoryUsage::CPU_TO_GPU);
+        requestBuffer =
+            device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                 sizeof(PageTableUpdateRequest) * updateRequests.Length());
+    }
+
+    BufferToBufferCopy copy = {};
+    copy.size               = sizeof(PageTableUpdateRequest) * updateRequests.Length();
+    MemoryCopy(requestUploadBuffer.mappedPtr, updateRequests.data, copy.size);
+
+    cmd->CopyBuffer(&requestBuffer, &requestUploadBuffer);
+    cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                 VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+    cmd->FlushBarriers();
+
+    PageTableUpdatePushConstant pc;
+    pc.numRequests = updateRequests.Length();
+
+    cmd->StartBindingCompute(pipeline, &descriptorSetLayout)
+        .Bind(&requestBuffer)
+        .Bind(&pageHashTableBuffer)
+        .PushConstants(&push, &pc)
+        .End();
+    cmd->Dispatch((pc.numRequests + 63) >> 6, 1, 1);
+    cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                 VK_ACCESS_2_SHADER_READ_BIT);
+    cmd->FlushBarriers();
 
     return textureInfo.size() - 1;
 }
@@ -1649,6 +1775,12 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
         u32 tileIndex          = BitFieldExtractU32(feedbackRequest.x, 16, 16);
         u32 faceID             = BitFieldExtractU32(feedbackRequest.y, 28, 0);
         u32 mipLevel           = BitFieldExtractU32(feedbackRequest.y, 4, 28);
+
+        u8 faceSizes = textureInfo[textureIndex].faceDataSizes[faceID];
+        u32 maxMip =
+            Max(BitFieldExtractU32(faceSizes, 4, 0), BitFieldExtractU32(faceSizes, 4, 4));
+
+        if (mipLevel == maxMip) continue;
 
         u64 packed = ((u64)feedbackRequest.y << 32u) | ((u64)feedbackRequest.x);
         i32 hash   = (i32)MixBits(packed);
@@ -2190,10 +2322,6 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                     Ptex::Res res(log2Width, log2Height);
 
                     Assert(t);
-                    if (faceID == 673)
-                    {
-                        int stop = 5;
-                    }
                     Ptex::PtexPtr<Ptex::PtexFaceData> d(t->getData(faceID, res));
 
                     u32 numChannels     = t->numChannels();
@@ -2343,8 +2471,6 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                                          currentFaceImg.GetPaddedHeight(), Vec2u(0, 0));
 
                         currentFaceImg = img;
-
-                        // MemorySet(currentFaceImg.contents, 0xff, size);
                     }
                     t->release();
 

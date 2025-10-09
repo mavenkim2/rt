@@ -488,6 +488,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     CommandBuffer *tileCmd          = device->BeginCommandBuffer(QueueType_Compute);
     Semaphore tileSubmitSemaphore   = device->CreateSemaphore();
     tileSubmitSemaphore.signalValue = 1;
+    Semaphore texSemaphore          = device->CreateSemaphore();
+    texSemaphore.signalValue        = 0;
     virtualTextureManager.ClearTextures(tileCmd);
     tileCmd->FlushBarriers();
     tileCmd->SignalOutsideFrame(tileSubmitSemaphore);
@@ -539,8 +541,23 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         }
         t->release();
 
-        u32 allocIndex = virtualTextureManager.AllocateVirtualPages(
-            sceneScratch.temp.arena, ptexTexture.filename, faceDataStream);
+        if (i > 0)
+        {
+            bool result = device->Wait(texSemaphore, 10e9);
+            Assert(result);
+        }
+        device->ResetDescriptorPool(0);
+        CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Compute);
+        u32 allocIndex     = virtualTextureManager.AllocateVirtualPages(
+            sceneScratch.temp.arena, ptexTexture.filename, faceDataStream, numFaces, cmd);
+        texSemaphore.signalValue++;
+        cmd->SignalOutsideFrame(texSemaphore);
+        cmd->Barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                     VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                     VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
+                     VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT);
+        cmd->FlushBarriers();
+        device->SubmitCommandBuffer(cmd);
 
         GPUTextureInfo info;
         info.textureIndex   = allocIndex;
@@ -591,8 +608,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     SortHandles<RequestHandle, false>(handles, numHandles);
 
     u32 ptexFaceDataBytes    = 0;
-    Semaphore texSemaphore   = device->CreateSemaphore();
-    texSemaphore.signalValue = 0;
     for (int i = 0; i < numHandles; i++)
     {
         RequestHandle &handle        = handles[i];

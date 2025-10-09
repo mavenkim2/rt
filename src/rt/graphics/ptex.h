@@ -396,11 +396,14 @@ struct VirtualTextureManager
     GPUBuffer requestBuffer;
     GPUBuffer requestUploadBuffer;
 
+    GPUBuffer highestMipUploadBuffer;
+
     FixedArray<TransferBuffer, 2> feedbackBuffers;
 
     VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 maxSize, u32 slabSize,
                                                  VkFormat format);
-    u32 AllocateVirtualPages(Arena *arena, string filename, u8 *faceData);
+    u32 AllocateVirtualPages(Arena *arena, string filename, u8 *faceData, u32 numFaces,
+                             CommandBuffer *cmd);
     bool AllocateMemory(int logWidth, int logHeight, SlabAllocInfo &info);
     u64 CalculateHash(u32 textureIndex, u32 faceIndex, u32 mipLevel, u32 tileIndex);
     u32 UpdateHash(HashTableEntry entry);
