@@ -397,6 +397,7 @@ u32 VirtualTextureManager::AllocateVirtualPages(Arena *arena, string filename, u
     TextureInfo texInfo;
     texInfo.filename      = PushStr8Copy(arena, filename);
     texInfo.faceDataSizes = faceData;
+    texInfo.numFaces      = numFaces;
     textureInfo.push_back(texInfo);
 
     u32 textureIndex = textureInfo.size() - 1;
@@ -864,7 +865,10 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                 int ulog2 = (int)BitFieldExtractU32(faceSizes, 4, 0);
                 int vlog2 = (int)BitFieldExtractU32(faceSizes, 4, 4);
 
-                Assert(mipLevel <= ulog2 || mipLevel <= vlog2);
+                Assert(faceID < texInfo.numFaces);
+                ErrorExit(mipLevel <= ulog2 || mipLevel <= vlog2, "%S %u %u %u %u %u %u\n",
+                          texInfo.filename, mipLevel, ulog2, vlog2, textureIndex, tileIndex,
+                          faceID);
                 int log2Width  = Clamp((int)ulog2 - (int)mipLevel, 0, (int)log2MaxTileDim);
                 int log2Height = Clamp((int)vlog2 - (int)mipLevel, 0, (int)log2MaxTileDim);
                 int minDim     = Min(log2Width, log2Height);

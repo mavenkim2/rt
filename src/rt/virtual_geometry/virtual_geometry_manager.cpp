@@ -381,7 +381,7 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
 
     // TODO IMPORTANT: this has to go up due to faceids
     clusterPageDataBuffer = device->CreateBuffer(
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, megabytes(800));
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, megabytes(950));
     clusterPageDataBufferHandle =
         rg->RegisterExternalResource("cluster page data buffer", &clusterPageDataBuffer);
 
@@ -389,7 +389,7 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        sizeof(u64) * (1060000));
+        sizeof(u64) * (1100000));
 
     clusterAccelAddressesHandle =
         rg->RegisterExternalResource("cluster accel addresses", &clusterAccelAddresses);
@@ -397,7 +397,7 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        sizeof(u32) * (1060000));
+        sizeof(u32) * (1100000));
     clusterAccelSizesHandle =
         rg->RegisterExternalResource("cluster accel sizes buffer", &clusterAccelSizes);
 

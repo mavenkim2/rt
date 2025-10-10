@@ -128,13 +128,16 @@ void main()
         desc.TMin = 0;
         desc.TMax = FLT_MAX;
         
-        RayQuery<RAY_FLAG_NONE | RAY_FLAG_FORCE_OPAQUE> query;
+        RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_FORCE_OPAQUE> query;
         query.TraceRayInline(accel, RAY_FLAG_NONE, 0xff, desc);
 
         uint hitKind = 0;
 
         float hitT = FLT_MAX;
 
+        query.Proceed();
+
+#if 0
         while (query.Proceed())
         {
             if (query.CandidateType() == CANDIDATE_PROCEDURAL_PRIMITIVE)
@@ -215,6 +218,7 @@ void main()
                 }
             }
         }
+#endif
 
         if (query.CommittedStatus() == COMMITTED_NOTHING)
         {
@@ -296,7 +300,7 @@ void main()
         float3x4 objectToWorld = query.CommittedObjectToWorld3x4();
         float rayT = query.CommittedRayT();
 
-        if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+        //if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
         {
             uint clusterID = GetClusterIDNV(query, RayQueryCommittedIntersectionKHR);
             uint pageIndex = GetPageIndexFromClusterID(clusterID); 
@@ -352,6 +356,7 @@ void main()
             hitInfo = CalculateTriangleHitInfo(p0, p1, p2, n0, n1, n2, gn, uv0, uv1, uv2, bary);
             hitInfo.faceID = faceID;
         }
+#if 0
         else if (query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
         {
             uint instanceID = query.CommittedInstanceID();
@@ -386,6 +391,7 @@ void main()
                 hitInfo.ts = tb[1];
             }
         }
+#endif
 
         // Get material
         GPUMaterial material = materials[materialID];
@@ -425,6 +431,9 @@ void main()
         float3 sample3 = float3(sample, sample2);
 
         uint2 virtualPage = ~0u;
+        dir = SampleDisney(material, sample3, reflectance.xyz, throughput, wo);
+
+#if 0
         switch (material.type) 
         {
             case GPUMaterialType::Disney: 
@@ -457,6 +466,7 @@ void main()
             }
             break;
         }
+#endif
 
 
         if (dir.z == 0)

@@ -32,7 +32,6 @@ string(TOUPPER "${CMAKE_BUILD_TYPE}" uppercase_CMAKE_BUILD_TYPE)
 if (CMAKE_CONFIGURATION_TYPES)
     foreach(config ${CMAKE_CONFIGURATION_TYPES})
         string(TOUPPER "${config}" config_upper)
-        message(STATUS ${config_upper})
         # allow asserts in relwithdebinfo mode
         if (config_upper STREQUAL "DEBUG" OR config_upper STREQUAL "RELWITHDEBINFO")
             list (APPEND RT_DEFINITIONS "TRACK_MEMORY" "DEBUG")
@@ -105,7 +104,7 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     endif()
 elseif (MSVC)
     message(STATUS "Using MSVC Compiler")
-    list (APPEND RT_CXX_FLAGS "-FC" "-Zi" "-EHsc" "-nologo" "-Oi" "-WX" "-W4" "-wd4305" "-wd4324" "-wd4127" 
+    list (APPEND RT_CXX_FLAGS "-FC" "-Zi" "-EHsc" "-nologo" "-WX" "-W4" "-wd4305" "-wd4324" "-wd4127" 
         "-wd4700" "-wd4701" "-wd4505" "-wd4189" "-wd4201" "-wd4100" "/arch:SSE2" "/arch:AVX2")
 endif ()
 
@@ -117,7 +116,6 @@ else()
 endif()
 
 if (uppercase_CMAKE_BUILD_TYPE STREQUAL "DEBUG")
-    message (STATUS "TESTTESTETESTSETTSETSTS")
     list (APPEND SHADER_FLAGS "-Zi")
 endif()
 
@@ -200,25 +198,6 @@ set(deps
 
 install (TARGETS thread_context EXPORT THREAD_CONTEXT DESTINATION lib)
 install (EXPORT THREAD_CONTEXT DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/thread_context")
-
-# generate_uvs
-add_executable(generate_uvs 
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/cmd/generate_uvs.cpp
-    ${RT_VULKAN_SOURCE_FILES}
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/graphics/ptex.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/debug.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/parallel.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/graphics/block_compressor.cpp
-)
-target_include_directories(generate_uvs PRIVATE 
-    ${PTEX_INCLUDE}
-    ${NANOVDB_INCLUDE_DIR}
-    ${ZLIB_INCLUDE_DIR}
-    ${VULKAN_INCLUDE_DIR}
-)
-target_link_libraries(generate_uvs PRIVATE ${PTEX_LIBRARY})
-target_compile_definitions(generate_uvs PRIVATE ${RT_DEFINITIONS})
-target_compile_options(generate_uvs PRIVATE ${RT_CXX_FLAGS})
 
 # rgb2spec
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/gen)
@@ -396,6 +375,9 @@ target_include_directories(rt_exe PRIVATE
     ${ZLIB_INCLUDE_DIR}
 )
 
-target_compile_options(rt_exe PRIVATE ${RT_CXX_FLAGS})
+target_compile_options(rt_exe PRIVATE ${RT_CXX_FLAGS}
+    $<$<CONFIG:Debug>:-O0>
+    $<$<CONFIG:RelWithDebInfo>:-O2>
+    $<$<CONFIG:Release>:-O2>)
 target_link_libraries(rt_exe PRIVATE ${deps})
 set_target_properties(rt_exe PROPERTIES OUTPUT_NAME rt)

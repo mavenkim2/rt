@@ -258,6 +258,7 @@ struct VirtualTextureManager
     {
         string filename;
         u8 *faceDataSizes;
+        u32 numFaces;
         // FaceMetadata2 *faceMetadata;
         // TextureMetadata metadata;
         // u8 *contents;
