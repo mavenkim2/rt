@@ -1077,6 +1077,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     u32 maxUnused            = 0;
     f32 speed                = 5000.f;
     u32 numFramesAccumulated = 0;
+    f32 lastFrameTime        = OS_NowSeconds();
+
     for (;;)
     {
         ScratchArena frameScratch;
@@ -1087,7 +1089,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             TranslateMessage(&message);
             DispatchMessageW(&message);
         }
+
         f32 frameTime = OS_NowSeconds();
+        f32 deltaTime = frameTime - lastFrameTime;
+        lastFrameTime = frameTime;
 
         ChunkedLinkedList<OS_Event> &events = OS_GetEvents();
 
@@ -1163,8 +1168,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             f32 rotationSpeed = 0.001f * PI;
             camera.RotateCamera(dMouseP, rotationSpeed);
 
-            camera.position += (dir[2] - dir[3]) * camera.forward * speed * frameDt;
-            camera.position += (dir[0] - dir[1]) * camera.right * speed * frameDt;
+            camera.position += (dir[2] - dir[3]) * camera.forward * speed * deltaTime;
+            camera.position += (dir[0] - dir[1]) * camera.right * speed * deltaTime;
 
             camera.forward.x = Cos(camera.yaw) * Cos(camera.pitch);
             camera.forward.y = Sin(camera.pitch);

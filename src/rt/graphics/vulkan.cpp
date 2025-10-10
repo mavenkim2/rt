@@ -522,6 +522,8 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
         // 4. Sparse Memory Management
 
         // Find queues in queue family
+        bool foundCopy    = false;
+        bool foundCompute = false;
         for (u32 i = 0; i < queueFamilyProperties.Length(); i++)
         {
             auto &queueFamily = queueFamilyProperties[i];
@@ -532,20 +534,34 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
                 {
                     graphicsFamily = i;
                 }
-                if ((queueFamily.queueFamilyProperties.queueFlags & VK_QUEUE_TRANSFER_BIT) &&
+                if (!foundCopy &&
+                    (queueFamily.queueFamilyProperties.queueFlags & VK_QUEUE_TRANSFER_BIT) &&
                     (copyFamily == VK_QUEUE_FAMILY_IGNORED ||
                      (!(queueFamily.queueFamilyProperties.queueFlags &
                         VK_QUEUE_GRAPHICS_BIT) &&
                       !(queueFamily.queueFamilyProperties.queueFlags & VK_QUEUE_COMPUTE_BIT))))
 
                 {
+                    if (!(queueFamily.queueFamilyProperties.queueFlags &
+                          VK_QUEUE_GRAPHICS_BIT) &&
+                        !(queueFamily.queueFamilyProperties.queueFlags & VK_QUEUE_COMPUTE_BIT))
+                    {
+                        foundCopy = true;
+                    }
                     copyFamily = i;
                 }
-                if ((queueFamily.queueFamilyProperties.queueFlags & VK_QUEUE_COMPUTE_BIT) &&
+                if (!foundCompute &&
+                    (queueFamily.queueFamilyProperties.queueFlags & VK_QUEUE_COMPUTE_BIT) &&
                     (computeFamily == VK_QUEUE_FAMILY_IGNORED ||
                      !(queueFamily.queueFamilyProperties.queueFlags & VK_QUEUE_GRAPHICS_BIT)))
 
                 {
+                    if (computeFamily == VK_QUEUE_FAMILY_IGNORED ||
+                        !(queueFamily.queueFamilyProperties.queueFlags &
+                          VK_QUEUE_GRAPHICS_BIT))
+                    {
+                        foundCompute = true;
+                    }
                     computeFamily = i;
                 }
             }
