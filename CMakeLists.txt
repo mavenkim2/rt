@@ -359,14 +359,6 @@ set (CONVERT_SOURCE_FILES
 
 if (USE_GPU)
     list (APPEND CONVERT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/virtual_geometry/mesh_simplification.cpp)
-    list (APPEND CONVERT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/scene.cpp)
-    list (APPEND CONVERT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/spectrum.cpp)
-    list (APPEND CONVERT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/lights.cpp)
-    list (APPEND CONVERT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/gen/rgbspectrum_srgb.cpp)
-    list (APPEND CONVERT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/image.cpp)
-    #list (APPEND CONVERT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/low_discrepancy.cpp)
-    #list (APPEND CONVERT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/tables/primes.hpp)
-    #list (APPEND CONVERT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/tables/sobolmatrices.hpp)
 endif()
 
 add_executable(convert ${CONVERT_SOURCE_FILES})

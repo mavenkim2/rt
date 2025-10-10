@@ -419,8 +419,6 @@ struct VirtualTextureManager
     u64 CalculateHash(u32 textureIndex, u32 faceIndex, u32 mipLevel, u32 tileIndex);
     u32 UpdateHash(HashTableEntry entry);
     int GetInHash(u32 textureIndex, u32 tileIndex, u32 faceID, u32 mipLevel);
-    // void PinPages(CommandBuffer *cmd, u32 textureIndex, Vec3u *pinnedPages, u32 *offsets,
-    //               u32 *data, u32 numPages);
     void ClearTextures(CommandBuffer *cmd);
 
     // Streaming
@@ -434,7 +432,5 @@ struct VirtualTextureManager
 void InitializePtex(u32 maxFiles = 400, u64 maxMem = gigabytes(8));
 PaddedImage GenerateMips(Arena *arena, PaddedImage &input, u32 width, u32 height, Vec2u scale,
                          u32 borderSize);
-string Convert(Arena *arena, PtexTexture *texture, int filterWidth = 4);
-void Convert(string filename);
 } // namespace rt
 #endif

@@ -3985,43 +3985,43 @@ static void LoadMoanaJSON(Arena *arena, string directory)
 
     // TODO: don't hardcode this
     string testFilename = "../../data/island/pbrt-v4/json/isMountainB/isMountainB.json";
-    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
-    //
-    // testFilename = "../../data/island/pbrt-v4/json/osOcean/osOcean.json";
-    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
-    //
-    // testFilename = "../../data/island/pbrt-v4/json/isMountainA/isMountainA.json";
-    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
-    //
-    // testFilename = "../../data/island/pbrt-v4/json/isNaupakaA/isNaupakaA.json";
-    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
-    //
-    // testFilename = "../../data/island/pbrt-v4/json/isCoral/isCoral.json";
-    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
-    //
-    // testFilename = "../../data/island/pbrt-v4/json/isBeach/isBeach.json";
-    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
-    //
-    // testFilename = "../../data/island/pbrt-v4/json/isCoastline/isCoastline.json";
-    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
-    //
-    // testFilename = "../../data/island/pbrt-v4/json/isDunesA/isDunesA.json";
-    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
-    //
-    // testFilename = "../../data/island/pbrt-v4/json/isGardeniaA/isGardeniaA.json";
-    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
-    //
-    // testFilename = "../../data/island/pbrt-v4/json/isHibiscus/isHibiscus.json";
-    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
-    //
-    // testFilename = "../../data/island/pbrt-v4/json/isHibiscusYoung/isHibiscusYoung.json";
-    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+    LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+
+    testFilename = "../../data/island/pbrt-v4/json/osOcean/osOcean.json";
+    LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+
+    testFilename = "../../data/island/pbrt-v4/json/isMountainA/isMountainA.json";
+    LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+
+    testFilename = "../../data/island/pbrt-v4/json/isNaupakaA/isNaupakaA.json";
+    LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+
+    testFilename = "../../data/island/pbrt-v4/json/isCoral/isCoral.json";
+    LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+
+    testFilename = "../../data/island/pbrt-v4/json/isBeach/isBeach.json";
+    LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+
+    testFilename = "../../data/island/pbrt-v4/json/isCoastline/isCoastline.json";
+    LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+
+    testFilename = "../../data/island/pbrt-v4/json/isDunesA/isDunesA.json";
+    LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+
+    testFilename = "../../data/island/pbrt-v4/json/isGardeniaA/isGardeniaA.json";
+    LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+
+    testFilename = "../../data/island/pbrt-v4/json/isHibiscus/isHibiscus.json";
+    LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+
+    testFilename = "../../data/island/pbrt-v4/json/isHibiscusYoung/isHibiscusYoung.json";
+    LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
 
     testFilename = "../../data/island/pbrt-v4/json/isIronwoodA1/isIronwoodA1.json";
     LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
 
-    // testFilename = "../../data/island/pbrt-v4/json/isIronwoodB/isIronwoodB.json";
-    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+    testFilename = "../../data/island/pbrt-v4/json/isIronwoodB/isIronwoodB.json";
+    LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
 
     // testFilename = "../../data/island/pbrt-v4/json/isLavaRocks/isLavaRocks.json";
     // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
