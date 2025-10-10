@@ -547,7 +547,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             Assert(result);
         }
         device->ResetDescriptorPool(0);
-        CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Compute);
+        CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Compute, "help");
         u32 allocIndex     = virtualTextureManager.AllocateVirtualPages(
             sceneScratch.temp.arena, ptexTexture.filename, faceDataStream, numFaces, cmd);
         texSemaphore.signalValue++;
@@ -569,6 +569,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         gpuTextureInfo.Push(info);
     }
+    bool finished = device->Wait(texSemaphore, 10e9);
+    Assert(finished);
 
     u8 *faceDataByteBuffer = PushArrayNoZero(sceneScratch.temp.arena, u8, faceOffset);
     u32 ptexOffset         = 0;

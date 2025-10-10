@@ -30,8 +30,13 @@ namespace VirtualTexture
                     bindlessFloat4Textures[NonUniformResourceIndex(pageTableEntry.bindlessIndex)].GetDimensions(width, height);
 
                     float2 texel = float2(pageTableEntry.offset) + uv * texSize;
+                    texel = clamp(texel, 0, float2(width, height));
                     float2 texCoord = texel / float2(width, height);
                     result = bindlessFloat4Textures[NonUniformResourceIndex(pageTableEntry.bindlessIndex)].SampleLevel(samplerNearestClamp, texCoord, 0.f);
+                    if (all(result == 0))
+                    {
+                        result = float4(0, 0, 1, 1);
+                    }
                     return true;
                 }
             }
@@ -45,7 +50,7 @@ namespace VirtualTexture
 
     float4 Sample(uint textureIndex, uint tileIndex, uint faceID, uint mip, float2 uv, uint2 texSize, uint maxMip)
     {
-        float4 result = 1;
+        float4 result = float4(0, 0, 1, 1);
         if (!SampleHelper(textureIndex, tileIndex, faceID, mip, uv, texSize, result))
         {
             SampleHelper(textureIndex, 0, faceID, maxMip, float2(0.5, 0.5), float2(1, 1), result);

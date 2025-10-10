@@ -3137,6 +3137,7 @@ static Mesh *LoadObj(Arena *arena, string filename, string *&outMaterialNames,
             if (IsBlank(&tokenizer))
             {
                 materialName = {};
+                Print("no material for mesh: %u\n", meshes.size());
             }
             else
             {
@@ -3488,6 +3489,137 @@ static void LoadMoanaJSON(SceneLoadState *sls, PBRTFileInfo *base, string direct
             ProcessInstancedPrimitiveJson(scratch.temp.arena, directory, tokenizer, fileInfos,
                                           counter, &totalMeshCount, archiveFilenames);
         }
+#if 0
+        else if (parameterType == "variants")
+        {
+            SkipToNextChar2(&tokenizer, '"');
+
+            for (;;)
+            {
+                string name;
+                SkipToNextChar(&tokenizer, ',');
+                if (*tokenizer.cursor == '}') break;
+                bool success = GetBetweenPair(name, &tokenizer, '"');
+                Assert(success);
+                SkipToNextChar2(&tokenizer, '"');
+
+                bool differentGeometry = true;
+                AffineSpace baseTransform;
+
+                auto *startInfo    = fileInfos.last;
+                u32 startInfoIndex = startInfo->count;
+
+                for (;;)
+                {
+                    SkipToNextChar(&tokenizer, ',');
+                    if (*tokenizer.cursor == '}')
+                    {
+                        bool success = Advance(&tokenizer, "}");
+                        Assert(success);
+                        break;
+                    }
+
+                    string field;
+                    success = GetBetweenPair(field, &tokenizer, '"');
+                    Assert(success);
+
+                    if (field == "name")
+                    {
+                        SkipToNextChar2(&tokenizer, '"');
+                        string instanceName;
+                        success = GetBetweenPair(instanceName, &tokenizer, '"');
+                        Assert(success);
+                    }
+                    else if (field == "geomObjFile")
+                    {
+                        SkipToNextChar2(&tokenizer, '"');
+                        string objFileName;
+                        success = GetBetweenPair(objFileName, &tokenizer, '"');
+                        Assert(success);
+
+                        string fullObjFilename =
+                            StrConcat(scratch.temp.arena, directory, objFileName);
+
+                        string objectFileName     = PushStr8F(scratch.temp.arena, "%S.rtscene",
+                                                              RemoveFileExtension(objFileName));
+                        PBRTFileInfo *objFileInfo = &fileInfos.AddBack();
+                        objFileInfo->Init(objectFileName);
+                        objFileInfo->base = true;
+
+                        LoadMoanaOBJ(objFileInfo, fullObjFilename);
+                        totalMeshCount.fetch_add(objFileInfo->shapes.Length());
+                    }
+                    else if (field == "instancedPrimitiveJsonFiles")
+                    {
+                        ProcessInstancedPrimitiveJson(scratch.temp.arena, directory, tokenizer,
+                                                      fileInfos, counter, &totalMeshCount,
+                                                      archiveFilenames);
+                        differentGeometry = true;
+                        bool success      = Advance(&tokenizer, "}");
+                        Assert(success);
+                    }
+                    else
+                    {
+                        // TODO
+                        Assert(0);
+                    }
+                }
+
+                if (!differentGeometry)
+                {
+                    instanceTransforms.Push(baseTransform);
+                }
+                else
+                {
+                    scheduler.Wait(&counter);
+                    u32 infoIndex = startInfoIndex;
+                    for (auto *node = startInfo; node != 0; node = node->next)
+                    {
+                        for (; infoIndex < node->count; infoIndex++)
+                        {
+                            PBRTFileInfo *info      = &node->values[infoIndex];
+                            info->differentGeometry = true;
+
+                            if (info->transforms.Length())
+                            {
+                                AffineSpace &transform = baseTransform;
+                                if (transform[0] == Vec3f(1, 0, 0) &&
+                                    transform[1] == Vec3f(0, 1, 0) &&
+                                    transform[2] == Vec3f(0, 0, 1) && transform[3] == Vec3f(0))
+                                {
+                                    Assert(info->numInstances);
+                                    base->Merge(info);
+                                }
+                                else
+                                {
+                                    InstanceType instance;
+                                    instance.filename =
+                                        PushStr8Copy(base->arena, info->filename);
+                                    instance.transformIndexStart = base->transforms.Length();
+                                    instance.transformIndexEnd   = base->transforms.Length();
+                                    base->fileInstances.Push(instance);
+                                    base->numInstances += 1;
+                                    WriteFile(directory, info);
+                                    ArenaRelease(info->arena);
+                                }
+                            }
+                            else if (info->base)
+                            {
+                                InstanceType instance;
+                                instance.filename = PushStr8Copy(base->arena, info->filename);
+                                instance.transformIndexStart = base->transforms.Length();
+                                instance.transformIndexEnd   = base->transforms.Length();
+                                base->fileInstances.Push(instance);
+                                base->numInstances += 1;
+                            }
+                        }
+                        infoIndex = 0;
+                    }
+                    base->transforms.Push(baseTransform);
+                }
+            }
+        }
+#endif
         else if (parameterType == "instancedCopies")
         {
             SkipToNextChar2(&tokenizer, '"');
@@ -3853,19 +3985,64 @@ static void LoadMoanaJSON(Arena *arena, string directory)
 
     // TODO: don't hardcode this
     string testFilename = "../../data/island/pbrt-v4/json/isMountainB/isMountainB.json";
+    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+    //
+    // testFilename = "../../data/island/pbrt-v4/json/osOcean/osOcean.json";
+    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+    //
+    // testFilename = "../../data/island/pbrt-v4/json/isMountainA/isMountainA.json";
+    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+    //
+    // testFilename = "../../data/island/pbrt-v4/json/isNaupakaA/isNaupakaA.json";
+    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+    //
+    // testFilename = "../../data/island/pbrt-v4/json/isCoral/isCoral.json";
+    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+    //
+    // testFilename = "../../data/island/pbrt-v4/json/isBeach/isBeach.json";
+    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+    //
+    // testFilename = "../../data/island/pbrt-v4/json/isCoastline/isCoastline.json";
+    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+    //
+    // testFilename = "../../data/island/pbrt-v4/json/isDunesA/isDunesA.json";
+    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+    //
+    // testFilename = "../../data/island/pbrt-v4/json/isGardeniaA/isGardeniaA.json";
+    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+    //
+    // testFilename = "../../data/island/pbrt-v4/json/isHibiscus/isHibiscus.json";
+    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+    //
+    // testFilename = "../../data/island/pbrt-v4/json/isHibiscusYoung/isHibiscusYoung.json";
+    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+
+    testFilename = "../../data/island/pbrt-v4/json/isIronwoodA1/isIronwoodA1.json";
     LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
 
-    testFilename = "../../data/island/pbrt-v4/json/osOcean/osOcean.json";
-    LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+    // testFilename = "../../data/island/pbrt-v4/json/isIronwoodB/isIronwoodB.json";
+    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
 
-    testFilename = "../../data/island/pbrt-v4/json/isMountainA/isMountainA.json";
-    LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+    // testFilename = "../../data/island/pbrt-v4/json/isLavaRocks/isLavaRocks.json";
+    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
 
-    testFilename = "../../data/island/pbrt-v4/json/isNaupakaA/isNaupakaA.json";
-    LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+    // testFilename = "../../data/island/pbrt-v4/json/isPalmDead/isPalmDead.json";
+    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+    //
+    // testFilename = "../../data/island/pbrt-v4/json/isPalmRig/isPalmRig.json";
+    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+    //
+    // testFilename = "../../data/island/pbrt-v4/json/isPandanusA/isPandanusA.json";
+    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
 
-    testFilename = "../../data/island/pbrt-v4/json/isCoral/isCoral.json";
-    LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+    // testFilename = "../../data/island/pbrt-v4/json/isKava/isKava.json";
+    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+
+    // testFilename = "../../data/island/pbrt-v4/json/isBayCedarA1/isBayCedarA1.json";
+    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+    //
+    // testFilename = "../../data/island/pbrt-v4/json/isDunesB/isDunesB.json";
+    // LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
 
     WriteFile(directory, &baseInfo, 0, &disneyMaterials);
 }

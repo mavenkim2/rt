@@ -290,6 +290,7 @@ struct VirtualTextureManager
         u32 slabIndex;
         u32 entryIndex;
         int layerIndex;
+        int hashIndex;
     };
 
     struct HashTableEntry
@@ -318,6 +319,7 @@ struct VirtualTextureManager
         }
     };
 
+    Mutex arenaMutex;
     Arena *texArena;
     VkFormat format;
 
@@ -355,6 +357,15 @@ struct VirtualTextureManager
     // Ring buffer
     Mutex slabInfoMutex;
     RingBuffer<SlabAllocInfo> slabAllocInfoRingBuffer;
+
+    RingBuffer<Vec2u> feedbackRequestRingBuffer;
+    Mutex feedbackMutex;
+
+    RingBuffer<PageTableUpdateRequest> evictRequestRingBuffer;
+    Mutex evictMutex;
+
+    RingBuffer<SlabAllocInfo> slabAllocInfoRingBuffer2;
+    Mutex slabInfoMutex2;
 
     StaticArray<GPUSubmissionState> gpuSubmissionStates;
 
