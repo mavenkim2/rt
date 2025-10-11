@@ -53,7 +53,7 @@ RWTexture2D<float> specularHitDistance : register(u25);
 
 StructuredBuffer<float> mitchellCDF : register(t26);
 StructuredBuffer<float> mitchellValues : register(t27);
-RWTexture2D<float> filterWeights : register(u28);
+RWTexture2D<float2> filterWeights : register(u28);
 
 [[vk::push_constant]] RayPushConstant push;
 
@@ -85,7 +85,7 @@ void main()
     float2 sample = rng.Uniform2D();
     const float2 filterRadius = float2(0.5, 0.5);
 
-#if 0
+#if 1
     // First, sample marginal
     int offsetY, offsetX;
     //float pdfY, pdfX;
@@ -98,7 +98,7 @@ void main()
     float2 minD = -radius;
     float2 maxD = radius;
 
-    for (int i = 0; i < mitchellPiecewiseConstant2DWidth; i++)
+    for (int i = mitchellPiecewiseConstant2DWidth - 1; i >= 0; i--)
     {
         if (mitchellCDF[i] <= sample.y)
         {
@@ -114,7 +114,7 @@ void main()
         }
     }
     
-    for (int i = 0; i < mitchellPiecewiseConstant2DWidth; i++)
+    for (int i = mitchellPiecewiseConstant2DWidth - 1; i >= 0; i--)
     {
         uint cdfIndex = (mitchellPiecewiseConstant2DWidth + 1) * (1 + offsetY) + i;
         if (mitchellCDF[cdfIndex] <= sample.x)
@@ -134,9 +134,8 @@ void main()
 
     //float filterWeight = mitchellValues[mitchellPiecewiseConstant2DWidth * offsetY + offsetX] / pdf;
     float2 filterSample = sampleP;
-    //float2 filterSample = float2(lerp(-filterRadius.x, filterRadius.x, sample[0]), lerp(-filterRadius.y, filterRadius.y, sample[1]));
 
-    filterWeights[swizzledThreadID] = 1.f;//filterWeight;
+    //filterWeights[swizzledThreadID] = float2(tY, duy);
 
 #else
     float2 filterSample = float2(lerp(-filterRadius.x, filterRadius.x, sample[0]), lerp(-filterRadius.y, filterRadius.y, sample[1]));

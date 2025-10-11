@@ -1212,66 +1212,6 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                             VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
         computeCmd->FlushBarriers();
-
-        // if (debug) // numBlas - 1)
-        // {
-        //     // RenderGraph *rg   = GetRenderGraph();
-        //     GPUBuffer readback0 =
-        //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        //                              pageHashTableBuffer.size, MemoryUsage::GPU_TO_CPU);
-        //     computeCmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-        //                         VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //                         VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-        //                         VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     computeCmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        //                         VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //                         VK_ACCESS_2_SHADER_WRITE_BIT,
-        //                         VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     // computeCmd->Barrier(
-        //     //     img, VK_IMAGE_LAYOUT_GENERAL,
-        //     //     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        //     //     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        //     // VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //     //     VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-        //     //     QueueType_Ignored, QueueType_Ignored, level, 1);
-        //
-        //     // computeCmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-        //     //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //     //     // VK_ACCESS_2_SHADER_WRITE_BIT,
-        //     //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     computeCmd->FlushBarriers();
-        //
-        //     // BufferImageCopy copy = {};
-        //     // copy.mipLevel        = level;
-        //     // copy.extent          = Vec3u(width, height, 1);
-        //
-        //     computeCmd->CopyBuffer(&readback0, &pageHashTableBuffer);
-        //     // computeCmd->CopyBuffer(&readback2, buffer1);
-        //     // computeCmd->CopyImageToBuffer(&readback0, img, &copy, 1);
-        //     Semaphore testSemaphore   = device->CreateSemaphore();
-        //     testSemaphore.signalValue = 1;
-        //     computeCmd->SignalOutsideFrame(testSemaphore);
-        //     device->SubmitCommandBuffer(computeCmd);
-        //     device->Wait(testSemaphore);
-        //
-        //     Vec4u *data = (Vec4u *)readback0.mappedPtr;
-        //
-        //     // for (u32 i = 0; i < updateRequests.Length(); i++)
-        //     // {
-        //     //     Vec4u &packed    = updateRequests[i].packed;
-        //     //     u32 textureIndex = BitFieldExtractU32(packed.x, 16, 0);
-        //     //     u32 tileIndex    = BitFieldExtractU32(packed.x, 16, 16);
-        //     //     u32 faceID       = BitFieldExtractU32(packed.y, 28, 0);
-        //     //     u32 mipLevel     = BitFieldExtractU32(packed.y, 4, 28);
-        //     //
-        //     //     u64 bitsToHash = (u64)textureIndex | ((u64)tileIndex << 16) |
-        //     //                      ((u64)faceID << 32) | ((u64)mipLevel << 60);
-        //     //     u64 hash = MixBits(bitsuintToHash);
-        //     //     int stop = 5;
-        //     // }
-        //
-        //     int stop = 5;
-        // }
     }
 
     TIMED_RANGE_END(textureFeedback2);

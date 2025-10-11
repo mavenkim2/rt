@@ -19,7 +19,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
     float4 newValue = frameOutput[dtID.xy];
 
     float totalWeight = pc.num == 1 ? 0.f : totalWeights[dtID.xy];
-    //float weight = 1.f;//weights[dtID.xy];
+    float weight = weights[dtID.xy];
     accumulate[dtID.xy] = currentValue + (newValue - currentValue) / float(pc.num);
     //accumulate[dtID.xy] = currentValue + weight * (newValue - currentValue) / (totalWeight + weight);
     //totalWeights[dtID.xy] = totalWeight + weight;

@@ -179,7 +179,8 @@ static float Gaussian(float x, float mu = 0, float sigma = 1)
 
 static float GaussianEvaluate(Vec2f p, float sigma, float expX, float expY)
 {
-    return (Max(0.f, Gaussian(p.x, 0, sigma) - expX) * Max(0.f, Gaussian(p.y, 0, sigma) - expY));
+    return (Max(0.f, Gaussian(p.x, 0, sigma) - expX) *
+            Max(0.f, Gaussian(p.y, 0, sigma) - expY));
 }
 
 void Render(RenderParams2 *params, int numScenes, Image *envMap)
@@ -361,11 +362,12 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         rg->RegisterExternalResource("accumulate", &accumulatedImage);
 
     ImageDesc filterWeights(ImageType::Type2D, targetWidth, targetHeight, 1, 1, 1,
-                            VK_FORMAT_R32_SFLOAT, MemoryUsage::GPU_ONLY,
+                            VK_FORMAT_R32G32_SFLOAT, MemoryUsage::GPU_ONLY,
                             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                             VK_IMAGE_TILING_OPTIMAL);
-    ResourceHandle filterWeightsImage =
-        rg->CreateImageResource("filter weights image", filterWeights);
+    GPUImage filterWeightsImage = device->CreateImage(filterWeights);
+    ResourceHandle filterWeightsHandle =
+        rg->RegisterExternalResource("filter weights", &filterWeightsImage);
 
     GPUImage accumulatedWeights = device->CreateImage(filterWeights);
     ResourceHandle accumulatedWeightsHandle =
@@ -920,11 +922,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         }
 
         bool debug = false;
-        if (sceneIndex == numBlas - 1)
-        {
-            //     debug    = true;
-            int stop = 5;
-        }
         geoSemaphore.signalValue++;
         cmd->SignalOutsideFrame(geoSemaphore);
         cmd->ClearBuffer(&virtualGeometryManager.clasGlobalsBuffer, 0);
@@ -1440,7 +1437,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                specularAlbedoHandle      = specularAlbedo,
                specularHitDistanceHandle = specularHitDistance, currentBuffer, &debugBuffer,
                &readback, &mitchellValuesBuffer, &mitchellCDFBuffer,
-               filterWeightsImage](CommandBuffer *cmd) {
+               &filterWeightsImage](CommandBuffer *cmd) {
                   RenderGraph *rg               = GetRenderGraph();
                   GPUImage *image               = rg->GetImage(imageHandle);
                   GPUImage *imageOut            = rg->GetImage(imageOutHandle);
@@ -1448,7 +1445,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                   GPUImage *diffuseAlbedo       = rg->GetImage(diffuseAlbedoHandle);
                   GPUImage *specularAlbedo      = rg->GetImage(specularAlbedoHandle);
                   GPUImage *specularHitDistance = rg->GetImage(specularHitDistanceHandle);
-                  GPUImage *filterWeights       = rg->GetImage(filterWeightsImage);
+                  // GPUImage *filterWeights       = rg->GetImage(filterWeightsImage);
 
                   cmd->Barrier(image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                                VK_PIPELINE_STAGE_2_NONE,
@@ -1478,7 +1475,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_NONE,
                                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
                                VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_WRITE_BIT);
-                  cmd->Barrier(filterWeights, VK_IMAGE_LAYOUT_UNDEFINED,
+                  cmd->Barrier(&filterWeightsImage, VK_IMAGE_LAYOUT_UNDEFINED,
                                VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_NONE,
                                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
                                VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_WRITE_BIT);
@@ -1511,7 +1508,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                       .Bind(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer)
                       .Bind(&mitchellCDFBuffer.buffer)
                       .Bind(&mitchellValuesBuffer.buffer)
-                      .Bind(filterWeights)
+                      .Bind(&filterWeightsImage)
                       .PushConstants(&pushConstant, &pc)
                       .End();
 
@@ -1520,11 +1517,50 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                   cmd->TraceRays(&rts, targetWidth, targetHeight, 1);
                   TIMED_RANGE_END(beginIndex);
 
-                  cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                               VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                               VK_ACCESS_2_TRANSFER_READ_BIT);
-                  cmd->FlushBarriers();
-                  cmd->CopyBuffer(&readback, &debugBuffer);
+                  // if (debug) // numBlas - 1)
+                  // {
+                  //     // RenderGraph *rg   = GetRenderGraph();
+                  //     GPUBuffer readback0 = device->CreateBuffer(
+                  //         VK_BUFFER_USAGE_TRANSFER_DST_BIT, filterWeightsImage.req.size,
+                  //         MemoryUsage::GPU_TO_CPU);
+                  //     cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                  //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                  //                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                  //                  VK_ACCESS_2_TRANSFER_READ_BIT);
+                  //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                  //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                  //                  VK_ACCESS_2_SHADER_WRITE_BIT,
+                  //                  VK_ACCESS_2_TRANSFER_READ_BIT);
+                  //     cmd->Barrier(&filterWeightsImage, VK_IMAGE_LAYOUT_GENERAL,
+                  //                  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                  //                  VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                  //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                  //                  VK_ACCESS_2_SHADER_WRITE_BIT,
+                  //                  VK_ACCESS_2_TRANSFER_READ_BIT);
+                  //
+                  //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                  //     //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                  //     //     // VK_ACCESS_2_SHADER_WRITE_BIT,
+                  //     //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
+                  //     cmd->FlushBarriers();
+                  //
+                  //     BufferImageCopy copy = {};
+                  //     copy.extent          = Vec3u(filterWeightsImage.desc.width,
+                  //                                  filterWeightsImage.desc.height, 1);
+                  //
+                  //     // cmd->CopyBuffer(&readback0, &pageHashTableBuffer);
+                  //     // cmd->CopyBuffer(&readback2, buffer1);
+                  //     cmd->CopyImageToBuffer(&readback0, &filterWeightsImage, &copy, 1);
+                  //     Semaphore testSemaphore   = device->CreateSemaphore();
+                  //     testSemaphore.signalValue = 1;
+                  //     cmd->SignalOutsideFrame(testSemaphore);
+                  //     device->SubmitCommandBuffer(cmd);
+                  //     device->Wait(testSemaphore);
+                  //
+                  //     Vec2f *data = (Vec2f *)readback0.mappedPtr;
+                  //
+                  //     int stop = 5;
+                  // }
               })
             .AddHandle(image, ResourceUsageType::Write)
             .AddHandle(imageOut, ResourceUsageType::Write)
@@ -1538,11 +1574,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         accumulatePush.num = numFramesAccumulated;
         rg->StartComputePass(
               accumulatePipeline, accumulateLayout, 4,
-              [targetWidth, targetHeight, image, &accumulatedImage, filterWeightsImage,
+              [targetWidth, targetHeight, image, &accumulatedImage, &filterWeightsImage,
                &accumulatedWeights](CommandBuffer *cmd) {
                   RenderGraph *rg      = GetRenderGraph();
                   GPUImage *frameImage = rg->GetImage(image);
-                  GPUImage *weights    = rg->GetImage(filterWeightsImage);
+                  // GPUImage *weights    = rg->GetImage(filterWeightsImage);
                   device->BeginEvent(cmd, "Accumulate");
                   cmd->Barrier(frameImage, VK_IMAGE_LAYOUT_GENERAL,
                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -1552,7 +1588,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                   cmd->Barrier(&accumulatedImage, VK_IMAGE_LAYOUT_GENERAL,
                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                VK_ACCESS_2_SHADER_WRITE_BIT);
-                  cmd->Barrier(weights, VK_IMAGE_LAYOUT_GENERAL,
+                  cmd->Barrier(&filterWeightsImage, VK_IMAGE_LAYOUT_GENERAL,
                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -1567,7 +1603,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
               &accumulatePC, &accumulatePush)
             .AddHandle(image, ResourceUsageType::Read)
             .AddHandle(accumulatedImageHandle, ResourceUsageType::Write)
-            .AddHandle(filterWeightsImage, ResourceUsageType::Read)
+            .AddHandle(filterWeightsHandle, ResourceUsageType::Read)
             .AddHandle(accumulatedWeightsHandle, ResourceUsageType::Write);
 
 #if 0
