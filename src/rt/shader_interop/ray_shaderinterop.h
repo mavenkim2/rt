@@ -20,6 +20,7 @@ struct RayPushConstant
     uint frameNum;
     uint width;
     uint height;
+    float mitchellIntegral;
 };
 
 #ifdef __cplusplus

@@ -5,6 +5,7 @@
 #include "graphics/vulkan.h"
 #include "integrate.h"
 #include "gpu_scene.h"
+#include "lights.h"
 #include "math/simd_base.h"
 #include "radix_sort.h"
 #include "random.h"
@@ -171,6 +172,16 @@ static float MitchellEvaluate(Vec2f p, Vec2f radius)
     return result;
 }
 
+static float Gaussian(float x, float mu = 0, float sigma = 1)
+{
+    return 1 / Sqrt(2 * PI * sigma * sigma) * FastExp(-Sqr(x - mu) / (2 * sigma * sigma));
+}
+
+static float GaussianEvaluate(Vec2f p, float sigma, float expX, float expY)
+{
+    return (Max(0.f, Gaussian(p.x, 0, sigma) - expX) * Max(0.f, Gaussian(p.y, 0, sigma) - expY));
+}
+
 void Render(RenderParams2 *params, int numScenes, Image *envMap)
 {
     ScenePrimitives **scenes = GetScenes();
@@ -259,6 +270,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     DescriptorSetLayout accumulateLayout = {};
     accumulateLayout.AddBinding(0, DescriptorType::SampledImage, VK_SHADER_STAGE_COMPUTE_BIT);
     accumulateLayout.AddBinding(1, DescriptorType::StorageImage, VK_SHADER_STAGE_COMPUTE_BIT);
+    accumulateLayout.AddBinding(2, DescriptorType::SampledImage, VK_SHADER_STAGE_COMPUTE_BIT);
+    accumulateLayout.AddBinding(3, DescriptorType::StorageImage, VK_SHADER_STAGE_COMPUTE_BIT);
 
     PushConstant accumulatePC;
     accumulatePC.size   = sizeof(NumPushConstant);
@@ -347,6 +360,17 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     ResourceHandle accumulatedImageHandle =
         rg->RegisterExternalResource("accumulate", &accumulatedImage);
 
+    ImageDesc filterWeights(ImageType::Type2D, targetWidth, targetHeight, 1, 1, 1,
+                            VK_FORMAT_R32_SFLOAT, MemoryUsage::GPU_ONLY,
+                            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                            VK_IMAGE_TILING_OPTIMAL);
+    ResourceHandle filterWeightsImage =
+        rg->CreateImageResource("filter weights image", filterWeights);
+
+    GPUImage accumulatedWeights = device->CreateImage(filterWeights);
+    ResourceHandle accumulatedWeightsHandle =
+        rg->RegisterExternalResource("accumulated weights", &accumulatedWeights);
+
     ImageDesc imageOutDesc(ImageType::Type2D, params->width, params->height, 1, 1, 1,
                            VK_FORMAT_R8G8B8A8_UNORM, MemoryUsage::GPU_ONLY,
                            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
@@ -392,6 +416,51 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                          VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
     transferCmd->FlushBarriers();
 
+    ScratchArena sceneScratch;
+
+    float radius    = 1.5f;
+    Vec2f minDomain = -Vec2f(radius);
+    Vec2f maxDomain = Vec2f(radius);
+    int arrayWidth  = 32 * radius;
+    StaticArray<float> mitchellDistribution(sceneScratch.temp.arena, Sqr(arrayWidth));
+    float sigma = 0.5f;
+    float expX  = Gaussian(radius, 0, sigma);
+    float expY  = Gaussian(radius, 0, sigma);
+
+    for (int y = 0; y < arrayWidth; y++)
+    {
+        for (int x = 0; x < arrayWidth; x++)
+        {
+            Vec2f t((x + 0.5f) / (float)arrayWidth, (y + 0.5f) / (float)arrayWidth);
+            Vec2f p(Lerp(t.x, minDomain.x, maxDomain.x), Lerp(t.y, minDomain.y, maxDomain.y));
+            // mitchellDistribution.Push(MitchellEvaluate(p, radius));
+            mitchellDistribution.Push(GaussianEvaluate(p, sigma, expX, expY));
+        }
+    }
+
+    PiecewiseConstant2D mitchell(sceneScratch.temp.arena, mitchellDistribution.data,
+                                 arrayWidth, arrayWidth, minDomain, maxDomain);
+
+    StaticArray<float> cdfs(sceneScratch.temp.arena, (arrayWidth + 1) * (1 + arrayWidth));
+    for (int i = 0; i <= arrayWidth; i++)
+    {
+        cdfs.Push(mitchell.marginal.cdf[i]);
+    }
+    for (int i = 0; i < arrayWidth; i++)
+    {
+        PiecewiseConstant1D &conditional = mitchell.conditional[i];
+        for (int j = 0; j <= arrayWidth; j++)
+        {
+            cdfs.Push(conditional.cdf[j]);
+        }
+    }
+
+    TransferBuffer mitchellCDFBuffer = transferCmd->SubmitBuffer(
+        cdfs.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(f32) * cdfs.Length());
+    TransferBuffer mitchellValuesBuffer = transferCmd->SubmitBuffer(
+        mitchellDistribution.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        sizeof(f32) * mitchellDistribution.Length());
+
     submitSemaphore.signalValue = 1;
     transferCmd->SignalOutsideFrame(submitSemaphore);
     device->SubmitCommandBuffer(transferCmd);
@@ -427,6 +496,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     layout.AddBinding(24, DescriptorType::StorageImage, flags);
     layout.AddBinding(25, DescriptorType::StorageImage, flags);
     layout.AddBinding((u32)RTBindings::Feedback, DescriptorType::StorageBuffer, flags);
+    layout.AddBinding(26, DescriptorType::StorageBuffer, flags);
+    layout.AddBinding(27, DescriptorType::StorageBuffer, flags);
+    layout.AddBinding(28, DescriptorType::StorageImage, flags);
 
     layout.AddImmutableSamplers();
 
@@ -434,7 +506,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                                            &pushConstant, &layout, 3, true);
     // VkPipeline pipeline = device->CreateComputePipeline(&shader, &layout, &pushConstant);
     // Build clusters
-    ScratchArena sceneScratch;
 
     StaticArray<ScenePrimitives *> blasScenes(arena, numScenes);
     StaticArray<ScenePrimitives *> tlasScenes(arena, numScenes);
@@ -1022,37 +1093,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         device->GetStagingBuffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, sizeof(GPUScene)),
         device->GetStagingBuffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, sizeof(GPUScene))};
 
-    StaticArray<float> mitchellDistribution(sceneScratch.temp.arena, 16 * 16);
-    StaticArray<float> cdfs(sceneScratch.temp.arena, 16 * 16, 16 * 16);
-    StaticArray<float> integrals(sceneScratch.temp.arena, 16);
-    for (int y = 0; y < 16; y++)
-    {
-        for (int x = 0; x < 16; x++)
-        {
-            Vec2f p(Lerp(-0.5f, 0.5f, (x + 0.5f) / 16.f), Lerp(-0.5f, 0.5f, (y + 0.5f) / 16));
-            float m = MitchellEvaluate(p, 0.5f);
-            mitchellDistribution.Push(m);
-        }
-
-        // build cdfs
-        float total      = 0.f;
-        cdfs[y * 16 + 0] = 0.f;
-        for (int x = 1; x < 16; x++)
-        {
-            total += Abs(mitchellDistribution[y * 16 + x - 1]);
-            cdfs[y * 16 + x] = total;
-        }
-        float integral = total / 16.f;
-        for (int x = 1; x < 16; x++)
-        {
-            cdfs[y * 16 + x] /= total;
-        }
-        integrals.Push(integral);
-    }
-    for (int y = 0; y < 16; y++)
-    {
-    }
-
     bool mousePressed = false;
     OS_Key keys[4]    = {
         OS_Key_D,
@@ -1374,10 +1414,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         });
 
         RayPushConstant pc;
-        pc.envMap   = envMapBindlessIndex;
-        pc.frameNum = (u32)device->frameCount;
-        pc.width    = envMap->width;
-        pc.height   = envMap->height;
+        pc.envMap           = envMapBindlessIndex;
+        pc.frameNum         = (u32)device->frameCount;
+        pc.width            = envMap->width;
+        pc.height           = envMap->height;
+        pc.mitchellIntegral = mitchell.marginal.Integral();
 
         VkPipelineStageFlags2 flags   = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
         VkPipelineBindPoint bindPoint = VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR;
@@ -1398,7 +1439,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                normalRoughnessHandle = normalRoughness, diffuseAlbedoHandle = diffuseAlbedo,
                specularAlbedoHandle      = specularAlbedo,
                specularHitDistanceHandle = specularHitDistance, currentBuffer, &debugBuffer,
-               &readback](CommandBuffer *cmd) {
+               &readback, &mitchellValuesBuffer, &mitchellCDFBuffer,
+               filterWeightsImage](CommandBuffer *cmd) {
                   RenderGraph *rg               = GetRenderGraph();
                   GPUImage *image               = rg->GetImage(imageHandle);
                   GPUImage *imageOut            = rg->GetImage(imageOutHandle);
@@ -1406,6 +1448,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                   GPUImage *diffuseAlbedo       = rg->GetImage(diffuseAlbedoHandle);
                   GPUImage *specularAlbedo      = rg->GetImage(specularAlbedoHandle);
                   GPUImage *specularHitDistance = rg->GetImage(specularHitDistanceHandle);
+                  GPUImage *filterWeights       = rg->GetImage(filterWeightsImage);
 
                   cmd->Barrier(image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                                VK_PIPELINE_STAGE_2_NONE,
@@ -1432,6 +1475,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
                                VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_WRITE_BIT);
                   cmd->Barrier(specularHitDistance, VK_IMAGE_LAYOUT_UNDEFINED,
+                               VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_NONE,
+                               VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                               VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_WRITE_BIT);
+                  cmd->Barrier(filterWeights, VK_IMAGE_LAYOUT_UNDEFINED,
                                VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_NONE,
                                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
                                VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_WRITE_BIT);
@@ -1462,6 +1509,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                       .Bind(specularAlbedo)
                       .Bind(specularHitDistance)
                       .Bind(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer)
+                      .Bind(&mitchellCDFBuffer.buffer)
+                      .Bind(&mitchellValuesBuffer.buffer)
+                      .Bind(filterWeights)
                       .PushConstants(&pushConstant, &pc)
                       .End();
 
@@ -1487,10 +1537,12 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         NumPushConstant accumulatePush;
         accumulatePush.num = numFramesAccumulated;
         rg->StartComputePass(
-              accumulatePipeline, accumulateLayout, 2,
-              [targetWidth, targetHeight, image, &accumulatedImage](CommandBuffer *cmd) {
+              accumulatePipeline, accumulateLayout, 4,
+              [targetWidth, targetHeight, image, &accumulatedImage, filterWeightsImage,
+               &accumulatedWeights](CommandBuffer *cmd) {
                   RenderGraph *rg      = GetRenderGraph();
                   GPUImage *frameImage = rg->GetImage(image);
+                  GPUImage *weights    = rg->GetImage(filterWeightsImage);
                   device->BeginEvent(cmd, "Accumulate");
                   cmd->Barrier(frameImage, VK_IMAGE_LAYOUT_GENERAL,
                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -1500,13 +1552,23 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                   cmd->Barrier(&accumulatedImage, VK_IMAGE_LAYOUT_GENERAL,
                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                VK_ACCESS_2_SHADER_WRITE_BIT);
+                  cmd->Barrier(weights, VK_IMAGE_LAYOUT_GENERAL,
+                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                               VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                               VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+                  cmd->Barrier(&accumulatedWeights, VK_IMAGE_LAYOUT_GENERAL,
+                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                               VK_ACCESS_2_SHADER_WRITE_BIT);
                   cmd->FlushBarriers();
                   cmd->Dispatch((targetWidth + 7) / 8, (targetHeight + 7) / 8, 1);
                   device->EndEvent(cmd);
               },
               &accumulatePC, &accumulatePush)
             .AddHandle(image, ResourceUsageType::Read)
-            .AddHandle(accumulatedImageHandle, ResourceUsageType::Write);
+            .AddHandle(accumulatedImageHandle, ResourceUsageType::Write)
+            .AddHandle(filterWeightsImage, ResourceUsageType::Read)
+            .AddHandle(accumulatedWeightsHandle, ResourceUsageType::Write);
 
 #if 0
         rg->StartComputePass(

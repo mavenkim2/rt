@@ -29,7 +29,7 @@
 #include "voxel.hlsli"
 
 RaytracingAccelerationStructure accel : register(t0);
-RWTexture2D<half4> image : register(u1);
+RWTexture2D<float4> image : register(u1);
 ConstantBuffer<GPUScene> scene : register(b2);
 StructuredBuffer<GPUMaterial> materials : register(t4);
 ConstantBuffer<ShaderDebugInfo> debugInfo: register(b7);
@@ -51,10 +51,9 @@ RWTexture2D<float4> diffuseAlbedo : register(u23);
 RWTexture2D<float4> specularAlbedo : register(u24);
 RWTexture2D<float> specularHitDistance : register(u25);
 
-#if 0
-StructuredBuffer<float> mitchellCDF : register(u26);
-StructuredBuffer<float> mitchellFilterValues : register(u27);
-#endif
+StructuredBuffer<float> mitchellCDF : register(t26);
+StructuredBuffer<float> mitchellValues : register(t27);
+RWTexture2D<float> filterWeights : register(u28);
 
 [[vk::push_constant]] RayPushConstant push;
 
@@ -87,17 +86,62 @@ void main()
     const float2 filterRadius = float2(0.5, 0.5);
 
 #if 0
-    for (int i = 0; i < 16; i++)
+    // First, sample marginal
+    int offsetY, offsetX;
+    //float pdfY, pdfX;
+    float pdf = 1;
+    float2 sampleP = 0;
+
+    float mitchellMarginalIntegral = push.mitchellIntegral;
+    float radius = 1.5f;
+    int mitchellPiecewiseConstant2DWidth = 32 * radius;
+    float2 minD = -radius;
+    float2 maxD = radius;
+
+    for (int i = 0; i < mitchellPiecewiseConstant2DWidth; i++)
     {
         if (mitchellCDF[i] <= sample.y)
         {
-            uint offset = i;
-            float pdf = ;
+            offsetY = i;
+            //pdfY = mitchellValues[i] / mitchellIntegral;
+
+            float cdfRange = mitchellCDF[i + 1] - mitchellCDF[i];
+            float du = (sample.y - mitchellCDF[i]) * (cdfRange > 0.f ? 1.f / cdfRange : 0.f);
+            float t = saturate((i + du) / (float)mitchellPiecewiseConstant2DWidth);
+            sampleP.y = lerp(minD.y, maxD.y, t);
+
+            break;
         }
     }
+    
+    for (int i = 0; i < mitchellPiecewiseConstant2DWidth; i++)
+    {
+        uint cdfIndex = (mitchellPiecewiseConstant2DWidth + 1) * (1 + offsetY) + i;
+        if (mitchellCDF[cdfIndex] <= sample.x)
+        {
+            offsetX = i;
+            pdf = abs(mitchellValues[mitchellPiecewiseConstant2DWidth * offsetY + offsetX]) / mitchellMarginalIntegral;
+            //pdfX = mitchellValues[i] / mitchellIntegral;
+
+            float cdfRange = mitchellCDF[cdfIndex + 1] - mitchellCDF[cdfIndex];
+            float du = (sample.x - mitchellCDF[cdfIndex]) * (cdfRange > 0.f ? 1.f / cdfRange : 0.f);
+            float t = saturate((i + du) / (float)mitchellPiecewiseConstant2DWidth);
+            sampleP.x = lerp(minD.x, maxD.x, t);
+
+            break;
+        }
+    }
+
+    //float filterWeight = mitchellValues[mitchellPiecewiseConstant2DWidth * offsetY + offsetX] / pdf;
+    float2 filterSample = sampleP;
+    //float2 filterSample = float2(lerp(-filterRadius.x, filterRadius.x, sample[0]), lerp(-filterRadius.y, filterRadius.y, sample[1]));
+
+    filterWeights[swizzledThreadID] = 1.f;//filterWeight;
+
+#else
+    float2 filterSample = float2(lerp(-filterRadius.x, filterRadius.x, sample[0]), lerp(-filterRadius.y, filterRadius.y, sample[1]));
 #endif
 
-    float2 filterSample = float2(lerp(-filterRadius.x, filterRadius.x, sample[0]), lerp(-filterRadius.y, filterRadius.y, sample[1]));
     filterSample += float2(0.5, 0.5) + float2(swizzledThreadID);
     float2 pLens = rng.Uniform2D();
 
