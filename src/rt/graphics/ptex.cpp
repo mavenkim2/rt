@@ -295,7 +295,7 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 maxSize, u32 slab
                                              VkFormat format)
     : format(format), slabAllocInfoRingBuffer(arena, 1u << 20u), slabSize(slabSize),
       submissionReadIndex(0), submissionWriteIndex(0),
-      feedbackRequestRingBuffer(arena, 1u << 20u), evictRequestRingBuffer(arena, 1u << 16u),
+      feedbackRequestRingBuffer(arena, 1u << 20u), evictRequestRingBuffer(arena, 1u << 20u),
       slabAllocInfoRingBuffer2(arena, 1u << 20u)
 {
     string shaderName = "../src/shaders/update_page_tables.spv";
@@ -877,7 +877,6 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                 SlabAllocInfo info;
                 bool allocated = AllocateMemory(maxDim, minDim, info);
 
-                int entryIndex = -1;
                 if (!allocated)
                 {
                     for (;;)
@@ -906,9 +905,9 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                         numEvicted++;
 
                         if (slab.log2Width >= maxDim && slab.log2Height >= minDim)
+                        // if (slab.log2Width == maxDim && slab.log2Height == minDim)
                         {
-                            entryIndex = entryToEvict;
-                            allocated  = AllocateMemory(slab.log2Width, slab.log2Height, info);
+                            allocated = AllocateMemory(slab.log2Width, slab.log2Height, info);
                             Assert(allocated);
                             break;
                         }
@@ -930,6 +929,7 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
 
             if (updateRequests.Length())
             {
+                Assert(updateRequests.Length() < evictRequestRingBuffer.max);
                 evictRequestRingBuffer.SynchronizedWrite(&evictMutex, updateRequests.data,
                                                          updateRequests.Length());
             }
