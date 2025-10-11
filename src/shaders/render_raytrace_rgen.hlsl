@@ -51,8 +51,8 @@ RWTexture2D<float4> diffuseAlbedo : register(u23);
 RWTexture2D<float4> specularAlbedo : register(u24);
 RWTexture2D<float> specularHitDistance : register(u25);
 
-StructuredBuffer<float> mitchellCDF : register(t26);
-StructuredBuffer<float> mitchellValues : register(t27);
+StructuredBuffer<float> filterCDF : register(t26);
+StructuredBuffer<float> filterValues : register(t27);
 RWTexture2D<float2> filterWeights : register(u28);
 
 [[vk::push_constant]] RayPushConstant push;
@@ -92,49 +92,49 @@ void main()
     float pdf = 1;
     float2 sampleP = 0;
 
-    float mitchellMarginalIntegral = push.mitchellIntegral;
+    float marginalIntegral = push.filterIntegral;
     float radius = 1.5f;
-    int mitchellPiecewiseConstant2DWidth = 32 * radius;
+    int piecewiseConstant2DWidth = 32 * radius;
     float2 minD = -radius;
     float2 maxD = radius;
 
-    for (int i = mitchellPiecewiseConstant2DWidth - 1; i >= 0; i--)
+    for (int i = piecewiseConstant2DWidth - 1; i >= 0; i--)
     {
-        if (mitchellCDF[i] <= sample.y)
+        if (filterCDF[i] <= sample.y)
         {
             offsetY = i;
-            //pdfY = mitchellValues[i] / mitchellIntegral;
+            //pdfY = filterValues[i] / mitchellIntegral;
 
-            float cdfRange = mitchellCDF[i + 1] - mitchellCDF[i];
-            float du = (sample.y - mitchellCDF[i]) * (cdfRange > 0.f ? 1.f / cdfRange : 0.f);
-            float t = saturate((i + du) / (float)mitchellPiecewiseConstant2DWidth);
+            float cdfRange = filterCDF[i + 1] - filterCDF[i];
+            float du = (sample.y - filterCDF[i]) * (cdfRange > 0.f ? 1.f / cdfRange : 0.f);
+            float t = saturate((i + du) / (float)piecewiseConstant2DWidth);
             sampleP.y = lerp(minD.y, maxD.y, t);
 
             break;
         }
     }
     
-    for (int i = mitchellPiecewiseConstant2DWidth - 1; i >= 0; i--)
+    for (int i = piecewiseConstant2DWidth - 1; i >= 0; i--)
     {
-        uint cdfIndex = (mitchellPiecewiseConstant2DWidth + 1) * (1 + offsetY) + i;
-        if (mitchellCDF[cdfIndex] <= sample.x)
+        uint cdfIndex = (piecewiseConstant2DWidth + 1) * (1 + offsetY) + i;
+        if (filterCDF[cdfIndex] <= sample.x)
         {
             offsetX = i;
-            pdf = abs(mitchellValues[mitchellPiecewiseConstant2DWidth * offsetY + offsetX]) / mitchellMarginalIntegral;
-            //pdfX = mitchellValues[i] / mitchellIntegral;
+            pdf = abs(filterValues[piecewiseConstant2DWidth * offsetY + offsetX]) / marginalIntegral;
+            //pdfX = filterValues[i] / mitchellIntegral;
 
-            float cdfRange = mitchellCDF[cdfIndex + 1] - mitchellCDF[cdfIndex];
-            float du = (sample.x - mitchellCDF[cdfIndex]) * (cdfRange > 0.f ? 1.f / cdfRange : 0.f);
-            float t = saturate((i + du) / (float)mitchellPiecewiseConstant2DWidth);
+            float cdfRange = filterCDF[cdfIndex + 1] - filterCDF[cdfIndex];
+            float du = (sample.x - filterCDF[cdfIndex]) * (cdfRange > 0.f ? 1.f / cdfRange : 0.f);
+            float t = saturate((i + du) / (float)piecewiseConstant2DWidth);
             sampleP.x = lerp(minD.x, maxD.x, t);
 
             break;
         }
     }
 
-    //float filterWeight = mitchellValues[mitchellPiecewiseConstant2DWidth * offsetY + offsetX] / pdf;
     float2 filterSample = sampleP;
 
+    //float filterWeight = filterValues[piecewiseConstant2DWidth * offsetY + offsetX] / pdf;
     //filterWeights[swizzledThreadID] = float2(tY, duy);
 
 #else

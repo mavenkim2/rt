@@ -20,6 +20,8 @@ RenderGraph::RenderGraph()
     resources         = StaticArray<RenderGraphResource>(arena, 1000);
     residentResources = StaticArray<ResidentResource>(arena, 1000);
     passes            = StaticArray<Pass>(arena, 1000);
+    submit            = false;
+    semaphore         = device->CreateSemaphore();
 }
 ResourceHandle RenderGraph::CreateBufferResource(string name, VkBufferUsageFlags2 usageFlags,
                                                  u32 size, ResourceFlags flags)
@@ -238,7 +240,8 @@ GPUBuffer *RenderGraph::GetBuffer(ResourceHandle handle, u32 &offset)
 GPUBuffer *RenderGraph::GetBuffer(ResourceHandle handle)
 {
     RenderGraphResource &resource = resources[handle.index];
-    // Assert(EnumHasAllFlags(resource.flags, ResourceFlags::Transient | ResourceFlags::Buffer));
+    // Assert(EnumHasAllFlags(resource.flags, ResourceFlags::Transient |
+    // ResourceFlags::Buffer));
     return &resource.buffer;
 }
 
@@ -537,9 +540,28 @@ void RenderGraph::Execute(CommandBuffer *cmd)
 {
     for (Pass &pass : passes)
     {
+        if (cmd == 0)
+        {
+            cmd = device->BeginCommandBuffer(QueueType_Graphics);
+        }
         pass.func(cmd);
+        if (submit == true)
+        {
+            if (wait == true)
+            {
+                semaphore.signalValue++;
+                cmd->SignalOutsideFrame(semaphore);
+            }
+            submit = false;
+            wait   = false;
+            device->SubmitCommandBuffer(cmd);
+            device->Wait(semaphore);
+            cmd = 0;
+        }
     }
 }
+
+void RenderGraph::SetSubmit() { submit = true; }
 
 void RenderGraph::BeginFrame()
 {

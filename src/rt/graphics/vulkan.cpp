@@ -2029,6 +2029,7 @@ GPUImage Vulkan::CreateImage(ImageDesc desc, int numSubresources, int ownedQueue
     image.lastPipeline = VK_PIPELINE_STAGE_2_NONE;
     image.lastLayout   = VK_IMAGE_LAYOUT_UNDEFINED;
     image.lastAccess   = VK_ACCESS_2_NONE;
+
     return image;
 }
 
@@ -4694,6 +4695,18 @@ u64 Vulkan::GetSemaphoreValue(Semaphore s)
     vkGetSemaphoreCounterValue(device, s.semaphore, &value);
     return value;
 }
+
+#ifdef WIN32
+HANDLE Vulkan::GetWin32Handle(GPUImage *image)
+{
+    VkMemoryGetWin32HandleInfoKHR info = {VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR};
+    info.memory                        = image->allocation->GetMemory();
+    info.handleType                    = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+    HANDLE result                      = 0;
+    vkGetMemoryWin32HandleKHR(device, &info, &result);
+    return result;
+}
+#endif
 
 #ifdef USE_DLSS
 void Vulkan::GetDLSSTargetDimensions(u32 &width, u32 &height)

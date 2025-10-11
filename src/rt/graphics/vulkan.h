@@ -1227,6 +1227,7 @@ struct Vulkan
 
     bool Wait(Semaphore s, u64 val = UINT64_MAX);
     u64 GetSemaphoreValue(Semaphore s);
+    HANDLE GetWin32Handle(GPUImage *image);
 #ifdef USE_DLSS
     void GetDLSSTargetDimensions(u32 &width, u32 &height);
     DLSSTargets InitializeDLSSTargets(GPUImage *inColor, GPUImage *inDiffuseAlbedo,

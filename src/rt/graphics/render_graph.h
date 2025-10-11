@@ -113,9 +113,14 @@ struct RenderGraph
     u32 watermark;
     // HashIndex residentResourceHash;
     StaticArray<ResidentResource> residentResources;
+    bool submit;
+    bool wait;
+
+    Semaphore semaphore;
     // CrossQueueDependencies dependencies;
 
     RenderGraph();
+    void SetSubmit();
     void BeginFrame();
     void EndFrame();
     inline bool IsBuffer(const RenderGraphResource &resource)
@@ -228,7 +233,7 @@ struct RenderGraph
     }
 
     void Compile();
-    void Execute(CommandBuffer *cmd);
+    void Execute(CommandBuffer *cmd = 0);
 };
 
 extern RenderGraph *renderGraph_;

@@ -30,9 +30,28 @@
 #include "virtual_geometry/virtual_geometry_manager.h"
 
 #include "../../third_party/streamline/include/sl.h"
+#include "../../third_party/oidn/include/OpenImageDenoise/oidn.hpp"
 
 namespace rt
 {
+
+using PFun_oidnNewDevice    = OIDNDevice(OIDNDeviceType deviceType);
+using PFun_oidnCommitDevice = void(OIDNDevice device);
+using PFun_oidnGetDeviceInt = int(OIDNDevice device, const char *name);
+using PFun_oidnNewFilter    = OIDNFilter(OIDNDevice device, const char *name);
+using PFun_oidnNewSharedBufferFromWin32Handle = OIDNBuffer(OIDNDevice device,
+                                                           OIDNExternalMemoryTypeFlag flag,
+                                                           void *handle, const void *name,
+                                                           size_t byteSize);
+using PFun_oidnSetFilterImage = void(OIDNFilter filter, const char *name, OIDNBuffer buffer,
+                                     OIDNFormat format, size_t width, size_t height,
+                                     size_t byteOffset, size_t pixelByteStride,
+                                     size_t rowByteStride);
+using PFun_oidnCommitFilter   = void(OIDNFilter filter);
+using PFun_oidnExecuteFilter  = void(OIDNFilter filter);
+using PFun_oidnSetFilterBool  = void(OIDNFilter filter, const char *name, bool value);
+using PFun_oidnSetFilterInt   = void(OIDNFilter filter, const char *name, int value);
+using PFun_oidnReleaseBuffer  = void(OIDNBuffer buffer);
 
 void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, GeometryType type,
                           string directory, AffineSpace &worldFromRender,
@@ -374,7 +393,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         rg->RegisterExternalResource("accumulated weights", &accumulatedWeights);
 
     ImageDesc imageOutDesc(ImageType::Type2D, params->width, params->height, 1, 1, 1,
-                           VK_FORMAT_R8G8B8A8_UNORM, MemoryUsage::GPU_ONLY,
+                           VK_FORMAT_R16G16B16A16_SFLOAT, MemoryUsage::GPU_ONLY,
                            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                            VK_IMAGE_TILING_OPTIMAL);
     ResourceHandle imageOut = rg->CreateImageResource("image out", imageOutDesc);
@@ -414,6 +433,52 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     ResourceHandle motionVectorBuffer =
         rg->CreateImageResource("motion vector image", motionVectorDesc);
 
+    // Set up open image denoise
+    HMODULE module = LoadLibraryA("../../src/third_party/oidn/bin/OpenImageDenoise.dll");
+    Assert(module);
+
+    PFun_oidnNewDevice *oidnNewDevice_p =
+        (PFun_oidnNewDevice *)GetProcAddress(module, "oidnNewDevice");
+    PFun_oidnCommitDevice *oidnCommitDevice_p =
+        (PFun_oidnCommitDevice *)GetProcAddress(module, "oidnCommitDevice");
+    PFun_oidnGetDeviceInt *oidnGetDeviceInt_p =
+        (PFun_oidnGetDeviceInt *)GetProcAddress(module, "oidnGetDeviceInt");
+    PFun_oidnNewFilter *oidnNewFilter_p =
+        (PFun_oidnNewFilter *)GetProcAddress(module, "oidnNewFilter");
+    PFun_oidnNewSharedBufferFromWin32Handle *oidnNewSharedBufferFromWin32Handle_p =
+        (PFun_oidnNewSharedBufferFromWin32Handle *)GetProcAddress(
+            module, "oidnNewSharedBufferFromWin32Handle");
+    PFun_oidnSetFilterImage *oidnSetFilterImage_p =
+        (PFun_oidnSetFilterImage *)GetProcAddress(module, "oidnSetFilterImage");
+    PFun_oidnCommitFilter *oidnCommitFilter_p =
+        (PFun_oidnCommitFilter *)GetProcAddress(module, "oidnCommitFilter");
+    PFun_oidnExecuteFilter *oidnExecuteFilter_p =
+        (PFun_oidnExecuteFilter *)GetProcAddress(module, "oidnExecuteFilter");
+    PFun_oidnSetFilterBool *oidnSetFilterBool_p =
+        (PFun_oidnSetFilterBool *)GetProcAddress(module, "oidnSetFilterBool");
+    PFun_oidnSetFilterInt *oidnSetFilterInt_p =
+        (PFun_oidnSetFilterInt *)GetProcAddress(module, "oidnSetFilterInt");
+    PFun_oidnReleaseBuffer *oidnReleaseBuffer_p =
+        (PFun_oidnReleaseBuffer *)GetProcAddress(module, "oidnReleaseBuffer");
+
+    OIDNDevice oidnDevice = oidnNewDevice_p(OIDN_DEVICE_TYPE_DEFAULT);
+    oidnCommitDevice_p(oidnDevice);
+
+    int externalMemoryTypes = oidnGetDeviceInt_p(oidnDevice, "externalMemoryTypes");
+    int deviceType          = oidnGetDeviceInt_p(oidnDevice, "type");
+
+    OIDNFilter filter = oidnNewFilter_p(oidnDevice, "RT");
+
+    HANDLE accumulatedImageOIDNHandle = device->GetWin32Handle(&accumulatedImage);
+    OIDNBuffer colorBuf               = oidnNewSharedBufferFromWin32Handle_p(
+        oidnDevice, OIDN_EXTERNAL_MEMORY_TYPE_FLAG_OPAQUE_WIN32, accumulatedImageOIDNHandle,
+        "color", accumulatedImage.req.size);
+    oidnSetFilterImage_p(filter, "color", colorBuf, OIDN_FORMAT_HALF3, targetWidth,
+                         targetHeight, 0, 8, 0);
+    oidnSetFilterBool_p(filter, "hdr", true);
+    oidnSetFilterInt_p(filter, "quality", OIDN_QUALITY_BALANCED);
+    oidnCommitFilter_p(filter);
+
     transferCmd->Barrier(&gpuEnvMap, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                          VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
     transferCmd->FlushBarriers();
@@ -424,7 +489,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     Vec2f minDomain = -Vec2f(radius);
     Vec2f maxDomain = Vec2f(radius);
     int arrayWidth  = 32 * radius;
-    StaticArray<float> mitchellDistribution(sceneScratch.temp.arena, Sqr(arrayWidth));
+    StaticArray<float> filterValues(sceneScratch.temp.arena, Sqr(arrayWidth));
     float sigma = 0.5f;
     float expX  = Gaussian(radius, 0, sigma);
     float expY  = Gaussian(radius, 0, sigma);
@@ -436,32 +501,32 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             Vec2f t((x + 0.5f) / (float)arrayWidth, (y + 0.5f) / (float)arrayWidth);
             Vec2f p(Lerp(t.x, minDomain.x, maxDomain.x), Lerp(t.y, minDomain.y, maxDomain.y));
             // mitchellDistribution.Push(MitchellEvaluate(p, radius));
-            mitchellDistribution.Push(GaussianEvaluate(p, sigma, expX, expY));
+            filterValues.Push(GaussianEvaluate(p, sigma, expX, expY));
         }
     }
 
-    PiecewiseConstant2D mitchell(sceneScratch.temp.arena, mitchellDistribution.data,
-                                 arrayWidth, arrayWidth, minDomain, maxDomain);
+    PiecewiseConstant2D filterDistribution(sceneScratch.temp.arena, filterValues.data,
+                                           arrayWidth, arrayWidth, minDomain, maxDomain);
 
     StaticArray<float> cdfs(sceneScratch.temp.arena, (arrayWidth + 1) * (1 + arrayWidth));
     for (int i = 0; i <= arrayWidth; i++)
     {
-        cdfs.Push(mitchell.marginal.cdf[i]);
+        cdfs.Push(filterDistribution.marginal.cdf[i]);
     }
     for (int i = 0; i < arrayWidth; i++)
     {
-        PiecewiseConstant1D &conditional = mitchell.conditional[i];
+        PiecewiseConstant1D &conditional = filterDistribution.conditional[i];
         for (int j = 0; j <= arrayWidth; j++)
         {
             cdfs.Push(conditional.cdf[j]);
         }
     }
 
-    TransferBuffer mitchellCDFBuffer = transferCmd->SubmitBuffer(
+    TransferBuffer filterCDFBuffer = transferCmd->SubmitBuffer(
         cdfs.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(f32) * cdfs.Length());
-    TransferBuffer mitchellValuesBuffer = transferCmd->SubmitBuffer(
-        mitchellDistribution.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        sizeof(f32) * mitchellDistribution.Length());
+    TransferBuffer filterValuesBuffer =
+        transferCmd->SubmitBuffer(filterValues.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                  sizeof(f32) * filterValues.Length());
 
     submitSemaphore.signalValue = 1;
     transferCmd->SignalOutsideFrame(submitSemaphore);
@@ -1411,11 +1476,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         });
 
         RayPushConstant pc;
-        pc.envMap           = envMapBindlessIndex;
-        pc.frameNum         = (u32)device->frameCount;
-        pc.width            = envMap->width;
-        pc.height           = envMap->height;
-        pc.mitchellIntegral = mitchell.marginal.Integral();
+        pc.envMap         = envMapBindlessIndex;
+        pc.frameNum       = (u32)device->frameCount;
+        pc.width          = envMap->width;
+        pc.height         = envMap->height;
+        pc.filterIntegral = filterDistribution.marginal.Integral();
 
         VkPipelineStageFlags2 flags   = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
         VkPipelineBindPoint bindPoint = VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR;
@@ -1436,7 +1501,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                normalRoughnessHandle = normalRoughness, diffuseAlbedoHandle = diffuseAlbedo,
                specularAlbedoHandle      = specularAlbedo,
                specularHitDistanceHandle = specularHitDistance, currentBuffer, &debugBuffer,
-               &readback, &mitchellValuesBuffer, &mitchellCDFBuffer,
+               &readback, &filterValuesBuffer, &filterCDFBuffer,
                &filterWeightsImage](CommandBuffer *cmd) {
                   RenderGraph *rg               = GetRenderGraph();
                   GPUImage *image               = rg->GetImage(imageHandle);
@@ -1506,8 +1571,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                       .Bind(specularAlbedo)
                       .Bind(specularHitDistance)
                       .Bind(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer)
-                      .Bind(&mitchellCDFBuffer.buffer)
-                      .Bind(&mitchellValuesBuffer.buffer)
+                      .Bind(&filterCDFBuffer.buffer)
+                      .Bind(&filterValuesBuffer.buffer)
                       .Bind(&filterWeightsImage)
                       .PushConstants(&pushConstant, &pc)
                       .End();
@@ -1599,12 +1664,57 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                   cmd->FlushBarriers();
                   cmd->Dispatch((targetWidth + 7) / 8, (targetHeight + 7) / 8, 1);
                   device->EndEvent(cmd);
+
+                  rg->SetSubmit();
               },
               &accumulatePC, &accumulatePush)
             .AddHandle(image, ResourceUsageType::Read)
             .AddHandle(accumulatedImageHandle, ResourceUsageType::Write)
             .AddHandle(filterWeightsHandle, ResourceUsageType::Read)
             .AddHandle(accumulatedWeightsHandle, ResourceUsageType::Write);
+
+        rg->StartPass(3,
+                      [&](CommandBuffer *cmd) {
+                          RenderGraph *rg       = GetRenderGraph();
+                          GPUImage *albedo      = rg->GetImage(diffuseAlbedo);
+                          GPUImage *normals     = rg->GetImage(normalRoughness);
+                          GPUImage *outputColor = rg->GetImage(imageOut);
+
+                          HANDLE albedoHandle   = device->GetWin32Handle(albedo);
+                          HANDLE normalHandle   = device->GetWin32Handle(normals);
+                          HANDLE imageOutHandle = device->GetWin32Handle(outputColor);
+
+                          OIDNBuffer albedoBuf = oidnNewSharedBufferFromWin32Handle_p(
+                              oidnDevice, OIDN_EXTERNAL_MEMORY_TYPE_FLAG_OPAQUE_WIN32,
+                              albedoHandle, "albedo", albedo->req.size);
+                          OIDNBuffer normalBuf = oidnNewSharedBufferFromWin32Handle_p(
+                              oidnDevice, OIDN_EXTERNAL_MEMORY_TYPE_FLAG_OPAQUE_WIN32,
+                              normalHandle, "normal", normals->req.size);
+                          OIDNBuffer outputBuf = oidnNewSharedBufferFromWin32Handle_p(
+                              oidnDevice, OIDN_EXTERNAL_MEMORY_TYPE_FLAG_OPAQUE_WIN32,
+                              imageOutHandle, "output", outputColor->req.size);
+
+                          oidnSetFilterImage_p(filter, "albedo", albedoBuf, OIDN_FORMAT_FLOAT3,
+                                               targetWidth, targetHeight, 0, 16, 0);
+                          oidnSetFilterImage_p(filter, "normal", normalBuf, OIDN_FORMAT_FLOAT3,
+                                               targetWidth, targetHeight, 0, 16, 0);
+                          oidnSetFilterImage_p(filter, "output", outputBuf, OIDN_FORMAT_HALF3,
+                                               targetWidth, targetHeight, 0, 8, 0);
+                          oidnCommitFilter_p(filter);
+
+                          oidnExecuteFilter_p(filter);
+
+                          CloseHandle(albedoHandle);
+                          CloseHandle(normalHandle);
+                          CloseHandle(imageOutHandle);
+
+                          oidnReleaseBuffer_p(albedoBuf);
+                          oidnReleaseBuffer_p(normalBuf);
+                          oidnReleaseBuffer_p(outputBuf);
+                      })
+            .AddHandle(diffuseAlbedo, ResourceUsageType::Read)
+            .AddHandle(normalRoughness, ResourceUsageType::Read)
+            .AddHandle(imageOut, ResourceUsageType::Write);
 
 #if 0
         rg->StartComputePass(
@@ -1724,7 +1834,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         debugState.EndFrame(cmd);
 
-#if 0
+#if 1
         rg->StartPass(1, [&swapchain, imageOutHandle = image](CommandBuffer *cmd) {
               RenderGraph *rg    = GetRenderGraph();
               GPUImage *imageOut = rg->GetImage(imageOutHandle);
