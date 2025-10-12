@@ -246,6 +246,7 @@ if (USE_GPU)
         "${SHADER_SRC_DIR}/clas/compact_freelist.hlsl"
         "${SHADER_SRC_DIR}/tex/clear_page_table.hlsl"
         "${SHADER_SRC_DIR}/accumulate_frames.hlsl"
+        "${SHADER_SRC_DIR}/copy_denoised_output.hlsl"
     )
     set_property(SOURCE 
         "${SHADER_SRC_DIR}/clas/task.hlsl"
@@ -284,6 +285,7 @@ if (USE_GPU)
         "${SHADER_SRC_DIR}/clas/compact_freelist.hlsl"
         "${SHADER_SRC_DIR}/tex/clear_page_table.hlsl"
         "${SHADER_SRC_DIR}/accumulate_frames.hlsl"
+        "${SHADER_SRC_DIR}/copy_denoised_output.hlsl"
         PROPERTY name "cs")
     
     file(GLOB_RECURSE SHADER_INCLUDES "${SHADER_SRC_DIR}/*.hlsl" "${SHADER_SRC_DIR}/*.hlsli")

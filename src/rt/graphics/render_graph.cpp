@@ -547,11 +547,8 @@ void RenderGraph::Execute(CommandBuffer *cmd)
         pass.func(cmd);
         if (submit == true)
         {
-            if (wait == true)
-            {
-                semaphore.signalValue++;
-                cmd->SignalOutsideFrame(semaphore);
-            }
+            semaphore.signalValue++;
+            cmd->SignalOutsideFrame(semaphore);
             submit = false;
             wait   = false;
             device->SubmitCommandBuffer(cmd);

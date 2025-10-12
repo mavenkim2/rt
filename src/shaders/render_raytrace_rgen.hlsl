@@ -36,8 +36,6 @@ ConstantBuffer<ShaderDebugInfo> debugInfo: register(b7);
 
 RWStructuredBuffer<uint> feedbackBuffer : register(u12);
 
-RWStructuredBuffer<uint> debugBuffer : register(u13);
-
 StructuredBuffer<GPUInstance> gpuInstances : register(t14);
 StructuredBuffer<GPUTruncatedEllipsoid> truncatedEllipsoids : register(t16);
 StructuredBuffer<GPUTransform> instanceTransforms : register(t17);
@@ -46,14 +44,11 @@ StructuredBuffer<uint> partitionResourceIDs : register(t19);
 StructuredBuffer<Resource> resources : register(t20);
 
 RWTexture2D<float> depthBuffer : register(u21);
-RWTexture2D<float4> normalRougnessBuffer : register(u22);
-RWTexture2D<float4> diffuseAlbedo : register(u23);
-RWTexture2D<float4> specularAlbedo : register(u24);
-RWTexture2D<float> specularHitDistance : register(u25);
+RWTexture2D<float4> albedo : register(u22);
+RWStructuredBuffer<float3> normals : register(u23);
 
 StructuredBuffer<float> filterCDF : register(t26);
 StructuredBuffer<float> filterValues : register(t27);
-RWTexture2D<float2> filterWeights : register(u28);
 
 [[vk::push_constant]] RayPushConstant push;
 
@@ -134,9 +129,6 @@ void main()
 
     float2 filterSample = sampleP;
 
-    //float filterWeight = filterValues[piecewiseConstant2DWidth * offsetY + offsetX] / pdf;
-    //filterWeights[swizzledThreadID] = float2(tY, duy);
-
 #else
     float2 filterSample = float2(lerp(-filterRadius.x, filterRadius.x, sample[0]), lerp(-filterRadius.y, filterRadius.y, sample[1]));
 #endif
@@ -162,6 +154,7 @@ void main()
     bool printDebug = all(swizzledThreadID == debugInfo.mousePos);
 
     uint2 feedbackRequest = ~0u;
+    bool specularBounce = false;
 
     while (true)
     {
@@ -319,13 +312,14 @@ void main()
             float3 imageLe = bindlessTextures[push.envMap].SampleLevel(samplerLinearClamp, uv, 0).rgb;
             radiance += throughput * imageLe;
 
-            if (depth == 0)
+            if (depth == 0 || (depth == 1 && specularBounce))
             {
                 depthBuffer[swizzledThreadID] = 0.f;
-                specularAlbedo[swizzledThreadID] = float4(0.5, 0.5, 0.5, 1.f);
-                normalRougnessBuffer[swizzledThreadID] = 0.f;
-                diffuseAlbedo[swizzledThreadID] = 0.f;
-                specularHitDistance[swizzledThreadID] = 0.f;
+                //normalRougnessBuffer[swizzledThreadID] = 0.f;
+                //diffuseAlbedo[swizzledThreadID] = 0.f;
+                uint index = scene.width * swizzledThreadID.y + swizzledThreadID.x;
+                albedo[swizzledThreadID] = 0;
+                normals[index] = 0;
             }
             break;
         }
@@ -524,21 +518,21 @@ void main()
         float3 r2 = float3(objectToWorld[2].xyz);
         float3x3 adjugate = float3x3(cross(r1, r2), cross(r2, r0), cross(r0, r1));
         hitInfo.gn = normalize(mul(adjugate, hitInfo.gn));
-        if (depth == 1)
-        {
-            float4 clipPos = mul(scene.clipFromRender, float4(origin, 1.f));
-            float viewDepth = clipPos.z / clipPos.w;
-            depthBuffer[swizzledThreadID] = viewDepth;
-            normalRougnessBuffer[swizzledThreadID] = float4(normalize(mul(adjugate, hitInfo.n)), 1.f);
 
-            // TODO
-            float3 baseColor = float3(.554, .689, .374);
-            baseColor = pow(baseColor, 2.2f);
-            diffuseAlbedo[swizzledThreadID] = float4(baseColor, 1.f);
-            specularAlbedo[swizzledThreadID] = 0.f;
-            specularHitDistance[swizzledThreadID] = 0.f;
+        bool bounceWasSpecular = material.roughness == 0.f && material.specTrans == 1.f;
+        uint index = scene.width * swizzledThreadID.y + swizzledThreadID.x;
+        if (depth == 1 && !bounceWasSpecular)
+        {
+            normals[index] = normalize(mul(adjugate, hitInfo.n)); 
+            albedo[swizzledThreadID] = bounceWasSpecular ? 1 : reflectance;
+        }
+        else if (depth == 2 && specularBounce)
+        {
+            normals[index] = normalize(mul(adjugate, hitInfo.n));
+            albedo[swizzledThreadID] = 1;
         }
 
+        specularBounce = bounceWasSpecular;
         dir = hitInfo.ss * dir.x + hitInfo.ts * dir.y + hitInfo.n * dir.z;
         dir = normalize(TransformV(objectToWorld, dir));
 

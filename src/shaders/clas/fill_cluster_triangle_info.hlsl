@@ -1,4 +1,5 @@
-#include "../../rt/shader_interop/as_shaderinterop.h" include "../../rt/shader_interop/dense_geometry_shaderinterop.h"
+#include "../../rt/shader_interop/as_shaderinterop.h" 
+#include "../../rt/shader_interop/dense_geometry_shaderinterop.h"
 #include "../../rt/shader_interop/hierarchy_traversal_shaderinterop.h"
 #include "../wave_intrinsics.hlsli"
 #include "../dense_geometry.hlsli"

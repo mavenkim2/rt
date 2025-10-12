@@ -299,6 +299,7 @@ enum class MemoryUsage
     CPU_ONLY,
     CPU_TO_GPU,
     GPU_TO_CPU,
+    EXTERNAL,
 };
 ENUM_CLASS_FLAGS(MemoryUsage)
 
@@ -1023,7 +1024,9 @@ struct Vulkan
     //
     CommandQueue queues[QueueType_Count];
 
-    b32 debugUtils = false;
+    b32 debugUtils                 = false;
+    bool externalMemoryInitialized = false;
+    VmaPool externalPool;
 
     //////////////////////////////
     // Descriptors
@@ -1130,6 +1133,7 @@ struct Vulkan
                        u32 levelCount = VK_REMAINING_MIP_LEVELS, u32 baseArrayLayer = 0,
                        u32 layerCount = VK_REMAINING_ARRAY_LAYERS);
 
+    void CopyFrameBuffer(Swapchain *swapchain, CommandBuffer *cmd, GPUBuffer *buffer);
     void CopyFrameBuffer(Swapchain *swapchain, CommandBuffer *cmd, GPUImage *image);
     ThreadPool &GetThreadPool(int threadIndex);
     DescriptorSetLayout CreateDescriptorSetLayout(u32 binding, VkDescriptorType type,
@@ -1228,6 +1232,7 @@ struct Vulkan
     bool Wait(Semaphore s, u64 val = UINT64_MAX);
     u64 GetSemaphoreValue(Semaphore s);
     HANDLE GetWin32Handle(GPUImage *image);
+    HANDLE GetWin32Handle(GPUBuffer *buffer);
 #ifdef USE_DLSS
     void GetDLSSTargetDimensions(u32 &width, u32 &height);
     DLSSTargets InitializeDLSSTargets(GPUImage *inColor, GPUImage *inDiffuseAlbedo,

@@ -480,6 +480,9 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
                 checkAndAddExtension(VK_NV_PARTITIONED_ACCELERATION_STRUCTURE_EXTENSION_NAME,
                                      &ptlasPropertiesNV, &ptlasFeaturesNV);
             Assert(result);
+
+            result = checkAndAddExtension(VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME);
+            Assert(result);
         }
 
         *featuresChain   = 0;
@@ -660,6 +663,10 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
     allocCreateInfo.vulkanApiVersion       = apiVersion;
     allocCreateInfo.flags                  = VMA_ALLOCATOR_CREATE_KHR_BIND_MEMORY2_BIT |
                             VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+
+#ifdef WIN32
+    allocCreateInfo.flags |= VMA_ALLOCATOR_CREATE_KHR_EXTERNAL_MEMORY_WIN32_BIT;
+#endif
 
     VmaVulkanFunctions vulkanFunctions    = {};
     vulkanFunctions.vkGetDeviceProcAddr   = vkGetDeviceProcAddr;
@@ -1569,6 +1576,119 @@ void CommandBuffer::PushConstants(PushConstant *pc, void *ptr, VkPipelineLayout 
                        ptr);
 }
 
+void Vulkan::CopyFrameBuffer(Swapchain *swapchain, CommandBuffer *cmd, GPUBuffer *buffer)
+{
+    for (;;)
+    {
+        swapchain->acquireSemaphoreIndex =
+            (swapchain->acquireSemaphoreIndex + 1) % (swapchain->acquireSemaphores.size());
+
+        VkResult res = vkAcquireNextImageKHR(
+            device, swapchain->swapchain, UINT64_MAX,
+            swapchain->acquireSemaphores[swapchain->acquireSemaphoreIndex], VK_NULL_HANDLE,
+            &swapchain->imageIndex);
+
+        if (res != VK_SUCCESS)
+        {
+            if (res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR)
+            {
+                if (CreateSwapchain(swapchain))
+                {
+                    continue;
+                }
+                else
+                {
+                    ErrorExit(0, "Failed to create swapchain.\n");
+                }
+            }
+        }
+        else
+        {
+            break;
+        }
+    }
+
+    VkImageMemoryBarrier2 barrier = {};
+    // Set swapchain to transfer dst, image to transfer src
+    {
+        VkImageMemoryBarrier2 barriers[] = {
+            ImageMemoryBarrier(swapchain->images[swapchain->imageIndex],
+                               VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT,
+                               VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_NONE,
+                               VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_ASPECT_COLOR_BIT),
+        };
+
+        VkDependencyInfo dependencyInfo        = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dependencyInfo.imageMemoryBarrierCount = ArrayLength(barriers);
+        dependencyInfo.pImageMemoryBarriers    = barriers;
+        vkCmdPipelineBarrier2(cmd->buffer, &dependencyInfo);
+    }
+
+    // Copy framebuffer
+    {
+        BufferImageCopy copy = {};
+        copy.extent          = Vec3u(swapchain->extent.width, swapchain->extent.height, 1);
+
+        VkBufferImageCopy vkCopy;
+        vkCopy.bufferOffset                    = copy.bufferOffset;
+        vkCopy.bufferRowLength                 = copy.rowLength;
+        vkCopy.bufferImageHeight               = copy.imageHeight;
+        vkCopy.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+        vkCopy.imageSubresource.mipLevel       = copy.mipLevel;
+        vkCopy.imageSubresource.baseArrayLayer = copy.baseLayer;
+        vkCopy.imageSubresource.layerCount     = copy.layerCount;
+        vkCopy.imageOffset.x                   = copy.offset.x;
+        vkCopy.imageOffset.y                   = copy.offset.y;
+        vkCopy.imageOffset.z                   = copy.offset.z;
+        vkCopy.imageExtent.width               = copy.extent.x;
+        vkCopy.imageExtent.height              = copy.extent.y;
+        vkCopy.imageExtent.depth               = copy.extent.z;
+        vkCmdCopyBufferToImage(cmd->buffer, buffer->buffer,
+                               swapchain->images[swapchain->imageIndex],
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &vkCopy);
+    }
+
+    // Set swapchain to present
+    {
+        VkImageMemoryBarrier2 barrier = ImageMemoryBarrier(
+            swapchain->images[swapchain->imageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            VK_ACCESS_2_NONE, VK_IMAGE_ASPECT_COLOR_BIT);
+
+        VkDependencyInfo dependencyInfo        = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dependencyInfo.imageMemoryBarrierCount = 1;
+        dependencyInfo.pImageMemoryBarriers    = &barrier;
+        vkCmdPipelineBarrier2(cmd->buffer, &dependencyInfo);
+    }
+
+    cmd->Wait(Semaphore{swapchain->acquireSemaphores[swapchain->acquireSemaphoreIndex]});
+    cmd->Signal(Semaphore{swapchain->releaseSemaphores[swapchain->imageIndex]});
+    SubmitCommandBuffer(cmd, true);
+
+    VkPresentInfoKHR presentInfo   = {VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+    presentInfo.waitSemaphoreCount = 1;
+    presentInfo.pWaitSemaphores    = &swapchain->releaseSemaphores[swapchain->imageIndex];
+    presentInfo.swapchainCount     = 1;
+    presentInfo.pSwapchains        = &swapchain->swapchain;
+    presentInfo.pImageIndices      = &swapchain->imageIndex;
+    VkResult res = vkQueuePresentKHR(queues[QueueType_Graphics].queue, &presentInfo);
+
+    if (res != VK_SUCCESS)
+    {
+        if (res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR)
+        {
+            b32 result = CreateSwapchain(swapchain);
+            Assert(result);
+        }
+        else
+        {
+            Assert(0)
+        }
+    }
+}
+
 void Vulkan::CopyFrameBuffer(Swapchain *swapchain, CommandBuffer *cmd, GPUImage *image)
 {
     for (;;)
@@ -1736,6 +1856,52 @@ GPUBuffer Vulkan::CreateBuffer(VkBufferUsageFlags flags, size_t totalSize, Memor
         }
         break;
         default: break;
+    }
+
+    VkExternalMemoryHandleTypeFlags handleType =
+        VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+    VkExternalMemoryBufferCreateInfo exportInfo = {
+        VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
+    exportInfo.handleTypes = handleType;
+
+    if (usage == MemoryUsage::EXTERNAL)
+    {
+        if (!externalMemoryInitialized)
+        {
+            externalMemoryInitialized = true;
+            const VkExternalMemoryHandleTypeFlagsKHR handleType =
+                VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT_KHR;
+
+            // Define an example buffer and allocation parameters.
+            VkExternalMemoryBufferCreateInfoKHR externalMemBufCreateInfo = {
+                VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO_KHR, nullptr, handleType};
+            VkBufferCreateInfo exampleBufCreateInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+            exampleBufCreateInfo.size               = 0x10000; // Doesn't matter here.
+            exampleBufCreateInfo.usage =
+                VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            exampleBufCreateInfo.pNext = &externalMemBufCreateInfo;
+
+            VmaAllocationCreateInfo exampleAllocCreateInfo = {};
+            exampleAllocCreateInfo.usage                   = VMA_MEMORY_USAGE_AUTO;
+
+            // Find memory type index to use for the custom pool.
+            uint32_t memTypeIndex;
+            VkResult res = vmaFindMemoryTypeIndexForBufferInfo(
+                allocator, &exampleBufCreateInfo, &exampleAllocCreateInfo, &memTypeIndex);
+            // Check res...
+
+            // Create a custom pool.
+            constexpr static VkExportMemoryAllocateInfoKHR exportMemAllocInfo = {
+                VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO_KHR, nullptr, handleType};
+            VmaPoolCreateInfo poolCreateInfo   = {};
+            poolCreateInfo.memoryTypeIndex     = memTypeIndex;
+            poolCreateInfo.pMemoryAllocateNext = (void *)&exportMemAllocInfo;
+
+            res = vmaCreatePool(allocator, &poolCreateInfo, &externalPool);
+        }
+
+        createInfo.pNext     = &exportInfo;
+        allocCreateInfo.pool = externalPool;
     }
 
     VK_CHECK(vmaCreateBuffer(allocator, &createInfo, &allocCreateInfo, &buffer.buffer,
@@ -4703,7 +4869,19 @@ HANDLE Vulkan::GetWin32Handle(GPUImage *image)
     info.memory                        = image->allocation->GetMemory();
     info.handleType                    = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
     HANDLE result                      = 0;
-    vkGetMemoryWin32HandleKHR(device, &info, &result);
+    VkResult success                   = vkGetMemoryWin32HandleKHR(device, &info, &result);
+    Assert(success == VK_SUCCESS);
+    return result;
+}
+
+HANDLE Vulkan::GetWin32Handle(GPUBuffer *buffer)
+{
+    VkExternalMemoryHandleTypeFlagBits handleType =
+        VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+    HANDLE result = 0;
+    VkResult success =
+        vmaGetMemoryWin32Handle2(allocator, buffer->allocation, handleType, nullptr, &result);
+    Assert(success == VK_SUCCESS);
     return result;
 }
 #endif

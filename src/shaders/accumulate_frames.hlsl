@@ -1,10 +1,11 @@
 #include "../rt/shader_interop/as_shaderinterop.h"
 
 Texture2D<float4> frameOutput : register(t0);
-RWTexture2D<float4> accumulate : register(u1);
+//RWStructuredBuffer<half3> accumulate : register(u1);
+RWStructuredBuffer<float3> accumulate : register(u1);
 
-Texture2D<float> weights : register(t2);
-RWTexture2D<float> totalWeights : register(u3);
+Texture2D<float4> albedo : register(t2);
+RWStructuredBuffer<float3> accumulatedAlbedo : register(u3);
 
 [[vk::push_constant]] NumPushConstant pc;
 
@@ -12,15 +13,16 @@ RWTexture2D<float> totalWeights : register(u3);
 void main(uint3 dtID : SV_DispatchThreadID)
 {
     uint width, height;
-    accumulate.GetDimensions(width, height);
+    frameOutput.GetDimensions(width, height);
     if (any(dtID.xy >= uint2(width, height))) return;
 
-    float4 currentValue = pc.num == 1 ? 0.f : accumulate[dtID.xy];
+    uint index = width * dtID.y + dtID.x;
+    float4 currentValue = pc.num == 1 ? 0.f : float4(float3(accumulate[index]), 1.f);
     float4 newValue = frameOutput[dtID.xy];
+    accumulate[index] = (currentValue + (newValue - currentValue) / float(pc.num)).xyz;
 
-    float totalWeight = pc.num == 1 ? 0.f : totalWeights[dtID.xy];
-    float weight = weights[dtID.xy];
-    accumulate[dtID.xy] = currentValue + (newValue - currentValue) / float(pc.num);
-    //accumulate[dtID.xy] = currentValue + weight * (newValue - currentValue) / (totalWeight + weight);
-    //totalWeights[dtID.xy] = totalWeight + weight;
+    float4 currentAlbedo = pc.num == 1 ? 0.f : float4(float3(accumulatedAlbedo[index]), 1.f);
+    float4 newAlbedo = albedo[dtID.xy];
+
+    accumulatedAlbedo[index] = (currentAlbedo + (newAlbedo - currentAlbedo) / float(pc.num)).xyz;
 }
