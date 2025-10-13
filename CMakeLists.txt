@@ -314,7 +314,9 @@ if (USE_GPU)
             COMMAND ${SHADER_COMPILER} 
             "-spirv" "-fspv-target-env=vulkan1.3" "-fvk-use-scalar-layout" 
             "-Wno-parameter-usage"
-            ${SHADER_TYPE_FLAG} "$<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:-Zi>" "-Fo ${SHADER_SPV}" "${SHADER_FILE}" 
+            ${SHADER_TYPE_FLAG} "$<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:-Zi>" 
+            "$<$<CONFIG:Release>:-O3>"
+            "-Fo ${SHADER_SPV}" "${SHADER_FILE}" 
             DEPENDS ${SHADER_FILE} ${SHADER_INCLUDES} ${SHADER_INTEROP}
             COMMENT "Compiling HLSL shader: ${SHADER_FILE} -> ${SHADER_SPV}"
             VERBATIM

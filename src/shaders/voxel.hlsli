@@ -4,14 +4,6 @@
 #include "common.hlsli"
 #include "sampling.hlsli"
 
-float3 SampleUniformSphere(float2 u)
-{
-    float z   = 1 - 2 * u[0];
-    float r   = sqrt(1 - z * z);
-    float phi = 2 * PI * u[1];
-    return float3(r * cos(phi), r * sin(phi), z);
-}
-
 struct SGGX 
 {
     float nxx;

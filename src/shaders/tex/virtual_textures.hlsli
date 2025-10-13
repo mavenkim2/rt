@@ -33,10 +33,6 @@ namespace VirtualTexture
                     texel = clamp(texel, 0, float2(width, height));
                     float2 texCoord = texel / float2(width, height);
                     result = bindlessFloat4Textures[NonUniformResourceIndex(pageTableEntry.bindlessIndex)].SampleLevel(samplerNearestClamp, texCoord, 0.f);
-                    if (all(result == 0))
-                    {
-                        result = float4(0, 0, 1, 1);
-                    }
                     return true;
                 }
             }

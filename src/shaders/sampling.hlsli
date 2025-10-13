@@ -171,6 +171,154 @@ float2 SampleUniformDiskPolar(float2 u)
     return float2(r * cos(theta), r * sin(theta));
 }
 
+float3 SampleUniformTriangle(float2 u)
+{
+    float3 result;
+    if (u[0] < u[1])
+    {
+        result[0] = u[0] / 2;
+        result[1] = u[1] - result[0];
+    }
+    else
+    {
+        result[1] = u[1] / 2;
+        result[0] = u[0] - result[1];
+    }
+    result[2] = 1 - result[0] - result[1];
+    return result;
+}
+
+float SampleLinear(float u, float a, float b)
+{
+    static float oneMinusEpsilon = 0x1.fffffep-1;
+    float mask = u == 0 && a == 0;
+    float x    = mask ? 0 : u * (a + b) / (a + sqrt(lerp(a * a, b * b, u)));
+    return min(x, oneMinusEpsilon);
+}
+
+float Bilerp(float2 u, float4 w)
+{
+    float result = lerp(lerp(w[0], w[2], u[1]), lerp(w[1], w[3], u[1]), u[0]);
+    return result;
+}
+
+float BilinearPDF(float2 u, float4 w)
+{
+    float zeroMask = u.x < 0 || u.x > 1 || u.y < 0 || u.y > 1;
+    float denom    = w[0] + w[1] + w[2] + w[3];
+    float oneMask  = denom == 0;
+    float result   = zeroMask ? 0 : (oneMask ? 1 :  4 * Bilerp(u, w) / denom);
+    return result;
+}
+
+float2 SampleBilinear(float2 u, float4 w)
+{
+    float2 result;
+    result.y = SampleLinear(u[1], w[0] + w[1], w[2] + w[3]);
+    result.x = SampleLinear(u[0], lerp(w[0], w[2], result.y), lerp(w[1], w[3], result.y));
+    return result;
+}
+
+
+float SphericalQuadArea(float3 a, float3 b, float3 c, float3 d)
+{
+    float3 axb = normalize(cross(a, b));
+    float3 bxc = normalize(cross(b, c));
+    float3 cxd = normalize(cross(c, d));
+    float3 dxa = normalize(cross(d, a));
+
+    float g0 = AngleBetween(-axb, bxc);
+    float g1 = AngleBetween(-bxc, cxd);
+    float g2 = AngleBetween(-cxd, dxa);
+    float g3 = AngleBetween(-dxa, axb);
+    return abs(g0 + g1 + g2 + g3 - 2 * PI);
+}
+
+float3 SampleSphericalRectangle(float3 p, float3 base, float3 eu,
+                                float3 ev, float2 samples, out float outPdf)
+{
+    float euLength = length(eu);
+    float evLength = length(ev);
+
+    // Calculate local coordinate system where sampling is done
+    // NOTE: rX and rY must be perpendicular
+    float3 rX = eu / euLength;
+    float3 rY = ev / evLength;
+    float3 rZ = cross(rX, rY);
+
+    float3 d0  = base - p;
+    float x0 = dot(d0, rX);
+    float y0 = dot(d0, rY);
+    float z0 = dot(d0, rZ);
+    if (z0 > 0)
+    {
+        z0 *= -1.f;
+        rZ *= float(-1.f);
+    }
+
+    float x1 = x0 + euLength;
+    float y1 = y0 + evLength;
+
+    float3 v00 = float3(x0, y0, z0);
+    float3 v01 = float3(x0, y1, z0);
+    float3 v10 = float3(x1, y0, z0);
+    float3 v11 = float3(x1, y1, z0);
+
+    // Compute normals to edges (i.e, normal of plane containing edge and p)
+    float3 n0 = normalize(cross(v00, v10));
+    float3 n1 = normalize(cross(v10, v11));
+    float3 n2 = normalize(cross(v11, v01));
+    float3 n3 = normalize(cross(v01, v00));
+
+    // Calculate the angle between the plane normals
+    float g0 = AngleBetween(-n0, n1);
+    float g1 = AngleBetween(-n1, n2);
+    float g2 = AngleBetween(-n2, n3);
+    float g3 = AngleBetween(-n3, n0);
+
+    // Compute solid angle subtended by rectangle
+    float k = 2 * PI - g2 - g3;
+    float S = g0 + g1 - k;
+
+    if (S <= 0)
+    {
+        outPdf = 0.f;
+        return 0;
+    }
+    outPdf = 1.f / S;
+
+    float b0 = n0.z;
+    float b1 = n2.z;
+
+    // Compute cu
+    // float au = samples[0] * S + k;
+    float au = samples[0] * (g0 + g1 - 2 * PI) + (samples[0] - 1) * (g2 + g3);
+    float fu = (cos(au) * b0 - b1) / sin(au);
+    float cu = clamp(copysign(1 / sqrt(fu * fu + b0 * b0), fu), -1.f, 1.f);
+
+    // Compute xu
+    float xu = -(cu * z0) / sqrt(1.f - cu * cu);
+    xu          = clamp(xu, x0, x1);
+    // Compute yv
+    float d  = sqrt(xu * xu + z0 * z0);
+    float h0 = y0 / sqrt(d * d + y0 * y0);
+    float h1 = y1 / sqrt(d * d + y1 * y1);
+    // Linearly interpolate between h0 and h1
+    float hv   = h0 + (h1 - h0) * samples[1];
+    float hvsq = hv * hv;
+    float yv   = (hvsq < 1 - 1e-6f) ? (hv * d / sqrt(1 - hvsq)) : y1;
+    // Convert back to world space
+    return p + rX * xu + rY * yv + rZ * z0;
+}
+
+float3 SampleUniformSphere(float2 u)
+{
+    float z   = 1 - 2 * u[0];
+    float r   = sqrt(1 - z * z);
+    float phi = 2 * PI * u[1];
+    return float3(r * cos(phi), r * sin(phi), z);
+}
+
 float3 SampleCosineHemisphere(float2 u)
 {
     float2 d = SampleUniformDiskConcentric(u);

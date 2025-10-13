@@ -243,4 +243,10 @@ uint64_t MixBits(uint64_t v)
     return v;
 }
 
+float AngleBetween(float3 v1, float3 v2)
+{
+    if (dot(v1, v2) < 0) return PI - 2 * asin(length(v1 + v2) / 2.f);
+    return 2 * asin(length(v2 - v1) / 2.f);
+}
+
 #endif

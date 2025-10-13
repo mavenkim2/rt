@@ -77,7 +77,7 @@ void CalculateAnisotropicRoughness(float anisotropic, float roughness, out float
     ay = roughness * roughness * aspect;
 }
 
-float3 SampleDisney(GPUMaterial material, float3 u, float3 baseColor, inout float3 throughput, float3 wo) 
+float3 SampleDisney(GPUMaterial material, float3 u, float3 baseColor, inout float3 throughput, float3 wo, out float outPdf) 
 {
     // GTR2
     float F = FrDielectric(wo.z, material.ior);
@@ -120,6 +120,7 @@ float3 SampleDisney(GPUMaterial material, float3 u, float3 baseColor, inout floa
             value = D * G * disneyFresnel / (4 * abs(wo.z));
             value *= (1.f - material.metallic) * material.specTrans;
             value /= pdf;
+            outPdf = pdf;
         }
     }
     else if (u.z < probSpecReflect + probSpecRefract)
@@ -140,6 +141,7 @@ float3 SampleDisney(GPUMaterial material, float3 u, float3 baseColor, inout floa
             value = sqrt(baseColor) * abs(dot(wo, wm)) * abs(dot(wi, wm)) * D * G * (1 - F) / (abs(wo.z) * denom);
             value *= (1.f - material.metallic) * material.specTrans;
             value /= (pdf * Sqr(etap));
+            outPdf = pdf;
         }
         else 
         {
@@ -163,10 +165,11 @@ float3 SampleDisney(GPUMaterial material, float3 u, float3 baseColor, inout floa
         D = GTR1(wm.z, lerp(0.1f, 0.001f, material.clearcoatGloss));
         F = lerp(0.04f, 1.f, SchlickFresnel(dot(wi, h)));
         float G = SmithG(wi, wo, .25f, .25f);
-        float pdf = D / (4.f * dot(wo, wm));
+        float pdf = D / (4.f * dot(wo, wm)) * probClearCoat;
 
         value = .25f * material.clearcoat * D * G * F;
         value /= pdf;
+        outPdf = pdf;
     }
     else 
     {
@@ -191,9 +194,76 @@ float3 SampleDisney(GPUMaterial material, float3 u, float3 baseColor, inout floa
         float3 diffuse = baseColor * (fd + retroReflection) + fSheen;
         value = diffuse;
         value /= probDiffuse;
+        outPdf = (probDiffuse * InvPi * abs(wi.z));
     }
     throughput *= value;
     return normalize(wi);
+}
+
+float3 EvaluateDisney(GPUMaterial material, float3 baseColor, float3 wo, float3 wi, out float outPdf) 
+{
+    // GTR2
+    float F = FrDielectric(wo.z, material.ior);
+    float probSpecReflect = (1.f - material.metallic) * material.specTrans * F;
+    float probSpecRefract = (1.f - material.metallic) * material.specTrans * (1 - F);
+    float probClearCoat = 0.25f * material.clearcoat;
+    float probDiffuse = (1.f - material.metallic) * (1.f - material.specTrans);
+
+    float totalProb = probSpecReflect + probSpecRefract + probClearCoat + probDiffuse;
+    probSpecReflect /= totalProb;
+    probSpecRefract /= totalProb;
+    probClearCoat /= totalProb;
+    probDiffuse /= totalProb;
+
+    float3 value = 0.f;
+    float totalPdf = 0.f;
+
+    float alphaX, alphaY;
+    CalculateAnisotropicRoughness(material.anisotropic, material.roughness, alphaX, alphaY);
+
+    float cosThetaO = wo.z;
+    float cosThetaI = wi.z;
+    bool reflect = wo.z * wi.z > 0.f;
+    float etaP = reflect ? 1.f : (cosThetaO > 0.f ? material.ior : (1.f / material.ior));
+    float3 wm = normalize(wi * etaP + wo);
+    wm = wm.z < 0.f ? -wm : wm;
+    float D = GTR2Aniso(wm, alphaX, alphaY);
+        
+    float cdLum = .3 * baseColor.x + .6 * baseColor.y + .1 * baseColor.z;
+    float3 tint = cdLum > 0 ? baseColor / cdLum : 1.f;
+
+    {
+        float3 h = normalize(wi + wo);
+        D = GTR1(wm.z, lerp(0.1f, 0.001f, material.clearcoatGloss));
+        F = lerp(0.04f, 1.f, SchlickFresnel(dot(wi, h)));
+        float G = SmithG(wi, wo, .25f, .25f);
+        float pdf = probClearCoat * D / (4.f * dot(wo, wm));
+        totalPdf += pdf;
+        value += .25f * material.clearcoat * D * G * F;
+    }
+    {
+        float3 h = normalize(wi + wo);
+        float wiDotH = dot(wi, h);
+
+        float fH = SchlickFresnel(wiDotH);
+        float3 cSheen = lerp(1.f, tint, material.sheenTint);
+        float3 fSheen = fH * material.sheen * cSheen;
+
+        float fL = SchlickFresnel(wi.z); 
+        float fV = SchlickFresnel(wo.z);
+
+        float fd = (1 - 0.5f * fL) * (1 - 0.5f * fV);
+        float rr = 2 * material.roughness * wiDotH * wiDotH;
+        float retroReflection = rr * (fL + fV + fL * fV * (rr - 1.f));
+
+        // NOTE: cosine/InvPi from pdf and rendering equation cancels
+        float3 diffuse = InvPi * baseColor * (fd + retroReflection) + fSheen;
+        value += (1.f - material.metallic) * (1.f - material.specTrans) * diffuse;
+        totalPdf += (probDiffuse * InvPi * abs(wi.z));
+    }
+    outPdf = totalPdf;
+
+    return value;
 }
 
 float3 SampleDisneyThin(float2 u, float3 baseColor, inout float3 throughput, float3 wo) 

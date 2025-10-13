@@ -39,7 +39,6 @@
 #define OpTypeHitObjectNV 5281
 
 #define RayPayloadKHR 5338
-#define HitObjectAttributeNV 5385
 
 [[vk::ext_storage_class(RayPayloadKHR)]] static RayPayload payload;
 
@@ -98,5 +97,23 @@ float4x3 GetObjectToWorldNV([[vk::ext_reference]] HitObjectNV hitObject);
 
 [[vk::ext_instruction(OpHitObjectGetHitKindNV)]]
 uint GetHitKindNV([[vk::ext_reference]] HitObjectNV hitObject);
+
+[[vk::ext_instruction(OpHitObjectRecordHitNV)]]
+void SERMakeHit(
+    [[vk::ext_reference]] HitObjectNV hitObject, 
+    RaytracingAccelerationStructure as,
+    int instanceIndex,
+    int geometryIndex, 
+    int primitiveIndex,
+    uint hitKind,
+    uint sbtRecordOffset,
+    uint sbtRecordStride,
+    float3 rayOrigin,
+    float tMin,
+    float3 rayDir,
+    float tMax,
+    [[vk::ext_reference]] [[vk::ext_storage_class(HitObjectAttributeNV)]] BuiltInTriangleIntersectionAttributes attr
+);
+
 
 #endif

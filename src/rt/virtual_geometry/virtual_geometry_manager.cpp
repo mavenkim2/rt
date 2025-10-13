@@ -1116,7 +1116,7 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, ResourceHandle
     }
 }
 
-void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *debug)
+void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd)
 {
     // cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
     //              VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
@@ -1129,7 +1129,7 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *debug)
     rg->StartIndirectComputePass(
           "Update PTLAS Instances", ptlasWriteInstancesPipeline, ptlasWriteInstancesLayout, 9,
           clasGlobalsBufferHandle, sizeof(u32) * GLOBALS_ALLOCATE_INSTANCE_INDIRECT_X,
-          [&clasGlobalsBuffer = this->clasGlobalsBuffer, debug](CommandBuffer *cmd) {
+          [&clasGlobalsBuffer = this->clasGlobalsBuffer](CommandBuffer *cmd) {
               cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
                                VK_PIPELINE_STAGE_2_TRANSFER_BIT,

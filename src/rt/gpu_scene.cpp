@@ -354,6 +354,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     gpuScene.fov              = params->fov;
     gpuScene.p22              = params->NDCFromCamera[2][2];
     gpuScene.p23              = params->NDCFromCamera[3][2];
+    gpuScene.cameraBase       = params->pCamera;
 
     ShaderDebugInfo shaderDebug;
 
@@ -380,7 +381,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         rg->RegisterExternalResource("depth buffer", &depthBuffer);
 
     ImageDesc targetUavDesc(ImageType::Type2D, targetWidth, targetHeight, 1, 1, 1,
-                            VK_FORMAT_R8G8B8A8_UNORM, MemoryUsage::GPU_ONLY,
+                            VK_FORMAT_R16G16B16A16_SFLOAT, MemoryUsage::GPU_ONLY,
                             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
                                 VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                             VK_IMAGE_TILING_OPTIMAL);
@@ -564,6 +565,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     layout.AddBinding((u32)RTBindings::ShaderDebugInfo, DescriptorType::UniformBuffer, flags);
     layout.AddBinding((u32)RTBindings::ClusterPageData, DescriptorType::StorageBuffer, flags);
     layout.AddBinding((u32)RTBindings::PtexFaceData, DescriptorType::StorageBuffer, flags);
+    layout.AddBinding(13, DescriptorType::StorageBuffer, flags);
     layout.AddBinding(14, DescriptorType::StorageBuffer, flags);
     // layout.AddBinding(15, DescriptorType::StorageBuffer, flags);
     layout.AddBinding(16, DescriptorType::StorageBuffer, flags);
@@ -1177,20 +1179,23 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     Semaphore frameSemaphore = device->CreateSemaphore();
 
-    GPUBuffer readback = device->CreateBuffer(
-        VK_BUFFER_USAGE_TRANSFER_DST_BIT, sizeof(u32) * GLOBALS_SIZE, MemoryUsage::GPU_TO_CPU);
+    GPUBuffer readback =
+        device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT, 3 * sizeof(u32) * GLOBALS_SIZE,
+                             MemoryUsage::GPU_TO_CPU);
 
-    GPUBuffer debugBuffer =
-        device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT, sizeof(u32) * GLOBALS_SIZE);
+    GPUBuffer debugBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                     VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                                 3 * sizeof(u32) * GLOBALS_SIZE);
 
     Semaphore transferSem   = device->CreateSemaphore();
     transferSem.signalValue = 1;
 
-    u32 testCount            = 0;
-    u32 maxUnused            = 0;
-    f32 speed                = 5000.f;
-    u32 numFramesAccumulated = 0;
-    f32 lastFrameTime        = OS_NowSeconds();
+    u32 testCount                   = 0;
+    u32 maxUnused                   = 0;
+    f32 speed                       = 5000.f;
+    u32 numFramesAccumulated        = 0;
+    f32 lastFrameTime               = OS_NowSeconds();
+    const u32 numFramesUntilDenoise = 128;
 
     for (;;)
     {
@@ -1367,19 +1372,26 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         Print("frame: %u\n", device->frameCount);
 
-        maxUnused = Max(maxUnused, data[GLOBALS_DEBUG]);
-        Print("freed partition count: %u visible count: %u, writes: %u updates %u, "
-              "allocate: "
-              "%u freed: %u unused: %u debug: %u, free list count: %u, x: %u, y: %u, z: "
-              "%u, skipped: %u, max unused: %u\n",
-              data[GLOBALS_FREED_PARTITION_COUNT], data[GLOBALS_VISIBLE_PARTITION_COUNT],
-              data[GLOBALS_PTLAS_WRITE_COUNT_INDEX], data[GLOBALS_PTLAS_UPDATE_COUNT_INDEX],
-              data[GLOBALS_ALLOCATED_INSTANCE_COUNT_INDEX],
-              data[GLOBALS_FREED_INSTANCE_COUNT_INDEX], data[GLOBALS_INSTANCE_UNUSED_COUNT],
-              data[GLOBALS_DEBUG], data[GLOBALS_DEBUG2],
-              data[GLOBALS_ALLOCATE_INSTANCE_INDIRECT_X],
-              data[GLOBALS_ALLOCATE_INSTANCE_INDIRECT_Y],
-              data[GLOBALS_ALLOCATE_INSTANCE_INDIRECT_Z], data[GLOBALS_DEBUG3], maxUnused);
+        // maxUnused = Max(maxUnused, data[GLOBALS_DEBUG]);
+        Vec3f *vals = (Vec3f *)readback.mappedPtr;
+        for (u32 i = 0; i < 22; i++)
+        {
+            Print("num times sampled %u: %f %f %f", i, vals[i].x, vals[i].y, vals[i].z);
+            // Print("num times sampled %u: %u", i, data[i]);
+        }
+        Print("\n");
+        // Print("freed partition count: %u visible count: %u, writes: %u updates %u, "
+        //       "allocate: "
+        //       "%u freed: %u unused: %u debug: %u, free list count: %u, x: %u, y: %u, z: "
+        //       "%u, skipped: %u, max unused: %u\n",
+        //       data[GLOBALS_FREED_PARTITION_COUNT], data[GLOBALS_VISIBLE_PARTITION_COUNT],
+        //       data[GLOBALS_PTLAS_WRITE_COUNT_INDEX], data[GLOBALS_PTLAS_UPDATE_COUNT_INDEX],
+        //       data[GLOBALS_ALLOCATED_INSTANCE_COUNT_INDEX],
+        //       data[GLOBALS_FREED_INSTANCE_COUNT_INDEX], data[GLOBALS_INSTANCE_UNUSED_COUNT],
+        //       data[GLOBALS_DEBUG], data[GLOBALS_DEBUG2],
+        //       data[GLOBALS_ALLOCATE_INSTANCE_INDIRECT_X],
+        //       data[GLOBALS_ALLOCATE_INSTANCE_INDIRECT_Y],
+        //       data[GLOBALS_ALLOCATE_INSTANCE_INDIRECT_Z], data[GLOBALS_DEBUG3], maxUnused);
 
         string cmdBufferName =
             PushStr8F(frameScratch.temp.arena, "Graphics Cmd %u", device->frameCount);
@@ -1410,11 +1422,12 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         rg->StartPass(2,
                       [&clasGlobals      = virtualGeometryManager.clasGlobalsBuffer,
                        instanceBitVector = virtualGeometryManager.instanceBitVectorHandle,
-                       &virtualTextureManager, currentBuffer](CommandBuffer *cmd) {
+                       &virtualTextureManager, currentBuffer, &readback](CommandBuffer *cmd) {
                           RenderGraph *rg = GetRenderGraph();
 
                           GPUBuffer *buffer = rg->GetBuffer(instanceBitVector);
                           cmd->ClearBuffer(buffer);
+                          // cmd->ClearBuffer(&readback);
 
                           cmd->ClearBuffer(&clasGlobals, 0);
                           cmd->ClearBuffer(
@@ -1476,7 +1489,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                              })
             .AddHandle(virtualGeometryManager.clasGlobalsBufferHandle, ResourceUsageType::RW);
 
-        virtualGeometryManager.BuildPTLAS(cmd, &readback);
+        virtualGeometryManager.BuildPTLAS(cmd);
 
         rg->StartPass(0, [](CommandBuffer *cmd) {
             cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
@@ -1503,7 +1516,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         // TODO: not adding the handle of all of the barriers. maybe will need to if
         // automatic synchronization is done in the future
 
-        if (numFramesAccumulated > 60)
+        if (numFramesAccumulated > numFramesUntilDenoise)
         {
             rg->StartPass(0, [&](CommandBuffer *cmd) {
                 RenderGraph *rg = GetRenderGraph();
@@ -1519,8 +1532,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                    &scene = sceneTransferBuffers[currentBuffer].buffer,
                    &debug = shaderDebugBuffers[currentBuffer].buffer, &materialBuffer,
                    &faceDataBuffer, &virtualTextureManager, &virtualGeometryManager,
-                   imageHandle = image, &depthBuffer, &normals, albedoHandle, currentBuffer,
-                   &debugBuffer, &readback, &filterValuesBuffer,
+                   imageHandle = image, &depthBuffer, &readback, &normals, albedoHandle,
+                   currentBuffer, &debugBuffer, &filterValuesBuffer,
                    &filterCDFBuffer](CommandBuffer *cmd) {
                       RenderGraph *rg  = GetRenderGraph();
                       GPUImage *image  = rg->GetImage(imageHandle);
@@ -1553,6 +1566,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                           .Bind(&debug)
                           .Bind(&virtualGeometryManager.clusterPageDataBuffer)
                           .Bind(&faceDataBuffer)
+                          .Bind(&debugBuffer)
                           .Bind(&virtualGeometryManager.instancesBuffer)
                           .Bind(&virtualGeometryManager.resourceTruncatedEllipsoidsBuffer)
                           .Bind(&virtualGeometryManager.instanceTransformsBuffer)
@@ -1572,6 +1586,40 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                       // cmd->Dispatch(dispatchDimX, dispatchDimY, 1);
                       cmd->TraceRays(&rts, targetWidth, targetHeight, 1);
                       TIMED_RANGE_END(beginIndex);
+
+                      {
+                          // RenderGraph *rg = GetRenderGraph();
+                          // GPUBuffer readback0 =
+                          //     device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                          //                          debugBuffer.size,
+                          //                          MemoryUsage::GPU_TO_CPU);
+                          cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                                       VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                       VK_ACCESS_2_SHADER_WRITE_BIT,
+                                       VK_ACCESS_2_TRANSFER_READ_BIT);
+                          // cmd->Barrier(&imageOut, VK_IMAGE_LAYOUT_GENERAL,
+                          //              VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                          //              VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                          //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                          // VK_ACCESS_2_SHADER_WRITE_BIT,
+                          //              VK_ACCESS_2_TRANSFER_READ_BIT);
+
+                          // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                          //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                          //     // VK_ACCESS_2_SHADER_WRITE_BIT,
+                          //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
+                          cmd->FlushBarriers();
+
+                          // BufferImageCopy copy = {};
+                          // copy.extent =
+                          //     Vec3u(filterWeightsImage.desc.width,
+                          // filterWeightsImage.desc.height,
+                          // 1);
+
+                          cmd->CopyBuffer(&readback, &debugBuffer);
+                          // cmd->CopyBuffer(&readback2, buffer1);
+                          // cmd->CopyImageToBuffer(&readback0, &filterWeightsImage, &copy, 1);
+                      }
                   })
                 .AddHandle(image, ResourceUsageType::Write)
                 .AddHandle(depthBufferHandle, ResourceUsageType::Write)
@@ -1678,7 +1726,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 device->EndEvent(cmd);
             });
 
-        if (numFramesAccumulated > 60)
+        if (numFramesAccumulated > numFramesUntilDenoise)
         {
             pass.AddHandle(imageOutHandle, ResourceUsageType::Read);
         }
@@ -1704,10 +1752,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
               GPUImage *image = GetRenderGraph()->GetImage(finalImageHandle);
               device->CopyFrameBuffer(&swapchain, cmd, image);
           }).AddHandle(finalImageHandle, ResourceUsageType::Read);
-        // rg->StartPass(1, [&swapchain, image](CommandBuffer *cmd) {
-        //       GPUImage *i = GetRenderGraph()->GetImage(image);
-        //       device->CopyFrameBuffer(&swapchain, cmd, i);
-        //   }).AddHandle(image, ResourceUsageType::Read);
 
         rg->Compile();
         rg->Execute(cmd);
