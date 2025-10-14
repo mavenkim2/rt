@@ -173,28 +173,52 @@ float3 SampleDisney(GPUMaterial material, float3 u, float3 baseColor, inout floa
     }
     else 
     {
-        wi = SampleCosineHemisphere(u.xy);
-        wi = dot(wi, wo) < 0.f ? -wi : wi;
+        u.z = (u.z - (probSpecReflect + probSpecRefract + probClearCoat)) / probDiffuse;
 
-        float3 h = normalize(wi + wo);
-        float wiDotH = dot(wi, h);
+        float diffTrans = material.diffTrans / 2.f;
+        float probTransmit = material.thin ? diffTrans : 0.f;
+        float probReflect = material.thin ? 1 - diffTrans : 1.f;
 
-        float fH = SchlickFresnel(wiDotH);
-        float3 cSheen = lerp(1.f, tint, material.sheenTint);
-        float3 fSheen = fH * material.sheen * cSheen;
+        if (material.thin && u.z < probTransmit)
+        {
+            wi = -SampleCosineHemisphere(u.xy);
+            value = baseColor;
+            value *= (1.f - material.specTrans) * diffTrans * (1.f - material.metallic);
+            value /= (probDiffuse * probTransmit);
+            outPdf = (probDiffuse * probTransmit * InvPi * abs(wi.z));
+        }
+        else 
+        {
+            wi = SampleCosineHemisphere(u.xy);
+            wi = dot(wi, wo) < 0.f ? -wi : wi;
 
-        float fL = SchlickFresnel(wi.z); 
-        float fV = SchlickFresnel(wo.z);
+            float3 h = normalize(wi + wo);
+            float wiDotH = dot(wi, h);
 
-        float fd = (1 - 0.5f * fL) * (1 - 0.5f * fV);
-        float rr = 2 * material.roughness * wiDotH * wiDotH;
-        float retroReflection = rr * (fL + fV + fL * fV * (rr - 1.f));
+            float fH = SchlickFresnel(wiDotH);
+            float3 cSheen = lerp(1.f, tint, material.sheenTint);
+            float3 fSheen = fH * material.sheen * cSheen;
 
-        // NOTE: cosine/InvPi from pdf and rendering equation cancels
-        float3 diffuse = baseColor * (fd + retroReflection) + fSheen;
-        value = diffuse;
-        value /= probDiffuse;
-        outPdf = (probDiffuse * InvPi * abs(wi.z));
+            float fss90 = wiDotH * wiDotH * material.roughness;
+            float fL = SchlickFresnel(wi.z); 
+            float fV = SchlickFresnel(wo.z);
+
+            float fd = (1 - 0.5f * fL) * (1 - 0.5f * fV);
+            float rr = 2 * material.roughness * wiDotH * wiDotH;
+            float retroReflection = rr * (fL + fV + fL * fV * (rr - 1.f));
+
+            float fss = lerp(1.f, fss90, fL) * lerp(1.f, fss90, fV);
+            float ss = 1.25f * (fss * (1.f / (wi.z + wo.z) - .5f) + .5f);
+
+            float flatness = material.thin ? 0.f : material.flatness;
+            float val = lerp(fd + retroReflection, ss, flatness);
+
+            // NOTE: cosine/InvPi from pdf and rendering equation cancels
+            float3 diffuse = baseColor * val + fSheen;
+            value = diffuse * (1.f - material.specTrans) * (1.f - diffTrans) * (1.f - material.metallic);
+            value /= probDiffuse * probReflect;
+            outPdf = (probDiffuse * probReflect * InvPi * abs(wi.z));
+        }
     }
     throughput *= value;
     return normalize(wi);
@@ -242,91 +266,49 @@ float3 EvaluateDisney(GPUMaterial material, float3 baseColor, float3 wo, float3 
         value += .25f * material.clearcoat * D * G * F;
     }
     {
-        float3 h = normalize(wi + wo);
-        float wiDotH = dot(wi, h);
+        float diffTrans = material.thin ? material.diffTrans / 2.f : 0.f;
+        float probTransmit = diffTrans;
+        float probReflect = 1.f - diffTrans;
 
-        float fH = SchlickFresnel(wiDotH);
-        float3 cSheen = lerp(1.f, tint, material.sheenTint);
-        float3 fSheen = fH * material.sheen * cSheen;
+        if (!reflect)
+        {
+            value = baseColor;
+            value *= (1.f - material.specTrans) * diffTrans * (1.f - material.metallic);
+            value /= (probDiffuse * probTransmit);
+            outPdf = (probDiffuse * probTransmit * InvPi * abs(wi.z));
+        }
+        else 
+        {
+            float3 h = normalize(wi + wo);
+            float wiDotH = dot(wi, h);
 
-        float fL = SchlickFresnel(wi.z); 
-        float fV = SchlickFresnel(wo.z);
+            float fH = SchlickFresnel(wiDotH);
+            float3 cSheen = lerp(1.f, tint, material.sheenTint);
+            float3 fSheen = fH * material.sheen * cSheen;
 
-        float fd = (1 - 0.5f * fL) * (1 - 0.5f * fV);
-        float rr = 2 * material.roughness * wiDotH * wiDotH;
-        float retroReflection = rr * (fL + fV + fL * fV * (rr - 1.f));
+            float fss90 = wiDotH * wiDotH * material.roughness;
+            float fL = SchlickFresnel(wi.z); 
+            float fV = SchlickFresnel(wo.z);
 
-        // NOTE: cosine/InvPi from pdf and rendering equation cancels
-        float3 diffuse = InvPi * baseColor * (fd + retroReflection) + fSheen;
-        value += (1.f - material.metallic) * (1.f - material.specTrans) * diffuse;
-        totalPdf += (probDiffuse * InvPi * abs(wi.z));
+            float fd = (1 - 0.5f * fL) * (1 - 0.5f * fV);
+            float rr = 2 * material.roughness * wiDotH * wiDotH;
+            float retroReflection = rr * (fL + fV + fL * fV * (rr - 1.f));
+
+            float fss = lerp(1.f, fss90, fL) * lerp(1.f, fss90, fV);
+            float ss = 1.25f * (fss * (1.f / (wi.z + wo.z) - .5f) + .5f);
+
+            float flatness = material.thin ? 0.f : material.flatness;
+            float val = lerp(fd + retroReflection, ss, flatness);
+
+            // NOTE: cosine/InvPi from pdf and rendering equation cancels
+            float3 diffuse = InvPi * baseColor * val + fSheen;
+            value += (1.f - material.metallic) * (1.f - diffTrans) * (1.f - material.specTrans) * diffuse;
+            totalPdf += (probDiffuse * probReflect * InvPi * abs(wi.z));
+        }
     }
     outPdf = totalPdf;
 
     return value;
-}
-
-float3 SampleDisneyThin(float2 u, float3 baseColor, inout float3 throughput, float3 wo) 
-{
-    float sheen = 0.15f;
-    float sheenTint = 0.3f;
-    float flatness = .25f;
-    float roughness = 0.72f;
-    float metallic = 0.f;
-    float specTrans = 0.f;
-
-    float diffTrans = 1.1f; 
-    diffTrans /= 2.f;
-
-    float probDiffReflect = (1.f - specTrans) * (1.f - diffTrans);
-    float probDiffRefract = (1.f - specTrans) * diffTrans;
-    float totalProb = probDiffRefract + probDiffReflect;
-    probDiffReflect /= totalProb;
-    probDiffRefract /= totalProb;
-
-    float3 dir;
-    float3 value;
-    // TODO: specular BSDF
-    if (u.x < probDiffReflect)
-    {
-        u.x = u.x / probDiffReflect;
-        dir = SampleCosineHemisphere(u);
-
-        float3 wi = dir;
-        float3 h = normalize(wi + wo);
-        float wiDotH = dot(wi, h);
-
-        float fH = SchlickFresnel(wiDotH);
-        float cdLum = .3 * baseColor.x + .6 * baseColor.y + .1 * baseColor.z;
-        float3 cTint = cdLum > 0 ? baseColor / cdLum : 1.f;
-        float3 cSheen = lerp(1.f, cTint, sheenTint);
-        float3 fSheen = fH * sheen * cSheen;
-
-        float fss90 = wiDotH * wiDotH * roughness;
-        float fL = SchlickFresnel(wi.z); 
-        float fV = SchlickFresnel(wo.z);
-
-        float fd = (1 - 0.5f * fL) * (1 - 0.5f * fV);
-        float rr = 2 * roughness * wiDotH * wiDotH;
-        float retroReflection = rr * (fL + fV + fL * fV * (rr - 1.f));
-
-        float fss = lerp(1.f, fss90, fL) * lerp(1.f, fss90, fV);
-        float ss = 1.25f * (fss * (1.f / (wi.z + wo.z) - .5f) + .5f);
-
-        float3 diffuse = baseColor * lerp(fd + retroReflection, ss, flatness) + fSheen;
-        value = (1.f - specTrans) * (1.f - diffTrans) * diffuse;
-        value /= probDiffReflect;
-    }
-    else if (u.x < probDiffReflect + probDiffRefract)
-    {
-        u.x = (u.x - probDiffReflect) / probDiffRefract;
-        dir = -SampleCosineHemisphere(u);
-        value = baseColor;
-        value *= (1.f - specTrans) * diffTrans;
-        value /= probDiffRefract;
-    }
-    throughput *= value;
-    return dir;
 }
 
 #endif

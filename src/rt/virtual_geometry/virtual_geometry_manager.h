@@ -171,6 +171,7 @@ struct VirtualGeometryManager
         u32 clusterOffset;
         u32 dataOffset;
         u32 numClusters;
+        bool cullSubpixel;
     };
 
     u32 currentClusterTotal;
@@ -384,7 +385,7 @@ struct VirtualGeometryManager
                         ResourceHandle scene);
     bool ProcessInstanceRequests(CommandBuffer *cmd);
     void ProcessRequests(CommandBuffer *cmd, bool test);
-    u32 AddNewMesh(Arena *arena, CommandBuffer *cmd, string filename, bool debug);
+    u32 AddNewMesh(Arena *arena, CommandBuffer *cmd, string filename, bool cullSubpixel);
     void FinalizeResources(CommandBuffer *cmd);
     void PrepareInstances(CommandBuffer *cmd, ResourceHandle sceneBuffer, bool ptlas);
     void BuildPTLAS(CommandBuffer *cmd);

@@ -767,51 +767,9 @@ void main()
             {
                 float4 color = areaLightColors[i];
 
-#if 1
-                float2 areaLightDim = areaLightDims[i];
-                float3 p[4] = 
-                {
-                    float3(areaLightDim.x, areaLightDim.y, 0.f) / 2,
-                    float3(-areaLightDim.x, areaLightDim.y, 0.f) / 2,
-                    float3(-areaLightDim.x, -areaLightDim.y, 0.f) / 2,
-                    float3(areaLightDim.x, -areaLightDim.y, 0.f) / 2,
-                };
-
-                float3x4 areaLightTransform = areaLightTransforms[i];
-                Translate(areaLightTransform, -scene.cameraBase);
-
-                p[0] = mul(areaLightTransform, float4(p[0], 1));
-                p[1] = mul(areaLightTransform, float4(p[1], 1));
-                p[2] = mul(areaLightTransform, float4(p[2], 1));
-                p[3] = mul(areaLightTransform, float4(p[3], 1));
-
-                p[0] -= origin;
-                p[1] -= origin;
-                p[2] -= origin;
-                p[3] -= origin;
-
-                for (int i = 0; i < 4; i++)
-                {
-                    float signedDistance = dot(p[i], hitInfo.n);
-                    p[i] -= min(signedDistance, 0.f) * hitInfo.n;
-                }
-
-                float importance = 0.f;
-                for (int i = 0; i < 4; i++)
-                {
-                    int nextIndex = (i + 1) & 3;
-                    importance += AngleBetween(normalize(p[i]), normalize(p[nextIndex])) *
-                                  max(dot(normalize(cross(p[i], p[nextIndex])), hitInfo.n), 0.f);
-                }
-                float cdLum = .3 * color.x + .6 * color.y + .1 * color.z;
-                importance *= .5 * InvPi * cdLum;
-                weightTotal += importance;
-                float prob = importance / weightTotal;
-#else
                 float importance = .3 * color.x + .6 * color.y + .1 * color.z;
                 weightTotal += importance;
                 float prob = importance / weightTotal;
-#endif
 
                 if (lightSample < prob)
                 {
@@ -862,54 +820,31 @@ void main()
                 float3 v01 = normalize(p[3] - origin);
                 float3 v11 = normalize(p[2] - origin);
 
-                float area = SphericalQuadArea(v00, v10, v01, v11);
-                static const float MinSphericalSampleArea = 3e-4;
-                static const float MaxSphericalSampleArea = 6.22;
                 float3 p01        = p[1] - p[0];
                 float3 p02        = p[2] - p[0];
                 float3 p03        = p[3] - p[0];
                 float3 lightSamplePos;
-                //if (area < MinSphericalSampleArea || area > MaxSphericalSampleArea)
+                float area0        = 0.5f * length(cross(p01, p02));
+                float area1        = 0.5f * length(cross(p02, p03));
+
+                float div  = 1.f / (area0 + area1);
+                float prob = area0 * div;
+                // Then sample the triangle by area
+                if (lightDirSample[0] < prob)
                 {
-                    float area0        = 0.5f * length(cross(p01, p02));
-                    float area1        = 0.5f * length(cross(p02, p03));
-
-                    float div  = 1.f / (area0 + area1);
-                    float prob = area0 * div;
-                    // Then sample the triangle by area
-                    if (lightDirSample[0] < prob)
-                    {
-                        lightDirSample[0]       = lightDirSample[0] / prob;
-                        float3 bary = SampleUniformTriangle(lightDirSample);
-                        lightSamplePos = bary[0] * p[0] + bary[1] * p[1] + bary[2] * p[2];
-                    }
-                    else
-                    {
-                        lightDirSample[0]       = (lightDirSample[0] - prob) / (1 - prob);
-                        float3 bary = SampleUniformTriangle(lightDirSample);
-                        lightSamplePos = bary[0] * p[0] + bary[1] * p[2] + bary[2] * p[3];
-                    }
-                    lightSampleDirection = normalize(lightSamplePos - origin);
-                    float samplePointPdf = div * length2(origin - lightSamplePos) / abs(dot(hitInfo.n, lightSampleDirection));
-                    lightPdf *= .9f * samplePointPdf;
-                    debugBuffer[lightSampleIndex] = length2(origin - lightSamplePos);
+                    lightDirSample[0]       = lightDirSample[0] / prob;
+                    float3 bary = SampleUniformTriangle(lightDirSample);
+                    lightSamplePos = bary[0] * p[0] + bary[1] * p[1] + bary[2] * p[2];
                 }
-#if 0
-                else 
+                else
                 {
-                    float samplePointPdf;
-                    lightSamplePos = SampleSphericalRectangle(origin, p[0], p01, p03, lightDirSample, samplePointPdf);
-
-                    // add projected solid angle measure (n dot wi) to pdf
-                    float4 w = float4(abs(dot(v00, hitInfo.n)), abs(dot(v10, hitInfo.n)),
-                                      abs(dot(v01, hitInfo.n)), abs(dot(v11, hitInfo.n)));
-                    float2 uNew = SampleBilinear(lightDirSample, w);
-                    samplePointPdf *= BilinearPDF(uNew, w);
-                    lightPdf *= .9f * samplePointPdf;
-
-                    lightSampleDirection = normalize(lightSamplePos - origin);
+                    lightDirSample[0]       = (lightDirSample[0] - prob) / (1 - prob);
+                    float3 bary = SampleUniformTriangle(lightDirSample);
+                    lightSamplePos = bary[0] * p[0] + bary[1] * p[2] + bary[2] * p[3];
                 }
-#endif
+                lightSampleDirection = normalize(lightSamplePos - origin);
+                float samplePointPdf = div * length2(origin - lightSamplePos) / abs(dot(hitInfo.n, lightSampleDirection));
+                lightPdf *= .9f * samplePointPdf;
                 tMax = length(origin - lightSamplePos) * .99f;
             }
 
@@ -952,42 +887,6 @@ void main()
 
         uint2 virtualPage = ~0u;
         dir = SampleDisney(material, sample3, reflectance.xyz, throughput, wo, bsdfPdf);
-
-#if 0
-        switch (material.type) 
-        {
-            case GPUMaterialType::Disney: 
-            {
-                dir = SampleDisney(material, sample3, reflectance.xyz, throughput, wo);
-            }
-            break;
-            case GPUMaterialType::Dielectric:
-            {
-                dir = SampleDielectric(wo, material.ior, sample, throughput, printDebug);
-            }
-            break;
-            default:
-            //case GPUMaterialType::Diffuse: 
-            {
-                // Get base face data
-
-                // Debug
-#if 0
-                uint hash = Hash(instanceID);
-                float4 reflectance;
-                reflectance.x = max(.2f, ((hash >> 0) & 0xff) / 255.f);
-                reflectance.y = max(.2f, ((hash >> 8) & 0xff) / 255.f);
-                reflectance.z = max(.2f, ((hash >> 16) & 0xff) / 255.f);
-                reflectance.w = 1.f;
-#endif
-
-                //dir = SampleDiffuse(reflectance.xyz, wo, sample, throughput, printDebug);
-                dir = SampleDisneyThin(sample, reflectance.xyz, throughput, wo);
-            }
-            break;
-        }
-#endif
-
 
         if (dir.z == 0)
         {

@@ -552,7 +552,7 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
 }
 
 u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, string filename,
-                                       bool debug)
+                                       bool cullSubPixel)
 {
     string clusterPageData = OS_ReadFile(arena, filename);
 
@@ -803,9 +803,10 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, string 
     meshInfo.boundsMin = fileHeader.boundsMin;
     meshInfo.boundsMax = fileHeader.boundsMax;
 
-    meshInfo.ellipsoid   = fileHeader.ellipsoid;
-    meshInfo.dataOffset  = baseAddress;
-    meshInfo.numClusters = numClusters;
+    meshInfo.ellipsoid    = fileHeader.ellipsoid;
+    meshInfo.dataOffset   = baseAddress;
+    meshInfo.numClusters  = numClusters;
+    meshInfo.cullSubpixel = cullSubPixel;
 
     currentClusterTotal += numClusters;
 
@@ -1429,12 +1430,15 @@ bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
     {
         StringBuilderMapped builder(outFilename);
 
+        u32 count0 = 0;
+        u32 count1 = 0;
         for (int i = 0; i < inputInstances.Length(); i++)
         {
             Instance &instance = inputInstances[i];
 
             MeshInfo &meshInfo = meshInfos[instance.id];
-            if (meshInfo.ellipsoid.sphere.w == 0.f) continue;
+            if (meshInfo.numClusters >= 10 || !meshInfo.cullSubpixel) continue;
+            count0++;
 
             u32 resourceIndex = instance.id;
 
@@ -1486,7 +1490,10 @@ bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
             Instance &instance = inputInstances[i];
 
             MeshInfo &meshInfo = meshInfos[instance.id];
-            if (meshInfo.ellipsoid.sphere.w != 0.f) continue;
+            // if (meshInfo.ellipsoid.sphere.w != 0.f) continue;
+            if (meshInfo.numClusters < 10 && meshInfo.cullSubpixel) continue;
+            count1++;
+            // if (meshInfo.ellipsoid.sphere.w != 0.f || meshInfo.cullSubpixel) continue;
 
             u32 resourceIndex = instance.id;
 
@@ -1510,6 +1517,7 @@ bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
             geom.Extend(bounds);
             cent.Extend(bounds.minP + bounds.maxP);
         }
+        Print("%u %u %u\n", count0, count1, inputInstances.Length());
         record.geomBounds = Lane8F32(-geom.minP, geom.maxP);
         record.centBounds = Lane8F32(-cent.minP, cent.maxP);
         record.SetRange(0, refs.Length());
@@ -1580,7 +1588,8 @@ bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
         u32 u;
         f32 f;
     };
-    u32 numBigInstances = 0;
+    u32 numBigInstances      = 0;
+    u32 numNotSmallInstances = 0;
     // Store the calculating bounding proxies
     for (u32 partitionIndex = 0; partitionIndex < finalNumPartitions; partitionIndex++)
     {
@@ -1707,14 +1716,20 @@ bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
         {
             Instance &instance = partitionInstanceGraph.data[instanceIndex];
             MeshInfo &meshInfo = meshInfos[instance.id];
-            if (meshInfo.numClusters < 10)
+            // if (meshInfo.ellipsoid.sphere.w != 0.f && meshInfo.cullSubpixel)
+            // if (meshInfo.ellipsoid.sphere.w != 0.f && meshInfo.cullSubpixel)
+            if (meshInfo.numClusters < 10 && meshInfo.cullSubpixel)
             {
                 any = false;
             }
-            if (meshInfo.ellipsoid.sphere.w != 0.f)
+            else if (meshInfo.cullSubpixel)
             {
-                numEllipsoids++;
+                numNotSmallInstances++;
             }
+            // if (meshInfo.ellipsoid.sphere.w != 0.f)
+            // {
+            //     numEllipsoids++;
+            // }
         }
 
         if (!any)
@@ -1735,6 +1750,7 @@ bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
         partitionInfos.Push(info);
     }
     Print("num big instances: %u\n", numBigInstances);
+    Print("num not small instances: %u\n", numNotSmallInstances);
 
     RenderGraph *rg = GetRenderGraph();
     if (accelBuildInfos.Length())

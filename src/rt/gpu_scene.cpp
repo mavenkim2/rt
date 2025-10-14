@@ -1008,8 +1008,18 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                      VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
                      VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT);
         cmd->FlushBarriers();
-        virtualGeometryManager.AddNewMesh(sceneScratch.temp.arena, cmd, virtualGeoFilename,
-                                          debug);
+        bool cullSubpixel =
+            Contains(virtualGeoFilename, "isBeach", MatchFlag_CaseInsensitive) |
+            Contains(virtualGeoFilename, "isCoral", MatchFlag_CaseInsensitive) |
+            Contains(virtualGeoFilename, "isCoastline", MatchFlag_CaseInsensitive) |
+            Contains(virtualGeoFilename, "isBayCedarA1", MatchFlag_CaseInsensitive);
+        u32 meshInfoIndex = virtualGeometryManager.AddNewMesh(
+            sceneScratch.temp.arena, cmd, virtualGeoFilename, cullSubpixel);
+
+        if (virtualGeometryManager.meshInfos[meshInfoIndex].numClusters < 10 && !cullSubpixel)
+        {
+            Print("? %S\n", virtualGeoFilename);
+        }
 
         cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                      VK_PIPELINE_STAGE_2_TRANSFER_BIT,
