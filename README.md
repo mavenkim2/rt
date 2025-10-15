@@ -1,12 +1,24 @@
 # rt
 
-A physically based monte carlo hobby path tracer written in C++17. Architected to support scenes with 
-millions of instances. Currently only renders [Disney's 
-Moana Island scene](https://disneyanimation.com/resources/moana-island-scene/), but support will be included for other PBRT and USD scenes.
+A physically based monte carlo path tracer used to render [Disney's Moana Island scene]
+(https://disneyanimation.com/resources/moana-island-scene/)
+Supports both CPU and interactive NVIDIA GPU rendering.
 
 Currently for personal use only.
 
-## Features: 
+## Renders: 
+### GPU
+Rendered on an RTX 4070 Laptop GPU with 8 GB VRAM. https://www.youtube.com/watch?v=g6yUsX6zboI
+### CPU
+Rendered in 153 seconds, 1920x804, 64 spp on [Intel 24-core](https://www.lenovo.com/us/en/p/laptops/legion-laptops/legion-5-series/legion-pro-5i-gen-9-16-inch-intel/83df00apus)
+![Moana](images/image.bmp)
+
+## GPU Features: 
+- Geometry compression using [DGF](https://gpuopen.com/download/DGF.pdf)
+- Leverages [RTX Mega Geometry](https://developer.nvidia.com/blog/nvidia-rtx-mega-geometry-now-available-with-new-vulkan-samples/) to reduce acceleration structure footprint
+- [Texture streaming](https://www.yiningkarlli.com/projects/gpuptex/siggraph2025_gpuptex.pdf)
+
+## CPU Features: 
 - [Solid angle sampling of spherical rectangle area lights](https://blogs.autodesk.com/media-and-entertainment/wp-content/uploads/sites/162/egsr2013_spherical_rectangle.pdf)
 - Multi-level instancing
 - N-wide BVH with quantized bounding boxes, compressed pointer info, and SIMD intersection tests
@@ -16,27 +28,10 @@ Currently for personal use only.
 - Spectral rendering support
 - Custom job stealing system, loosely based on [Taskflow](https://github.com/taskflow/taskflow)
 
-## Rough unordered roadmap: 
-- B-spline curves
-- Direct illumination solution based on Disney's [Cache Points](https://www.yiningkarlli.com/projects/cachepoints/cachepoints.pdf) system
-- Complex integrators (BDPT, Metropolis, VCM, UPBP)
-- Volumetric rendering
-- [Manifold next event estimation](https://rgl.epfl.ch/publications/Zeltner2020Specular)
-- Motion blur
-- [Adaptive sampling](https://jo.dreggn.org/home/2009_stopping.pdf)
-- Full USD and PBRT support
-- [Practical path guiding](https://studios.disneyresearch.com/wp-content/uploads/2019/03/Practical-Path-Guiding-for-Efficient-Light-Transport-Simulation.pdf)
-
 ## Third-party libraries used: 
 - OpenUSD
 - Ptex
 - STB
-
-## Renders: 
-NOTE: Currently missing curves and one of the trees.
-
-Rendered in 153 seconds, 1920x804, 64 spp on [Intel 24-core](https://www.lenovo.com/us/en/p/laptops/legion-laptops/legion-5-series/legion-pro-5i-gen-9-16-inch-intel/83df00apus)
-![Moana](images/image.bmp)
 
 ## Sources: 
 Includes papers, blogs, books, and other links that were helpful.
