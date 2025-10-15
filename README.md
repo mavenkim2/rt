@@ -31,6 +31,7 @@ Rendered in 153 seconds, 1920x804, 64 spp on [Intel 24-core](https://www.lenovo.
 - OpenUSD
 - Ptex
 - STB
+- Open Image Denoise
 
 ## Sources: 
 Includes papers, blogs, books, and other links that were helpful.
