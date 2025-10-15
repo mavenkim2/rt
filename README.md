@@ -1,6 +1,6 @@
 # rt
 
-A physically based monte carlo path tracer used to render [Disney's Moana Island scene](https://disneyanimation.com/resources/moana-island-scene/)
+A physically based monte carlo path tracer used to render [Disney's Moana Island scene](https://disneyanimation.com/resources/moana-island-scene/).
 Supports both CPU and interactive NVIDIA GPU rendering.
 
 Currently for personal use only.
