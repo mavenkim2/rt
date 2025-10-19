@@ -1,7 +1,9 @@
 #include "scene.h"
+#include "hash.h"
 #include "macros.h"
 #include "integrate.h"
 #include "memory.h"
+#include "radix_sort.h"
 #include "simd_integrate.h"
 #include "spectrum.h"
 #include "shader_interop/hit_shaderinterop.h"
@@ -1073,9 +1075,32 @@ int LoadScene(RenderParams2 *params, Arena **tempArenas, string directory, strin
                 &counter, &params->renderFromWorld, true);
     scheduler.Wait(&counter);
 
+    struct SceneHandle
+    {
+        u64 sortKey;
+        u32 index;
+    };
+
+    SceneHandle *handles = PushArrayNoZero(temp.arena, SceneHandle, state.scenes.size());
+    for (u32 handleIndex = 0; handleIndex < state.scenes.size() - 1; handleIndex++)
+    {
+        ScenePrimitives *scene = state.scenes[handleIndex + 1];
+        SceneHandle handle;
+        handle.sortKey       = MurmurHash64A(scene->filename.str, scene->filename.size, 0);
+        handle.index         = handleIndex + 1;
+        handles[handleIndex] = handle;
+    }
+    SortHandles(handles, state.scenes.size() - 1);
+
     int numScenes            = (int)state.scenes.size();
     ScenePrimitives **scenes = PushArrayNoZero(arena, ScenePrimitives *, state.scenes.size());
-    MemoryCopy(scenes, state.scenes.data(), sizeof(ScenePrimitives *) * state.scenes.size());
+
+    scenes[0] = state.scenes[0];
+    for (u32 handleIndex = 0; handleIndex < state.scenes.size() - 1; handleIndex++)
+    {
+        scenes[handleIndex + 1] = state.scenes[handles[handleIndex].index];
+    }
+
     state.scenes.clear();
     SetScenes(scenes);
 

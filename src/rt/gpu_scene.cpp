@@ -1,3 +1,4 @@
+#include "base.h"
 #include "bit_packing.h"
 #include "camera.h"
 #include "debug.h"
@@ -204,8 +205,8 @@ static float GaussianEvaluate(Vec2f p, float sigma, float expX, float expY)
 void Render(RenderParams2 *params, int numScenes, Image *envMap)
 {
     ScenePrimitives **scenes = GetScenes();
-    NvAPI_Status status      = NvAPI_Initialize();
-    Assert(status == NVAPI_OK);
+
+    PerformanceCounter counter = OS_StartCounter();
     // Compile shaders
     Shader prepareIndirectShader;
 
@@ -733,162 +734,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         ptexOffset += info.packedDataSize;
     }
 
-#if 0
-    for (int i = 0; i < rootScene->ptexTextures.size(); i++)
-    {
-        PtexTexture &ptexTexture = rootScene->ptexTextures[i];
-        string filename          = PushStr8F(sceneScratch.temp.arena, "%S.tiles",
-                                             RemoveFileExtension(ptexTexture.filename));
-
-        if (Contains(filename, "displacement")) continue;
-
-        Tokenizer tokenizer;
-        tokenizer.input  = OS_ReadFile(sceneScratch.temp.arena, filename);
-        tokenizer.cursor = tokenizer.input.str;
-
-        TextureMetadata fileHeader;
-        GetPointerValue(&tokenizer, &fileHeader);
-
-        textureTempData[numHandles].tokenizer = tokenizer;
-        textureTempData[numHandles].metadata  = fileHeader;
-        textureTempData[numHandles].filename  = filename;
-        handles[numHandles].sortKey = SafeTruncateU32ToU16(fileHeader.virtualSqrtNumPages);
-        handles[numHandles].requestIndex = numHandles;
-        handles[numHandles].ptexIndex    = i;
-        numHandles++;
-    }
-
-    SortHandles<RequestHandle, false>(handles, numHandles);
-
-    u32 ptexFaceDataBytes    = 0;
-    for (int i = 0; i < numHandles; i++)
-    {
-        RequestHandle &handle        = handles[i];
-        TextureTempData &textureTemp = textureTempData[handle.requestIndex];
-
-        Tokenizer tokenizer        = textureTemp.tokenizer;
-        TextureMetadata fileHeader = textureTemp.metadata;
-
-        FaceMetadata2 *metaData = (FaceMetadata2 *)tokenizer.cursor;
-        Advance(&tokenizer, sizeof(FaceMetadata2) * fileHeader.numFaces);
-
-        auto array = StaticArray<FaceMetadata2>(sceneScratch.temp.arena, fileHeader.numFaces,
-                                                fileHeader.numFaces);
-        MemoryCopy(array.data, metaData, sizeof(FaceMetadata2) * fileHeader.numFaces);
-
-        Vec3u *pinnedPages = (Vec3u *)tokenizer.cursor;
-        Advance(&tokenizer, sizeof(Vec3u) * fileHeader.numPinnedPages);
-
-        u32 *pinnedPagesOffsets = (u32 *)tokenizer.cursor;
-        Advance(&tokenizer, sizeof(u32) * (fileHeader.numPinnedPages + 1));
-
-        u32 *pinnedPagesData = (u32 *)tokenizer.cursor;
-        Advance(&tokenizer, sizeof(u32) * (pinnedPagesOffsets[fileHeader.numPinnedPages]));
-
-        u32 allocIndex = virtualTextureManager.AllocateVirtualPages(
-            sceneScratch.temp.arena, textureTemp.filename, fileHeader, metaData,
-            tokenizer.cursor);
-
-#if 0
-        if (i > 0)
-        {
-            bool result = device->Wait(texSemaphore, 10e9);
-            Assert(result);
-        }
-        device->ResetDescriptorPool(0);
-        CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Compute);
-        virtualTextureManager.PinPages(cmd, allocIndex, pinnedPages, pinnedPagesOffsets,
-                                       pinnedPagesData, fileHeader.numPinnedPages);
-        texSemaphore.signalValue++;
-        cmd->SignalOutsideFrame(texSemaphore);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                     VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                     VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
-                     VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT);
-        cmd->FlushBarriers();
-        device->SubmitCommandBuffer(cmd);
-#endif
-
-        // Pack ptex face metadata into FaceData bitstream
-        u32 maxVirtualOffset = neg_inf;
-
-        int minLog2Dim = 16;
-        int maxLog2Dim = 0;
-
-        for (int faceIndex = 0; faceIndex < fileHeader.numFaces; faceIndex++)
-        {
-            // TODO IMPORTANT
-            maxVirtualOffset = 0; // Max(maxVirtualOffset, metaData[faceIndex].offsetX);
-            maxVirtualOffset = 0; // Max(maxVirtualOffset, metaData[faceIndex].offsetY);
-
-            minLog2Dim = Min(minLog2Dim, metaData[faceIndex].log2Width);
-            maxLog2Dim = Max(maxLog2Dim, metaData[faceIndex].log2Width);
-            minLog2Dim = Min(minLog2Dim, metaData[faceIndex].log2Height);
-            maxLog2Dim = Max(maxLog2Dim, metaData[faceIndex].log2Height);
-        }
-
-        u32 numVirtualOffsetBits = Log2Int(maxVirtualOffset) + 1;
-        u32 numFaceDimBits =
-            (minLog2Dim == maxLog2Dim ? 0 : Log2Int(Max(maxLog2Dim - minLog2Dim, 1)) + 1);
-        u32 numFaceIDBits = Log2Int(fileHeader.numFaces) + 1;
-
-        u32 faceDataBitStreamBitSize =
-            (2 * (numVirtualOffsetBits + numFaceDimBits) + 4 * numFaceIDBits + 9) *
-            fileHeader.numFaces;
-        u32 faceDataBitStreamSize = (faceDataBitStreamBitSize + 7) >> 3;
-
-        u8 *faceDataStream    = PushArray(sceneScratch.temp.arena, u8, faceDataBitStreamSize);
-        u32 faceDataBitOffset = 0;
-        for (int faceIndex = 0; faceIndex < fileHeader.numFaces; faceIndex++)
-        {
-            FaceMetadata2 &faceMetadata = metaData[faceIndex];
-            // TODO IMPORTANT
-            WriteBits((u32 *)faceDataStream, faceDataBitOffset, 0, numVirtualOffsetBits);
-            WriteBits((u32 *)faceDataStream, faceDataBitOffset, 0, numVirtualOffsetBits);
-            WriteBits((u32 *)faceDataStream, faceDataBitOffset,
-                      faceMetadata.log2Width - minLog2Dim, numFaceDimBits);
-            WriteBits((u32 *)faceDataStream, faceDataBitOffset,
-                      faceMetadata.log2Height - minLog2Dim, numFaceDimBits);
-            WriteBits((u32 *)faceDataStream, faceDataBitOffset,
-                      faceMetadata.rotate & ((1u << 8u) - 1u), 8);
-            WriteBits((u32 *)faceDataStream, faceDataBitOffset, faceMetadata.rotate >> 31, 1);
-            for (int edgeIndex = 0; edgeIndex < 4; edgeIndex++)
-            {
-                int neighborFace = faceMetadata.neighborFaces[edgeIndex];
-                u32 writeNeighborFace =
-                    neighborFace == -1 ? (~0u >> (32 - numFaceIDBits)) : (u32)neighborFace;
-                WriteBits((u32 *)faceDataStream, faceDataBitOffset, writeNeighborFace,
-                          numFaceIDBits);
-            }
-        }
-        Assert(faceDataBitOffset == faceDataBitStreamBitSize);
-        gpuTextureInfo[handle.ptexIndex].packedFaceData       = faceDataStream;
-        gpuTextureInfo[handle.ptexIndex].packedDataSize       = faceDataBitStreamSize;
-        gpuTextureInfo[handle.ptexIndex].minLog2Dim           = minLog2Dim;
-        gpuTextureInfo[handle.ptexIndex].numVirtualOffsetBits = numVirtualOffsetBits;
-        gpuTextureInfo[handle.ptexIndex].numFaceDimBits       = numFaceDimBits;
-        gpuTextureInfo[handle.ptexIndex].numFaceIDBits        = numFaceIDBits;
-        gpuTextureInfo[handle.ptexIndex].virtualAddressIndex  = allocIndex;
-        gpuTextureInfo[handle.ptexIndex].faceDataOffset       = ptexFaceDataBytes;
-
-        ptexFaceDataBytes += faceDataBitStreamSize;
-    }
-
-    Print("face data bytes: %u\n", ptexFaceDataBytes);
-
-    u8 *faceDataByteBuffer = PushArrayNoZero(sceneScratch.temp.arena, u8, ptexFaceDataBytes);
-    u32 ptexOffset         = 0;
-
-    for (int i = 0; i < numHandles; i++)
-    {
-        RequestHandle &handle = handles[i];
-        GPUTextureInfo &info  = gpuTextureInfo[handle.ptexIndex];
-        Assert(info.faceDataOffset == ptexOffset);
-        MemoryCopy(faceDataByteBuffer + ptexOffset, info.packedFaceData, info.packedDataSize);
-        ptexOffset += info.packedDataSize;
-    }
-#endif
-
     // Populate GPU materials
     StaticArray<GPUMaterial> gpuMaterials(sceneScratch.temp.arena,
                                           rootScene->materials.Length());
@@ -955,6 +800,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     GPUBuffer sizeReadback   = device->CreateBuffer(
         VK_BUFFER_USAGE_TRANSFER_DST_BIT, virtualGeometryManager.totalAccelSizesBuffer.size,
         MemoryUsage::GPU_TO_CPU);
+
+    PerformanceCounter blasCounter = OS_StartCounter();
     for (int sceneIndex = 0; sceneIndex < numBlas; sceneIndex++)
     {
         ScenePrimitives *scene    = blasScenes[sceneIndex];
@@ -1048,6 +895,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     bool result = device->Wait(geoSemaphore, 10e9);
     Assert(result);
 
+    f32 blasTime = OS_GetMilliseconds(blasCounter);
+    printf("blas build time: %fms\n", blasTime);
+
     // count++;
     // TODO: destroy temp memory
     device->DestroyBuffer(&virtualGeometryManager.vertexBuffer);
@@ -1082,14 +932,13 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     StaticArray<Instance> instances;
     StaticArray<AffineSpace> instanceTransforms;
 
+    PerformanceCounter tlasCounter = OS_StartCounter();
     if (tlasScenes.Length() >= 1)
     {
         ScratchArena scratch(&sceneScratch.temp.arena, 1);
         ScenePrimitives *scene = tlasScenes[0];
-        Array<Instance> flattenedInstances(scratch.temp.arena,
-                                           scene->numPrimitives * tlasScenes.Length());
-        Array<AffineSpace> flattenedTransforms(scratch.temp.arena,
-                                               scene->numPrimitives * tlasScenes.Length());
+        Array<Instance> flattenedInstances(scratch.temp.arena, scene->numPrimitives);
+        Array<AffineSpace> flattenedTransforms(scratch.temp.arena, scene->numPrimitives);
         AffineSpace transform = AffineSpace::Identity();
 
         FlattenInstances(scene, transform, flattenedInstances, flattenedTransforms);
@@ -1117,6 +966,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     bool built =
         virtualGeometryManager.AddInstances(sceneScratch.temp.arena, allCommandBuffer,
                                             instances, instanceTransforms, params->filename);
+
+    f32 tlasTime = OS_GetMilliseconds(tlasCounter);
+    printf("tlas time: %fms\n", tlasTime);
 
     tlasSemaphore.signalValue = 1;
     allCommandBuffer->SignalOutsideFrame(tlasSemaphore);
@@ -1206,6 +1058,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     u32 numFramesAccumulated        = 0;
     f32 lastFrameTime               = OS_NowSeconds();
     const u32 numFramesUntilDenoise = 128;
+
+    f32 time = OS_GetMilliseconds(counter);
+    printf("scene initialization time: %fms\n", time);
 
     for (;;)
     {
