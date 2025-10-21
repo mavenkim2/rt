@@ -56,6 +56,7 @@ struct RenderGraphResource
         {
             VkBufferUsageFlags2 bufferUsageFlags;
             GPUBuffer buffer;
+            MemoryUsage memUsage;
         };
     };
     u32 alignment;
@@ -82,6 +83,7 @@ struct ResidentResource
 
     // VkBuffer buffer;
     // VkBufferUsageFlags2 bufferUsage;
+    MemoryUsage memUsage;
     u32 bufferSize;
     u32 maxAlignment;
     int start;
@@ -132,7 +134,8 @@ struct RenderGraph
         return EnumHasAnyFlags(resource.flags, ResourceFlags::Image);
     };
     ResourceHandle CreateBufferResource(string name, VkBufferUsageFlags2 usageFlags, u32 size,
-                                        ResourceFlags flags = ResourceFlags::Transient |
+                                        MemoryUsage memUsage = MemoryUsage::GPU_ONLY,
+                                        ResourceFlags flags  = ResourceFlags::Transient |
                                                               ResourceFlags::Buffer);
     ResourceHandle CreateImageResource(string name, ImageDesc desc,
                                        ResourceFlags flags = ResourceFlags::Transient |

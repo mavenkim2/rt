@@ -21,6 +21,7 @@ struct RayPushConstant
     uint width;
     uint height;
     float filterIntegral;
+    uint depth;
 };
 
 #ifdef __cplusplus

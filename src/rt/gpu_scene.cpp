@@ -43,15 +43,17 @@ using PFun_oidnNewFilter    = OIDNFilter(OIDNDevice device, const char *name);
 using PFun_oidnNewSharedBufferFromWin32Handle =
     OIDNBuffer(__cdecl)(OIDNDevice device, OIDNExternalMemoryTypeFlag flag, void *handle,
                         const void *name, size_t byteSize);
-using PFun_oidnSetFilterImage = void(OIDNFilter filter, const char *name, OIDNBuffer buffer,
+using PFun_oidnSetFilterImage    = void(OIDNFilter filter, const char *name, OIDNBuffer buffer,
                                      OIDNFormat format, size_t width, size_t height,
                                      size_t byteOffset, size_t pixelByteStride,
                                      size_t rowByteStride);
-using PFun_oidnCommitFilter   = void(OIDNFilter filter);
-using PFun_oidnExecuteFilter  = void(OIDNFilter filter);
-using PFun_oidnSetFilterBool  = void(OIDNFilter filter, const char *name, bool value);
-using PFun_oidnSetFilterInt   = void(OIDNFilter filter, const char *name, int value);
-using PFun_oidnReleaseBuffer  = void(OIDNBuffer buffer);
+using PFun_oidnCommitFilter      = void(OIDNFilter filter);
+using PFun_oidnExecuteFilter     = void(OIDNFilter filter);
+using PFun_oidnSetFilterBool     = void(OIDNFilter filter, const char *name, bool value);
+using PFun_oidnSetFilterInt      = void(OIDNFilter filter, const char *name, int value);
+using PFun_oidnReleaseBuffer     = void(OIDNBuffer buffer);
+using PFun_oidnRemoveFilterImage = void(OIDNFilter filter, const char *name);
+using PFun_oidnUpdateFilterData  = void(OIDNFilter filter, const char *name);
 
 void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, GeometryType type,
                           string directory, AffineSpace &worldFromRender,
@@ -394,10 +396,13 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     ResourceHandle accumulatedImageHandle =
         rg->RegisterExternalResource("accumulate", &accumulatedImage);
 
-    GPUBuffer imageOut =
-        device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                             12 * targetWidth * targetHeight, MemoryUsage::EXTERNAL);
-    ResourceHandle imageOutHandle = rg->RegisterExternalResource("image out", &imageOut);
+    // GPUBuffer imageOut =
+    //     device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+    //                          12 * targetWidth * targetHeight, MemoryUsage::EXTERNAL);
+    // ResourceHandle imageOutHandle = rg->RegisterExternalResource("image out", &imageOut);
+    u32 imageOutSize              = 12 * targetWidth * targetHeight;
+    ResourceHandle imageOutHandle = rg->CreateBufferResource(
+        "image out", VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, imageOutSize, MemoryUsage::EXTERNAL);
 
     ImageDesc uavDesc(ImageType::Type2D, targetWidth, targetHeight, 1, 1, 1,
                       VK_FORMAT_R16G16B16A16_SFLOAT, MemoryUsage::GPU_ONLY,
@@ -409,6 +414,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                              12 * targetWidth * targetHeight, MemoryUsage::EXTERNAL);
     ResourceHandle normalsHandle = rg->RegisterExternalResource("normals", &normals);
+    // ResourceHandle normalsHandle =
+    //     rg->CreateBufferResource("normals", VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+    //                              12 * targetWidth * targetHeight, MemoryUsage::EXTERNAL);
 
     ImageDesc albedoDesc(ImageType::Type2D, targetWidth, targetHeight, 1, 1, 1,
                          VK_FORMAT_R8G8B8A8_UNORM, MemoryUsage::GPU_ONLY,
@@ -456,6 +464,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         (PFun_oidnSetFilterInt *)GetProcAddress(module, "oidnSetFilterInt");
     PFun_oidnReleaseBuffer *oidnReleaseBuffer_p =
         (PFun_oidnReleaseBuffer *)GetProcAddress(module, "oidnReleaseBuffer");
+    // PFun_oidnRemoveFilterImage *oidnRemoveFilterImage_p =
+    //     (PFun_oidnRemoveFilterImage *)GetProcAddress(module, "oidnRemoveFilterImage");
+    PFun_oidnUpdateFilterData *oidnUpdateFilterData_p =
+        (PFun_oidnUpdateFilterData *)GetProcAddress(module, "oidnUpdateFilterData");
 
     OIDNDevice oidnDevice = oidnNewDevice_p(OIDN_DEVICE_TYPE_DEFAULT);
     oidnCommitDevice_p(oidnDevice);
@@ -468,7 +480,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     HANDLE accumulatedImageOIDNHandle = device->GetWin32Handle(&accumulatedImage);
     HANDLE albedoOIDNHandle           = device->GetWin32Handle(&accumulatedAlbedo);
     HANDLE normalOIDNHandle           = device->GetWin32Handle(&normals);
-    HANDLE imageOutOIDNHandle         = device->GetWin32Handle(&imageOut);
 
     OIDNBuffer colorBuf = oidnNewSharedBufferFromWin32Handle_p(
         oidnDevice, OIDN_EXTERNAL_MEMORY_TYPE_FLAG_OPAQUE_WIN32, accumulatedImageOIDNHandle, 0,
@@ -480,9 +491,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         oidnDevice, OIDN_EXTERNAL_MEMORY_TYPE_FLAG_OPAQUE_WIN32, normalOIDNHandle, 0,
         normals.req.size);
     OIDNBuffer outputBuf = oidnNewSharedBufferFromWin32Handle_p(
-        oidnDevice, OIDN_EXTERNAL_MEMORY_TYPE_FLAG_OPAQUE_WIN32, imageOutOIDNHandle, 0,
-        imageOut.req.size);
-
+        oidnDevice, OIDN_EXTERNAL_MEMORY_TYPE_FLAG_OPAQUE_WIN32, accumulatedImageOIDNHandle, 0,
+        imageOutSize);
     oidnSetFilterImage_p(filter, "color", colorBuf, OIDN_FORMAT_FLOAT3, targetWidth,
                          targetHeight, 0, 0, 0);
     oidnSetFilterImage_p(filter, "albedo", albedoBuf, OIDN_FORMAT_FLOAT3, targetWidth,
@@ -1383,10 +1393,32 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         if (numFramesAccumulated > numFramesUntilDenoise)
         {
-            rg->StartPass(0, [&](CommandBuffer *cmd) {
-                RenderGraph *rg = GetRenderGraph();
-                oidnExecuteFilter_p(filter);
-            });
+            rg->StartPass(1, [&](CommandBuffer *cmd) {
+                  RenderGraph *rg = GetRenderGraph();
+                  u32 offset;
+                  // DebugBreak();
+                  GPUBuffer *imageOut       = rg->GetBuffer(imageOutHandle, offset);
+                  HANDLE imageOutOIDNHandle = device->GetWin32Handle(imageOut);
+                  OIDNBuffer outputBuf      = oidnNewSharedBufferFromWin32Handle_p(
+                      oidnDevice, OIDN_EXTERNAL_MEMORY_TYPE_FLAG_OPAQUE_WIN32,
+                      imageOutOIDNHandle, 0, imageOutSize);
+                  // DebugBreak();
+                  oidnSetFilterImage_p(filter, "color", colorBuf, OIDN_FORMAT_FLOAT3,
+                                       targetWidth, targetHeight, 0, 0, 0);
+                  oidnSetFilterImage_p(filter, "albedo", albedoBuf, OIDN_FORMAT_FLOAT3,
+                                       targetWidth, targetHeight, 0, 0, 0);
+                  oidnSetFilterImage_p(filter, "normal", normalBuf, OIDN_FORMAT_FLOAT3,
+                                       targetWidth, targetHeight, 0, 0, 0);
+                  oidnSetFilterImage_p(filter, "output", outputBuf, OIDN_FORMAT_FLOAT3,
+                                       targetWidth, targetHeight, 0, 0, 0);
+                  // DebugBreak();
+                  oidnCommitFilter_p(filter);
+                  // DebugBreak();
+                  oidnExecuteFilter_p(filter);
+                  // DebugBreak();
+
+                  CloseHandle(imageOutOIDNHandle);
+              }).AddHandle(imageOutHandle, ResourceUsageType::Write);
         }
         else
         {

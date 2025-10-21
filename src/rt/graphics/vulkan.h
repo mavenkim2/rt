@@ -38,13 +38,6 @@ struct GPUBuffer;
 
 static const int numActiveFrames = 1;
 
-struct MemoryRequirements
-{
-    uint64_t size;
-    uint64_t alignment;
-    uint32_t bits;
-};
-
 struct BuildRangeInfo
 {
     uint32_t primitiveCount;
@@ -295,13 +288,21 @@ inline VkShaderStageFlags GetVulkanShaderStage(ShaderStage stage)
 
 enum class MemoryUsage
 {
-    GPU_ONLY,
-    CPU_ONLY,
-    CPU_TO_GPU,
-    GPU_TO_CPU,
-    EXTERNAL,
+    GPU_ONLY   = (1 << 0),
+    CPU_ONLY   = (1 << 1),
+    CPU_TO_GPU = (1 << 2),
+    GPU_TO_CPU = (1 << 3),
+    EXTERNAL   = (1 << 4),
 };
 ENUM_CLASS_FLAGS(MemoryUsage)
+
+struct MemoryRequirements
+{
+    uint64_t size;
+    uint64_t alignment;
+    uint32_t bits;
+    MemoryUsage usage;
+};
 
 struct Shader
 {
@@ -1026,6 +1027,7 @@ struct Vulkan
 
     b32 debugUtils                 = false;
     bool externalMemoryInitialized = false;
+    u32 externalMemTypeIndex;
     VmaPool externalPool;
 
     //////////////////////////////
@@ -1141,7 +1143,8 @@ struct Vulkan
     GPUBuffer CreateBuffer(VkBufferUsageFlags flags, size_t totalSize,
                            MemoryUsage usage = MemoryUsage::GPU_ONLY);
     GPUImage CreateImage(ImageDesc desc, int numSubresources = -1, int ownedQueue = -1);
-    GPUBuffer CreateAliasedBuffer(VkBufferUsageFlags flags, size_t totalSize);
+    GPUBuffer CreateAliasedBuffer(VkBufferUsageFlags flags, size_t totalSize,
+                                  MemoryUsage memUsage = MemoryUsage::GPU_ONLY);
     GPUImage CreateAliasedImage(ImageDesc desc);
     VmaAllocation AllocateMemory(MemoryRequirements &r);
     void FreeMemory(VmaAllocation alloc);
@@ -1233,6 +1236,7 @@ struct Vulkan
     u64 GetSemaphoreValue(Semaphore s);
     HANDLE GetWin32Handle(GPUImage *image);
     HANDLE GetWin32Handle(GPUBuffer *buffer);
+    void InitializeExternalMemoryPool();
 #ifdef USE_DLSS
     void GetDLSSTargetDimensions(u32 &width, u32 &height);
     DLSSTargets InitializeDLSSTargets(GPUImage *inColor, GPUImage *inDiffuseAlbedo,

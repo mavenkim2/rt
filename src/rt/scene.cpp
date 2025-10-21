@@ -3,6 +3,7 @@
 #include "macros.h"
 #include "integrate.h"
 #include "memory.h"
+#include "parallel.h"
 #include "radix_sort.h"
 #include "simd_integrate.h"
 #include "spectrum.h"
@@ -759,10 +760,9 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
         AffineSpace *dataTransforms = reinterpret_cast<AffineSpace *>(dataTokenizer.cursor);
         if (baseFile && renderFromWorld)
         {
-            for (u32 i = 0; i < count; i++)
-            {
+            ParallelForLoop(0, count, 1024, 1024, [&](u32 jobID, u32 i) {
                 scene->affineTransforms[i] = *renderFromWorld * dataTransforms[i];
-            }
+            });
         }
         else
         {
@@ -781,10 +781,6 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
     ChunkedLinkedList<ScenePrimitives *, MemoryType_Instance> files(temp.arena, 32);
 
     bool hasMaterials = false;
-    if (scene->filename == "objects/xgBreadFruit_archiveBreadFruitBaked_obj.rtscene")
-    {
-        int stop = 5;
-    }
     for (;;)
     {
         if (Advance(&tokenizer, "RTSCENE_END")) break;

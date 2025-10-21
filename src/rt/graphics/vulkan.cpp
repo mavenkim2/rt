@@ -1869,35 +1869,7 @@ GPUBuffer Vulkan::CreateBuffer(VkBufferUsageFlags flags, size_t totalSize, Memor
         if (!externalMemoryInitialized)
         {
             externalMemoryInitialized = true;
-            const VkExternalMemoryHandleTypeFlagsKHR handleType =
-                VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT_KHR;
-
-            // Define an example buffer and allocation parameters.
-            VkExternalMemoryBufferCreateInfoKHR externalMemBufCreateInfo = {
-                VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO_KHR, nullptr, handleType};
-            VkBufferCreateInfo exampleBufCreateInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-            exampleBufCreateInfo.size               = 0x10000; // Doesn't matter here.
-            exampleBufCreateInfo.usage =
-                VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-            exampleBufCreateInfo.pNext = &externalMemBufCreateInfo;
-
-            VmaAllocationCreateInfo exampleAllocCreateInfo = {};
-            exampleAllocCreateInfo.usage                   = VMA_MEMORY_USAGE_AUTO;
-
-            // Find memory type index to use for the custom pool.
-            uint32_t memTypeIndex;
-            VkResult res = vmaFindMemoryTypeIndexForBufferInfo(
-                allocator, &exampleBufCreateInfo, &exampleAllocCreateInfo, &memTypeIndex);
-            // Check res...
-
-            // Create a custom pool.
-            constexpr static VkExportMemoryAllocateInfoKHR exportMemAllocInfo = {
-                VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO_KHR, nullptr, handleType};
-            VmaPoolCreateInfo poolCreateInfo   = {};
-            poolCreateInfo.memoryTypeIndex     = memTypeIndex;
-            poolCreateInfo.pMemoryAllocateNext = (void *)&exportMemAllocInfo;
-
-            res = vmaCreatePool(allocator, &poolCreateInfo, &externalPool);
+            InitializeExternalMemoryPool();
         }
 
         createInfo.pNext     = &exportInfo;
@@ -1931,6 +1903,11 @@ VmaAllocation Vulkan::AllocateMemory(MemoryRequirements &r)
     VmaAllocationCreateInfo info = {};
     info.preferredFlags          = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 
+    if (EnumHasAnyFlags(r.usage, MemoryUsage::EXTERNAL))
+    {
+        info.pool = externalPool;
+    }
+
     VmaAllocation alloc;
     VK_CHECK(vmaAllocateMemory(allocator, &req, &info, &alloc, 0));
     return alloc;
@@ -1953,7 +1930,8 @@ bool Vulkan::IsAllocated(VmaAllocation alloc)
     return result;
 }
 
-GPUBuffer Vulkan::CreateAliasedBuffer(VkBufferUsageFlags flags, size_t totalSize)
+GPUBuffer Vulkan::CreateAliasedBuffer(VkBufferUsageFlags flags, size_t totalSize,
+                                      MemoryUsage memUsage)
 {
     GPUBuffer buffer = {};
     buffer.size      = totalSize;
@@ -1974,6 +1952,23 @@ GPUBuffer Vulkan::CreateAliasedBuffer(VkBufferUsageFlags flags, size_t totalSize
         createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     }
 
+    VkExternalMemoryHandleTypeFlags handleType =
+        VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+    VkExternalMemoryBufferCreateInfo exportInfo = {
+        VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
+    exportInfo.handleTypes = handleType;
+
+    if (memUsage == MemoryUsage::EXTERNAL)
+    {
+        if (!externalMemoryInitialized)
+        {
+            externalMemoryInitialized = true;
+            InitializeExternalMemoryPool();
+        }
+
+        createInfo.pNext = &exportInfo;
+    }
+
     VK_CHECK(vkCreateBuffer(device, &createInfo, 0, &buffer.buffer));
 
     VkMemoryRequirements r;
@@ -1982,6 +1977,11 @@ GPUBuffer Vulkan::CreateAliasedBuffer(VkBufferUsageFlags flags, size_t totalSize
     buffer.req.size      = r.size;
     buffer.req.alignment = r.alignment;
     buffer.req.bits      = r.memoryTypeBits;
+
+    if (EnumHasAnyFlags(memUsage, MemoryUsage::EXTERNAL))
+    {
+        buffer.req.bits = externalMemTypeIndex;
+    }
 
     return buffer;
 }
@@ -4881,10 +4881,44 @@ HANDLE Vulkan::GetWin32Handle(GPUBuffer *buffer)
     HANDLE result = 0;
     VkResult success =
         vmaGetMemoryWin32Handle2(allocator, buffer->allocation, handleType, nullptr, &result);
+
     Assert(success == VK_SUCCESS);
     return result;
 }
 #endif
+
+void Vulkan::InitializeExternalMemoryPool()
+{
+    const VkExternalMemoryHandleTypeFlagsKHR handleType =
+        VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT_KHR;
+
+    // Define an example buffer and allocation parameters.
+    VkExternalMemoryBufferCreateInfoKHR externalMemBufCreateInfo = {
+        VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO_KHR, nullptr, handleType};
+    VkBufferCreateInfo exampleBufCreateInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    exampleBufCreateInfo.size               = 0x10000; // Doesn't matter here.
+    exampleBufCreateInfo.usage =
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    exampleBufCreateInfo.pNext = &externalMemBufCreateInfo;
+
+    VmaAllocationCreateInfo exampleAllocCreateInfo = {};
+    exampleAllocCreateInfo.usage                   = VMA_MEMORY_USAGE_AUTO;
+
+    // Find memory type index to use for the custom pool.
+    uint32_t memTypeIndex;
+    VK_CHECK(vmaFindMemoryTypeIndexForBufferInfo(allocator, &exampleBufCreateInfo,
+                                                 &exampleAllocCreateInfo, &memTypeIndex));
+    externalMemTypeIndex = memTypeIndex;
+
+    // Create a custom pool.
+    constexpr static VkExportMemoryAllocateInfoKHR exportMemAllocInfo = {
+        VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO_KHR, nullptr, handleType};
+    VmaPoolCreateInfo poolCreateInfo   = {};
+    poolCreateInfo.memoryTypeIndex     = memTypeIndex;
+    poolCreateInfo.pMemoryAllocateNext = (void *)&exportMemAllocInfo;
+
+    VK_CHECK(vmaCreatePool(allocator, &poolCreateInfo, &externalPool));
+}
 
 #ifdef USE_DLSS
 void Vulkan::GetDLSSTargetDimensions(u32 &width, u32 &height)
