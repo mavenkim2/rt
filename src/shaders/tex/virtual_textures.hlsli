@@ -2,7 +2,7 @@
 #define VIRTUAL_TEXTURES_HLSLI_
 
 #include "../common.hlsli"
-#include "./../rt/shader_interop/virtual_textures_shaderinterop.h"
+#include "../../rt/shader_interop/virtual_textures_shaderinterop.h"
 
 StructuredBuffer<uint4> pageHashTable : register(t5);
 

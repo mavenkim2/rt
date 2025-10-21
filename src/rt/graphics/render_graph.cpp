@@ -24,7 +24,8 @@ RenderGraph::RenderGraph()
     semaphore         = device->CreateSemaphore();
 }
 ResourceHandle RenderGraph::CreateBufferResource(string name, VkBufferUsageFlags2 usageFlags,
-                                                 u32 size, ResourceFlags flags)
+                                                 u32 size, MemoryUsage memUsage,
+                                                 ResourceFlags flags)
 {
     RenderGraphResource resource = {};
     resource.name                = PushStr8Copy(arena, name);
@@ -33,6 +34,7 @@ ResourceHandle RenderGraph::CreateBufferResource(string name, VkBufferUsageFlags
     resource.bufferUsageFlags    = usageFlags;
     resource.buffer.buffer       = VK_NULL_HANDLE;
     resource.flags               = flags;
+    resource.memUsage            = memUsage;
 
     ResourceHandle handle;
     handle.index = resources.Length();
@@ -56,6 +58,7 @@ ResourceHandle RenderGraph::CreateImageResource(string name, ImageDesc desc,
     resource.imageDesc           = desc;
     resource.image.image         = VK_NULL_HANDLE;
     resource.flags               = flags;
+    resource.memUsage            = desc.memUsage;
 
     ResourceHandle handle;
     handle.index = resources.Length();
@@ -234,6 +237,8 @@ GPUBuffer *RenderGraph::GetBuffer(ResourceHandle handle, u32 &offset)
 {
     RenderGraphResource &resource = resources[handle.index];
     offset                        = 0;
+    // TODO: kinda hacky, used for OIDN
+    resource.buffer.allocation = residentResources[resource.residentResourceIndex].alloc;
     return &resource.buffer;
 }
 
@@ -282,9 +287,9 @@ void RenderGraph::Compile()
             {
                 device->DestroyBufferHandle(&resource.buffer);
             }
-            resource.buffer =
-                device->CreateAliasedBuffer(resource.bufferUsageFlags, resource.size);
-            resource.size = resource.buffer.req.size;
+            resource.buffer = device->CreateAliasedBuffer(resource.bufferUsageFlags,
+                                                          resource.size, resource.memUsage);
+            resource.size   = resource.buffer.req.size;
         }
     }
 
@@ -297,7 +302,7 @@ void RenderGraph::Compile()
     StaticArray<Handle> handles(scratch.temp.arena, resources.Length());
 
     u32 unAliasedSize = 0;
-    u32 externalSize  = 0;
+    u64 externalSize  = 0;
     for (u32 resourceIndex = 0; resourceIndex < resources.Length(); resourceIndex++)
     {
         RenderGraphResource &resource = resources[resourceIndex];
@@ -449,6 +454,8 @@ void RenderGraph::Compile()
                     residentResource.memReqBits &= bits;
                     residentResource.maxAlignment =
                         Max(residentResource.maxAlignment, alignment);
+                    residentResource.memUsage |= resource.memUsage;
+
                     aliased = true;
                     break;
                 }
@@ -499,6 +506,13 @@ void RenderGraph::Compile()
             req.bits      = resource.memReqBits;
             req.alignment = resource.maxAlignment;
             req.size      = resource.bufferSize;
+            req.usage     = resource.memUsage;
+
+            // if (EnumHasAnyFlags(resource.memUsage, MemoryUsage::EXTERNAL))
+            // {
+            //     DebugBreak();
+            //     int stop = 5;
+            // }
 
             resource.alloc   = device->AllocateMemory(req);
             resource.isAlloc = true;
@@ -533,7 +547,7 @@ void RenderGraph::Compile()
     }
     Print("Transient Resource Size: %u\n", totalSize);
     Print("Unaliased Size: %u\n", unAliasedSize);
-    Print("External Resource Size: %u\n", externalSize);
+    Print("External Resource Size: %llu\n", externalSize);
 }
 
 void RenderGraph::Execute(CommandBuffer *cmd)

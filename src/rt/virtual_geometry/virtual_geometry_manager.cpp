@@ -1386,9 +1386,15 @@ bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
         PushStr8F(scratch.temp.arena, "%S.instances", RemoveFileExtension(filename));
     Print("%S\n", outFilename);
 
-    if (0) // OS_FileExists(outFilename))
+    bool computePartitions = true;
+
+    StaticArray<GPUTransform> instanceTransforms(scratch.temp.arena, transforms.Length(),
+                                                 transforms.Length());
+
+    PerformanceCounter tlasCounter = OS_StartCounter();
+    if (OS_FileExists(outFilename))
     {
-        string instanceData = OS_ReadFile(arena, outFilename);
+        string instanceData = OS_MapFileRead(outFilename);
         Tokenizer tokenizer;
         tokenizer.input  = instanceData;
         tokenizer.cursor = instanceData.str;
@@ -1398,7 +1404,7 @@ bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
 
         if (numInstances != inputInstances.Length())
         {
-            ErrorExit(0, "Instance file is out of date\n");
+            Print("Instance file is out of date\n");
         }
 
         u32 numPartitions, numTransforms;
@@ -1410,26 +1416,35 @@ bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
 
         if (numTransforms != transforms.Length())
         {
-            ErrorExit(0, "Instance file is out of date\n");
+            Print("Instance file is out of date\n");
         }
 
-        partitionInstanceGraph.offsets = PushArray(arena, u32, numPartitions + 1);
-        partitionInstanceGraph.data =
-            PushArrayNoZero(arena, Instance, partitionInstanceGraph.offsets[numPartitions]);
+        bool isValidData =
+            numInstances == inputInstances.Length() && numTransforms == transforms.Length();
 
-        MemoryCopy(partitionInstanceGraph.offsets, tokenizer.cursor,
-                   sizeof(u32) * (numPartitions + 1));
-        Advance(&tokenizer, sizeof(u32) * (numPartitions + 1));
-        MemoryCopy(partitionInstanceGraph.data, tokenizer.cursor,
-                   sizeof(Instance) * partitionInstanceGraph.offsets[numPartitions]);
-        Advance(&tokenizer, sizeof(Instance) * partitionInstanceGraph.offsets[numPartitions]);
+        if (isValidData)
+        {
+            computePartitions              = false;
+            partitionInstanceGraph.offsets = PushArray(arena, u32, numPartitions + 1);
+            MemoryCopy(partitionInstanceGraph.offsets, tokenizer.cursor,
+                       sizeof(u32) * (numPartitions + 1));
+            Advance(&tokenizer, sizeof(u32) * (numPartitions + 1));
 
-        MemoryCopy(transforms.data, tokenizer.cursor, sizeof(AffineSpace) * numTransforms);
+            partitionInstanceGraph.data = PushArrayNoZero(
+                arena, Instance, partitionInstanceGraph.offsets[numPartitions]);
+            MemoryCopy(partitionInstanceGraph.data, tokenizer.cursor,
+                       sizeof(Instance) * partitionInstanceGraph.offsets[numPartitions]);
+            Advance(&tokenizer,
+                    sizeof(Instance) * partitionInstanceGraph.offsets[numPartitions]);
+
+            MemoryCopy(instanceTransforms.data, tokenizer.cursor,
+                       sizeof(GPUTransform) * numTransforms);
+            maxPartitions = numPartitions;
+        }
+        OS_UnmapFile(instanceData.str);
     }
-    else
+    if (computePartitions)
     {
-        StringBuilderMapped builder(outFilename);
-
         u32 count0 = 0;
         u32 count1 = 0;
         for (int i = 0; i < inputInstances.Length(); i++)
@@ -1541,35 +1556,9 @@ bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
             });
 
         maxPartitions = numPartitions.load();
-
-#if 0
-        u64 numInstanceOffset = AllocateSpace(&builder, sizeof(Vec3u));
-        u32 numInstances      = inputInstances.Length();
-        u32 numTransforms     = transforms.Length();
-        void *ptr             = GetMappedPtr(&builder, numInstanceOffset);
-        MemoryCopy(ptr, &numInstances, sizeof(u32));
-        MemoryCopy((u32 *)ptr + 1, &maxPartitions, sizeof(u32));
-        MemoryCopy((u32 *)ptr + 2, &numTransforms, sizeof(u32));
-
-        u64 offsetsOffset = AllocateSpace(&builder, sizeof(u32) * (maxPartitions + 1));
-        ptr               = GetMappedPtr(&builder, offsetsOffset);
-        MemoryCopy(ptr, partitionInstanceGraph.offsets, sizeof(u32) * (maxPartitions + 1));
-
-        u64 dataOffset = AllocateSpace(
-            &builder, sizeof(Instance) * partitionInstanceGraph.offsets[maxPartitions]);
-        ptr = GetMappedPtr(&builder, dataOffset);
-        MemoryCopy(ptr, partitionInstanceGraph.data,
-                   sizeof(Instance) * partitionInstanceGraph.offsets[maxPartitions]);
-
-        u64 transformOffset =
-            AllocateSpace(&builder, sizeof(AffineSpace) * transforms.Length());
-        ptr = GetMappedPtr(&builder, transformOffset);
-        MemoryCopy(ptr, transforms.data, sizeof(AffineSpace) * transforms.Length());
-
-        OS_UnmapFile(builder.ptr);
-        OS_ResizeFile(builder.filename, builder.totalSize);
-#endif
     }
+    f32 tlasTime = OS_GetMilliseconds(tlasCounter);
+    printf("partition time: %fms\n", tlasTime);
 
     u32 finalNumPartitions    = maxPartitions;
     allocatedPartitionIndices = StaticArray<u32>(arena, maxPartitions, finalNumPartitions);
@@ -1578,9 +1567,10 @@ bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
     StaticArray<AccelBuildInfo> accelBuildInfos(scratch.temp.arena, finalNumPartitions);
     StaticArray<Vec2u> mergedPartitionIndices(scratch.temp.arena, finalNumPartitions);
 
-    StaticArray<GPUTransform> instanceTransforms(scratch.temp.arena, inputInstances.Length());
-    StaticArray<u32> partitionResourceIDs(scratch.temp.arena, inputInstances.Length());
-    StaticArray<PartitionInfo> partitionInfos(scratch.temp.arena, finalNumPartitions);
+    StaticArray<u32> partitionResourceIDs(scratch.temp.arena, inputInstances.Length(),
+                                          inputInstances.Length());
+    StaticArray<PartitionInfo> partitionInfos(scratch.temp.arena, finalNumPartitions,
+                                              finalNumPartitions);
     u32 numAABBs = 0;
 
     union Float
@@ -1591,8 +1581,9 @@ bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
     u32 numBigInstances      = 0;
     u32 numNotSmallInstances = 0;
     // Store the calculating bounding proxies
-    for (u32 partitionIndex = 0; partitionIndex < finalNumPartitions; partitionIndex++)
-    {
+    // for (u32 partitionIndex = 0; partitionIndex < finalNumPartitions; partitionIndex++)
+    ParallelForLoop(0, finalNumPartitions, 32, 32, [&](u32 jobID, u32 partitionIndex) {
+        ScratchArena scratch;
         f32 minTranslate[3];
         f32 maxTranslate[3];
 
@@ -1668,44 +1659,46 @@ bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
         info.lodBounds = lodBounds;
         info.lodError  = maxError;
 
-        for (u32 transformIndex = partitionInstanceGraph.offsets[partitionIndex];
-             transformIndex < partitionInstanceGraph.offsets[partitionIndex + 1];
-             transformIndex++)
+        if (computePartitions)
         {
-            auto &transform =
-                transforms[partitionInstanceGraph.data[transformIndex].transformIndex];
-
-            f32 scaleX    = Length(transform[0]);
-            f32 scaleY    = Length(transform[1]);
-            f32 scaleZ    = Length(transform[2]);
-            f32 scales[3] = {scaleX, scaleY, scaleZ};
-
-            AffineSpace rotation = transform;
-
-            u16 translate16[3];
-            for (u32 c = 0; c < 3; c++)
+            for (u32 transformIndex = partitionInstanceGraph.offsets[partitionIndex];
+                 transformIndex < partitionInstanceGraph.offsets[partitionIndex + 1];
+                 transformIndex++)
             {
-                rotation[c] /= scales[c];
+                auto &transform =
+                    transforms[partitionInstanceGraph.data[transformIndex].transformIndex];
 
-                translate16[c] = u16((transform[3][c] - minTranslate[c]) /
-                                         (maxTranslate[c] - minTranslate[c]) * 65535.f +
-                                     0.5f);
+                f32 scaleX    = Length(transform[0]);
+                f32 scaleY    = Length(transform[1]);
+                f32 scaleZ    = Length(transform[2]);
+                f32 scales[3] = {scaleX, scaleY, scaleZ};
+
+                AffineSpace rotation = transform;
+
+                u16 translate16[3];
+                for (u32 c = 0; c < 3; c++)
+                {
+                    rotation[c] /= scales[c];
+
+                    translate16[c] = u16((transform[3][c] - minTranslate[c]) /
+                                             (maxTranslate[c] - minTranslate[c]) * 65535.f +
+                                         0.5f);
+                }
+                Vec4f quat = MatrixToQuat(rotation);
+
+                __m128i i = _mm_cvtps_ph(_mm_setr_ps(scales[0], scales[1], scales[2], 0.f), 0);
+                alignas(16) u16 scale16[8];
+                _mm_store_si128((__m128i *)scale16, i);
+
+                i = _mm_cvtps_ph(_mm_setr_ps(quat[0], quat[1], quat[2], quat[3]), 0);
+                alignas(16) u16 rot16[8];
+                _mm_store_si128((__m128i *)rot16, i);
+
+                GPUTransform gpuTransform(scale16[0], scale16[1], scale16[2], rot16[0],
+                                          rot16[1], rot16[2], rot16[3], translate16[0],
+                                          translate16[1], translate16[2]);
+                instanceTransforms[transformIndex] = gpuTransform;
             }
-            Vec4f quat = MatrixToQuat(rotation);
-
-            __m128i i = _mm_cvtps_ph(_mm_setr_ps(scales[0], scales[1], scales[2], 0.f), 0);
-            alignas(16) u16 scale16[8];
-            _mm_store_si128((__m128i *)scale16, i);
-
-            i = _mm_cvtps_ph(_mm_setr_ps(quat[0], quat[1], quat[2], quat[3]), 0);
-            alignas(16) u16 rot16[8];
-            _mm_store_si128((__m128i *)rot16, i);
-
-            GPUTransform gpuTransform(scale16[0], scale16[1], scale16[2], rot16[0], rot16[1],
-                                      rot16[2], rot16[3], translate16[0], translate16[1],
-                                      translate16[2]);
-            instanceTransforms.Push(gpuTransform);
-            partitionResourceIDs.Push(partitionInstanceGraph.data[transformIndex].id);
         }
 
         u32 numEllipsoids = 0;
@@ -1714,6 +1707,8 @@ bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
              instanceIndex < partitionInstanceGraph.offsets[partitionIndex + 1];
              instanceIndex++)
         {
+            partitionResourceIDs[instanceIndex] =
+                partitionInstanceGraph.data[instanceIndex].id;
             Instance &instance = partitionInstanceGraph.data[instanceIndex];
             MeshInfo &meshInfo = meshInfos[instance.id];
             // if (meshInfo.ellipsoid.sphere.w != 0.f && meshInfo.cullSubpixel)
@@ -1747,10 +1742,41 @@ bool VirtualGeometryManager::AddInstances(Arena *arena, CommandBuffer *cmd,
         {
             numBigInstances += count;
         }
-        partitionInfos.Push(info);
-    }
+        partitionInfos[partitionIndex] = info;
+    });
     Print("num big instances: %u\n", numBigInstances);
     Print("num not small instances: %u\n", numNotSmallInstances);
+
+    if (computePartitions)
+    {
+        StringBuilderMapped builder(outFilename);
+        u64 numInstanceOffset = AllocateSpace(&builder, sizeof(Vec3u));
+        u32 numInstances      = inputInstances.Length();
+        u32 numTransforms     = transforms.Length();
+        void *ptr             = GetMappedPtr(&builder, numInstanceOffset);
+        MemoryCopy(ptr, &numInstances, sizeof(u32));
+        MemoryCopy((u32 *)ptr + 1, &maxPartitions, sizeof(u32));
+        MemoryCopy((u32 *)ptr + 2, &numTransforms, sizeof(u32));
+
+        u64 offsetsOffset = AllocateSpace(&builder, sizeof(u32) * (maxPartitions + 1));
+        ptr               = GetMappedPtr(&builder, offsetsOffset);
+        MemoryCopy(ptr, partitionInstanceGraph.offsets, sizeof(u32) * (maxPartitions + 1));
+
+        u64 dataOffset = AllocateSpace(
+            &builder, sizeof(Instance) * partitionInstanceGraph.offsets[maxPartitions]);
+        ptr = GetMappedPtr(&builder, dataOffset);
+        MemoryCopy(ptr, partitionInstanceGraph.data,
+                   sizeof(Instance) * partitionInstanceGraph.offsets[maxPartitions]);
+
+        u64 transformOffset =
+            AllocateSpace(&builder, sizeof(GPUTransform) * instanceTransforms.Length());
+        ptr = GetMappedPtr(&builder, transformOffset);
+        MemoryCopy(ptr, instanceTransforms.data,
+                   sizeof(GPUTransform) * instanceTransforms.Length());
+
+        OS_UnmapFile(builder.ptr);
+        OS_ResizeFile(builder.filename, builder.totalSize);
+    }
 
     RenderGraph *rg = GetRenderGraph();
     if (accelBuildInfos.Length())

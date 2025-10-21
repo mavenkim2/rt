@@ -2,6 +2,7 @@
 #define DISNEY_BSDF_HLSLI
 
 #include "../sampling.hlsli"
+#include "bxdf.hlsli"
 #include "../../rt/shader_interop/hit_shaderinterop.h"
 
 float SchlickFresnel(float u)

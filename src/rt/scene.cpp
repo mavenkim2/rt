@@ -1,7 +1,10 @@
 #include "scene.h"
+#include "hash.h"
 #include "macros.h"
 #include "integrate.h"
 #include "memory.h"
+#include "parallel.h"
+#include "radix_sort.h"
 #include "simd_integrate.h"
 #include "spectrum.h"
 #include "shader_interop/hit_shaderinterop.h"
@@ -757,10 +760,9 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
         AffineSpace *dataTransforms = reinterpret_cast<AffineSpace *>(dataTokenizer.cursor);
         if (baseFile && renderFromWorld)
         {
-            for (u32 i = 0; i < count; i++)
-            {
+            ParallelForLoop(0, count, 1024, 1024, [&](u32 jobID, u32 i) {
                 scene->affineTransforms[i] = *renderFromWorld * dataTransforms[i];
-            }
+            });
         }
         else
         {
@@ -779,10 +781,6 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
     ChunkedLinkedList<ScenePrimitives *, MemoryType_Instance> files(temp.arena, 32);
 
     bool hasMaterials = false;
-    if (scene->filename == "objects/xgBreadFruit_archiveBreadFruitBaked_obj.rtscene")
-    {
-        int stop = 5;
-    }
     for (;;)
     {
         if (Advance(&tokenizer, "RTSCENE_END")) break;
@@ -1073,9 +1071,32 @@ int LoadScene(RenderParams2 *params, Arena **tempArenas, string directory, strin
                 &counter, &params->renderFromWorld, true);
     scheduler.Wait(&counter);
 
+    struct SceneHandle
+    {
+        u64 sortKey;
+        u32 index;
+    };
+
+    SceneHandle *handles = PushArrayNoZero(temp.arena, SceneHandle, state.scenes.size());
+    for (u32 handleIndex = 0; handleIndex < state.scenes.size() - 1; handleIndex++)
+    {
+        ScenePrimitives *scene = state.scenes[handleIndex + 1];
+        SceneHandle handle;
+        handle.sortKey       = MurmurHash64A(scene->filename.str, scene->filename.size, 0);
+        handle.index         = handleIndex + 1;
+        handles[handleIndex] = handle;
+    }
+    SortHandles(handles, state.scenes.size() - 1);
+
     int numScenes            = (int)state.scenes.size();
     ScenePrimitives **scenes = PushArrayNoZero(arena, ScenePrimitives *, state.scenes.size());
-    MemoryCopy(scenes, state.scenes.data(), sizeof(ScenePrimitives *) * state.scenes.size());
+
+    scenes[0] = state.scenes[0];
+    for (u32 handleIndex = 0; handleIndex < state.scenes.size() - 1; handleIndex++)
+    {
+        scenes[handleIndex + 1] = state.scenes[handles[handleIndex].index];
+    }
+
     state.scenes.clear();
     SetScenes(scenes);
 

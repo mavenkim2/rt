@@ -14,8 +14,16 @@ Texture2D bindlessTextures[] : register(t0, texture2DSpace);
 Texture2D<float3> bindlessFloat3Textures[] : register(t0, texture2DSpace);
 Texture2D<float4> bindlessFloat4Textures[] : register(t0, texture2DSpace);
 Texture2DArray<float4> bindlessFloat4ArrayTextures[] : register(t0, texture2DSpace);
+
+StructuredBuffer<float> bindlessFloats[] : register(t0, structuredBufferSpace);
 StructuredBuffer<float3> bindlessFloat3s[] : register(t0, structuredBufferSpace);
+StructuredBuffer<float2> bindlessFloat2s[] : register(t0, structuredBufferSpace);
 StructuredBuffer<uint> bindlessUints[] : register(t0, structuredBufferSpace);
+
+RWStructuredBuffer<float> bindlessRWFloats[] : register(u0, structuredBufferSpace);
+RWStructuredBuffer<uint> bindlessRWUints[] : register(u0, structuredBufferSpace);
+RWStructuredBuffer<float2> bindlessRWFloat2s[] : register(u0, structuredBufferSpace);
+RWStructuredBuffer<float3> bindlessRWFloat3s[] : register(u0, structuredBufferSpace);
 
 ByteAddressBuffer bindlessBuffer[] : register(t0, structuredBufferSpace);
 RWTexture2D<uint> bindlessRWTextureUint[] : register(u0, rwTexture2DSpace);
