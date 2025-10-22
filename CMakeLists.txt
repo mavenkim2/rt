@@ -248,6 +248,10 @@ if (USE_GPU)
         "${SHADER_SRC_DIR}/accumulate_frames.hlsl"
         "${SHADER_SRC_DIR}/copy_denoised_output.hlsl"
         "${SHADER_SRC_DIR}/wavefront/shading_kernel.hlsl"
+        "${SHADER_SRC_DIR}/wavefront/ray_kernel.hlsl"
+        "${SHADER_SRC_DIR}/wavefront/miss_kernel.hlsl"
+        "${SHADER_SRC_DIR}/wavefront/prepare_wavefront_indirect.hlsl"
+        "${SHADER_SRC_DIR}/wavefront/generate_primary_ray_kernel.hlsl"
     )
     set_property(SOURCE 
         "${SHADER_SRC_DIR}/clas/task.hlsl"
@@ -256,6 +260,7 @@ if (USE_GPU)
         "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl" 
         "${SHADER_SRC_DIR}/render_raytrace_miss.hlsl"
         "${SHADER_SRC_DIR}/render_raytrace_hit.hlsl"
+        "${SHADER_SRC_DIR}/wavefront/ray_kernel.hlsl"
         PROPERTY name "rt")
     set_property(SOURCE 
         "${SHADER_SRC_DIR}/compress/block_compress.hlsl"
@@ -288,6 +293,9 @@ if (USE_GPU)
         "${SHADER_SRC_DIR}/accumulate_frames.hlsl"
         "${SHADER_SRC_DIR}/copy_denoised_output.hlsl"
         "${SHADER_SRC_DIR}/wavefront/shading_kernel.hlsl"
+        "${SHADER_SRC_DIR}/wavefront/miss_kernel.hlsl"
+        "${SHADER_SRC_DIR}/wavefront/prepare_wavefront_indirect.hlsl"
+        "${SHADER_SRC_DIR}/wavefront/generate_primary_ray_kernel.hlsl"
         PROPERTY name "cs")
     
     file(GLOB_RECURSE SHADER_INCLUDES "${SHADER_SRC_DIR}/*.hlsl" "${SHADER_SRC_DIR}/*.hlsli")

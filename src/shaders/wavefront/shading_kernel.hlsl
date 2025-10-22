@@ -41,18 +41,13 @@ void main(uint3 dtID: SV_DispatchThreadID)
     uint queueIndex = start + dtID.x;
     if (queueIndex >= end) return;
 
-    // TODO: need to set readOffset to writeOffset, probably in an indirect pass
     queueIndex %= WAVEFRONT_QUEUE_SIZE;
-
-    // so we need...
-    // depth, radiance, ray cone, direction, rayT, 
-    // do i make direction part of pixel info? or just toss it in the queue as well
 
     // Shading queue data
     uint clusterID_triangleIndex = GetUint(descriptors.hitShadingQueueClusterIDIndex, queueIndex);
     uint instanceID = GetUint(descriptors.hitShadingQueueInstanceIDIndex, queueIndex);
     float2 bary = GetFloat2(descriptors.hitShadingQueueBaryIndex, queueIndex);
-    uint pixelIndex = GetUint(descriptors.hitShadingQueueInstanceIDIndex, queueIndex);
+    uint pixelIndex = GetUint(descriptors.hitShadingQueuePixelIndex, queueIndex);
     float rayT = GetFloat(descriptors.hitShadingQueueRayTIndex, queueIndex);
     float3 dir = GetFloat3(descriptors.hitShadingQueueDirIndex, queueIndex);
 
@@ -66,15 +61,15 @@ void main(uint3 dtID: SV_DispatchThreadID)
     rayCone.width = pixelInfo.rayConeWidth;
     rayCone.spreadAngle = pixelInfo.rayConeSpread;
 
+    RNG rng;
+    rng.State = pixelInfo.rngState;
+
     // TODO: rays may not share depth
     uint depth = push.depth;
 
     uint2 pixelLocation = uint2(BitFieldExtractU32(packed, 15, 0),
                                 BitFieldExtractU32(packed, 15, 15));
     bool specularBounce = bool(BitFieldExtractU32(packed, 1, 30));
-
-    RNG rng;
-    rng.State = GetUint(descriptors.hitShadingQueueRNGIndex, queueIndex);
 
     uint triangleIndex = BitFieldExtractU32(clusterID_triangleIndex, MAX_CLUSTER_TRIANGLES_BIT, 0);
     uint clusterID = BitFieldExtractU32(clusterID_triangleIndex, 32u - MAX_CLUSTER_TRIANGLES_BIT, MAX_CLUSTER_TRIANGLES_BIT);
@@ -362,14 +357,15 @@ void main(uint3 dtID: SV_DispatchThreadID)
         pixelInfos[pixelIndex].throughput = throughput;
         pixelInfos[pixelIndex].rayConeWidth = rayCone.width;
         pixelInfos[pixelIndex].rayConeSpread = rayCone.spreadAngle;
+        pixelInfos[pixelIndex].rngState = rng.State;
 
         uint writeOffset;
         InterlockedAdd(queues[WAVEFRONT_RAY_QUEUE_INDEX].writeOffset, 1, writeOffset);
         writeOffset %= WAVEFRONT_QUEUE_SIZE;
 
-        StoreFloat3(pos, descriptors.rayQueueRWPosIndex, writeOffset);
-        StoreFloat3(newDir, descriptors.rayQueueRWDirIndex, writeOffset);
-        StoreUint(pixelIndex, descriptors.rayQueueRWPixelIndex, writeOffset);
+        StoreFloat3(pos, descriptors.rayQueuePosIndex, writeOffset);
+        StoreFloat3(newDir, descriptors.rayQueueDirIndex, writeOffset);
+        StoreUint(pixelIndex, descriptors.rayQueuePixelIndex, writeOffset);
     }
 }
 

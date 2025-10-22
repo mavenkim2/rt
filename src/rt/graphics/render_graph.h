@@ -29,6 +29,8 @@ enum class ResourceFlags
     External  = (1u << 1u),
     Buffer    = (1u << 2u),
     Image     = (1u << 3u),
+    Bindless  = (1u << 4u),
+    PTLAS     = (1u << 5u),
 };
 ENUM_CLASS_FLAGS(ResourceFlags)
 
@@ -57,6 +59,11 @@ struct RenderGraphResource
             VkBufferUsageFlags2 bufferUsageFlags;
             GPUBuffer buffer;
             MemoryUsage memUsage;
+            int bindlessBufferIndex;
+        };
+        struct
+        {
+            u64 ptlasAddress;
         };
     };
     u32 alignment;
@@ -133,6 +140,10 @@ struct RenderGraph
     {
         return EnumHasAnyFlags(resource.flags, ResourceFlags::Image);
     };
+    inline bool IsPTLAS(const RenderGraphResource &resource)
+    {
+        return EnumHasAnyFlags(resource.flags, ResourceFlags::PTLAS);
+    };
     ResourceHandle CreateBufferResource(string name, VkBufferUsageFlags2 usageFlags, u32 size,
                                         MemoryUsage memUsage = MemoryUsage::GPU_ONLY,
                                         ResourceFlags flags  = ResourceFlags::Transient |
@@ -146,6 +157,7 @@ struct RenderGraph
     void UpdateBufferResource(ResourceHandle handle, VkBufferUsageFlags2 usageFlags, u32 size);
     ResourceHandle RegisterExternalResource(string name, GPUBuffer *buffer);
     ResourceHandle RegisterExternalResource(string name, GPUImage *image);
+    ResourceHandle RegisterExternalResource(string name, u64 ptlasAddress);
     int Overlap(const ResourceLifeTimeRange &lhs, const ResourceLifeTimeRange &rhs) const;
     Pass &StartPass(u32 numResources, PassFunction &&func);
     Pass &StartComputePass(VkPipeline pipeline, DescriptorSetLayout &layout, u32 numResources,
@@ -167,6 +179,7 @@ struct RenderGraph
     GPUBuffer *GetBuffer(ResourceHandle handle, u32 &offset, u32 &size);
     GPUBuffer *GetBuffer(ResourceHandle handle, u32 &offset);
     GPUBuffer *GetBuffer(ResourceHandle handle);
+    int GetBufferBindlessIndex(ResourceHandle handle);
     GPUImage *GetImage(ResourceHandle handle);
 
     template <typename T>
