@@ -248,10 +248,14 @@ if (USE_GPU)
         "${SHADER_SRC_DIR}/accumulate_frames.hlsl"
         "${SHADER_SRC_DIR}/copy_denoised_output.hlsl"
         "${SHADER_SRC_DIR}/wavefront/shading_kernel.hlsl"
-        "${SHADER_SRC_DIR}/wavefront/ray_kernel.hlsl"
         "${SHADER_SRC_DIR}/wavefront/miss_kernel.hlsl"
         "${SHADER_SRC_DIR}/wavefront/prepare_wavefront_indirect.hlsl"
         "${SHADER_SRC_DIR}/wavefront/generate_primary_ray_kernel.hlsl"
+        "${SHADER_SRC_DIR}/wavefront/shadow_kernel.hlsl"
+        "${SHADER_SRC_DIR}/sort/radix_sort.hlsl"
+        "${SHADER_SRC_DIR}/sort/radix_sort_histogram.hlsl"
+        "${SHADER_SRC_DIR}/wavefront/find_ray_min_max.hlsl"
+        "${SHADER_SRC_DIR}/wavefront/generate_ray_kernel_keys.hlsl"
     )
     set_property(SOURCE 
         "${SHADER_SRC_DIR}/clas/task.hlsl"
@@ -296,8 +300,16 @@ if (USE_GPU)
         "${SHADER_SRC_DIR}/wavefront/miss_kernel.hlsl"
         "${SHADER_SRC_DIR}/wavefront/prepare_wavefront_indirect.hlsl"
         "${SHADER_SRC_DIR}/wavefront/generate_primary_ray_kernel.hlsl"
+        "${SHADER_SRC_DIR}/wavefront/shadow_kernel.hlsl"
+        "${SHADER_SRC_DIR}/sort/radix_sort.hlsl"
+        "${SHADER_SRC_DIR}/sort/radix_sort_histogram.hlsl"
+        "${SHADER_SRC_DIR}/wavefront/find_ray_min_max.hlsl"
+        "${SHADER_SRC_DIR}/wavefront/generate_ray_kernel_keys.hlsl"
         PROPERTY name "cs")
-    
+    set_property(SOURCE 
+        "${SHADER_SRC_DIR}/wavefront/generate_primary_ray_kernel.hlsl"
+        PROPERTY macros "SECONDARY")
+
     file(GLOB_RECURSE SHADER_INCLUDES "${SHADER_SRC_DIR}/*.hlsl" "${SHADER_SRC_DIR}/*.hlsli")
     file(GLOB_RECURSE SHADER_INTEROP "${CMAKE_CURRENT_SOURCE_DIR}/src/rt/shader_interop/*.h")
     
@@ -309,7 +321,6 @@ if (USE_GPU)
         get_filename_component(SHADER_NAME ${SHADER_FILE} NAME_WE)
         get_property(SHADER_TYPE SOURCE ${SHADER_FILE} PROPERTY name)
         set(SHADER_SPV ${SHADER_SPV_DIR}/${SHADER_NAME}.spv)
-        # set(SHADER_SPV ${SHADER_SPV_DIR}/${SHADER_NAME}.cso)
     
         if (${SHADER_TYPE} STREQUAL "rt")
             set (SHADER_TYPE_FLAG "-T lib_6_6")
@@ -334,8 +345,41 @@ if (USE_GPU)
         list (APPEND SHADER_SPV_FILES ${SHADER_SPV})
     endforeach()
     
+    set(SHADER_SPV "${SHADER_SPV_DIR}/ray_kernel_primary.spv")
+    set(SHADER_FILE "${SHADER_SRC_DIR}/wavefront/ray_kernel.hlsl")
+    add_custom_command(
+        OUTPUT ${SHADER_SPV}
+        COMMAND ${SHADER_COMPILER} 
+        "-spirv" "-fspv-target-env=vulkan1.3" "-fvk-use-scalar-layout" 
+        "-Wno-parameter-usage"
+        "-T lib_6_6" "$<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:-Zi>" 
+        "$<$<CONFIG:Release>:-O3>"
+        "-Fo ${SHADER_SPV}" "${SHADER_FILE}" 
+        DEPENDS ${SHADER_FILE} ${SHADER_INCLUDES} ${SHADER_INTEROP}
+        COMMENT "Compiling HLSL shader: ${SHADER_FILE} -> ${SHADER_SPV}"
+        VERBATIM
+    )
+    list (APPEND SHADER_SPV_FILES ${SHADER_SPV})
+
+    set(SHADER_SPV "${SHADER_SPV_DIR}/ray_kernel_secondary.spv")
+    add_custom_command(
+        OUTPUT ${SHADER_SPV}
+        COMMAND ${SHADER_COMPILER} 
+        "-spirv" "-fspv-target-env=vulkan1.3" "-fvk-use-scalar-layout" 
+        "-D SECONDARY"
+        "-Wno-parameter-usage"
+        "-T lib_6_6" "$<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:-Zi>" 
+        "$<$<CONFIG:Release>:-O3>"
+        "-Fo ${SHADER_SPV}" "${SHADER_FILE}" 
+        DEPENDS ${SHADER_FILE} ${SHADER_INCLUDES} ${SHADER_INTEROP}
+        COMMENT "Compiling HLSL shader: ${SHADER_FILE} -> ${SHADER_SPV}"
+        VERBATIM
+    )
+    list (APPEND SHADER_SPV_FILES ${SHADER_SPV})
+
     add_custom_target(shaders DEPENDS ${SHADER_SPV_FILES})
 endif()
+
 
 # convert
 set (CONVERT_SOURCE_FILES

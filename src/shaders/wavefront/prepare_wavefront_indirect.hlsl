@@ -1,8 +1,10 @@
 #include "../../rt/shader_interop/wavefront_shaderinterop.h"
+#include "../../rt/shader_interop/radix_sort_shaderinterop.h"
 #include "wavefront_helper.hlsli"
 
 RWStructuredBuffer<WavefrontQueue> queues : register(u0);
 RWStructuredBuffer<uint> indirectBuffer : register(u1);
+RWStructuredBuffer<uint> indirectSortBuffer : register(u2);
 
 [[vk::push_constant]] WavefrontPushConstant pc;
 
@@ -28,5 +30,9 @@ void main(uint3 dtID : SV_DispatchThreadID)
         indirectBuffer[3 * dispatchQueueIndex] = numToDispatchX;
         indirectBuffer[3 * dispatchQueueIndex + 1] = 1;
         indirectBuffer[3 * dispatchQueueIndex + 2] = 1;
+
+        indirectSortBuffer[3 * dispatchQueueIndex] = (numToDispatch + SORT_WORKGROUP_SIZE - 1) / SORT_WORKGROUP_SIZE;
+        indirectSortBuffer[3 * dispatchQueueIndex + 1] = 1;
+        indirectSortBuffer[3 * dispatchQueueIndex + 2] = 1;
     }
 }
