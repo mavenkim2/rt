@@ -133,10 +133,6 @@ static void FlattenInstances(ScenePrimitives *currentScene, const AffineSpace &t
         Instance &instance = sceneInstances[i];
         AffineSpace newTransform =
             transform * currentScene->affineTransforms[instance.transformIndex];
-        if (newTransform[0][0] > 1e10)
-        {
-            int stop = 5;
-        }
         ScenePrimitives *nextScene = currentScene->childScenes[instance.id];
 
         if (nextScene->geometryType == GeometryType::Instance)
@@ -381,6 +377,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     missKernelLayout.AddBinding(4, DescriptorType::StorageImage, VK_SHADER_STAGE_COMPUTE_BIT);
     missKernelLayout.AddBinding(5, DescriptorType::StorageBuffer, VK_SHADER_STAGE_COMPUTE_BIT);
     missKernelLayout.AddBinding(6, DescriptorType::StorageImage, VK_SHADER_STAGE_COMPUTE_BIT);
+    missKernelLayout.AddImmutableSamplers();
 
     VkPipeline missKernelPipeline = device->CreateComputePipeline(
         &missKernelShader, &missKernelLayout, &missKernelPC, "miss kernel pipeline");
@@ -410,7 +407,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                VK_SHADER_STAGE_RAYGEN_BIT_KHR);
 
     RayTracingShaderGroup wavefrontGroups[3];
-    wavefrontGroups[0].shaders[0] = raygenShader;
+    wavefrontGroups[0].shaders[0] = rayKernelShader;
     wavefrontGroups[0].numShaders = 1;
     wavefrontGroups[0].stage[0]   = ShaderStage::Raygen;
 
@@ -451,16 +448,23 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                    VK_SHADER_STAGE_COMPUTE_BIT);
     shadingKernelLayout.AddBinding(8, DescriptorType::StorageBuffer,
                                    VK_SHADER_STAGE_COMPUTE_BIT);
-    shadingKernelLayout.AddBinding(9, DescriptorType::StorageImage,
+    shadingKernelLayout.AddBinding(9, DescriptorType::StorageBuffer,
                                    VK_SHADER_STAGE_COMPUTE_BIT);
     shadingKernelLayout.AddBinding(10, DescriptorType::StorageBuffer,
                                    VK_SHADER_STAGE_COMPUTE_BIT);
-    shadingKernelLayout.AddBinding(11, DescriptorType::StorageImage,
+    shadingKernelLayout.AddBinding(11, DescriptorType::StorageBuffer,
                                    VK_SHADER_STAGE_COMPUTE_BIT);
-    shadingKernelLayout.AddBinding(12, DescriptorType::StorageBuffer,
+    shadingKernelLayout.AddBinding(12, DescriptorType::StorageImage,
                                    VK_SHADER_STAGE_COMPUTE_BIT);
     shadingKernelLayout.AddBinding(13, DescriptorType::StorageBuffer,
                                    VK_SHADER_STAGE_COMPUTE_BIT);
+    shadingKernelLayout.AddBinding(14, DescriptorType::StorageImage,
+                                   VK_SHADER_STAGE_COMPUTE_BIT);
+    shadingKernelLayout.AddBinding(15, DescriptorType::StorageBuffer,
+                                   VK_SHADER_STAGE_COMPUTE_BIT);
+    shadingKernelLayout.AddBinding(16, DescriptorType::StorageBuffer,
+                                   VK_SHADER_STAGE_COMPUTE_BIT);
+    shadingKernelLayout.AddImmutableSamplers();
 
     VkPipeline shadingKernelPipeline =
         device->CreateComputePipeline(&shadingKernelShader, &shadingKernelLayout,
@@ -595,14 +599,19 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         sizeof(WavefrontDescriptors));
 
     ResourceHandle pixelInfosBuffer = rg->CreateBufferResource(
-        "pixel infos buffer", VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(PixelInfo) * maxRays);
+        "pixel infos buffer",
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        sizeof(PixelInfo) * maxRays);
 
     ResourceHandle wavefrontQueuesBuffer = rg->CreateBufferResource(
-        "wavefront queues buffer", VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, sizeof(WavefrontQueue));
+        "wavefront queues buffer",
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        sizeof(WavefrontQueue) * WAVEFRONT_NUM_QUEUES);
 
     ResourceHandle rayQueuePosBuffer = rg->CreateBufferResource(
-        "ray queue pos buffer", VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, maxRays * sizeof(Vec3f),
-        MemoryUsage::GPU_ONLY,
+        "ray queue pos buffer",
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        maxRays * sizeof(Vec3f), MemoryUsage::GPU_ONLY,
         ResourceFlags::Transient | ResourceFlags::Buffer | ResourceFlags::Bindless);
 
     ResourceHandle rayQueueDirBuffer = rg->CreateBufferResource(
@@ -1306,11 +1315,15 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     u64 ptlasAddress = device->GetDeviceAddress(virtualGeometryManager.tlasAccelBuffer.buffer);
     ResourceHandle ptlasHandle = rg->RegisterExternalResource("ptlas", ptlasAddress);
-    FixedArray<ResourceHandle, 2> feedbackBufferHandles;
+    FixedArray<ResourceHandle, 2> feedbackBufferHandles(2);
     feedbackBufferHandles[0] = rg->RegisterExternalResource(
         "feedback buffer 0", &virtualTextureManager.feedbackBuffers[0].buffer);
     feedbackBufferHandles[1] = rg->RegisterExternalResource(
         "feedback buffer 1", &virtualTextureManager.feedbackBuffers[1].buffer);
+    ResourceHandle pageHashTableBufferHandle = rg->RegisterExternalResource(
+        "page hash table buffer", &virtualTextureManager.pageHashTableBuffer);
+    ResourceHandle faceDataBufferHandle =
+        rg->RegisterExternalResource("face data buffer", &faceDataBuffer);
 
     f32 time = OS_GetMilliseconds(counter);
     printf("scene initialization time: %fms\n", time);
@@ -1672,49 +1685,82 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             const u32 totalTiles  = numTilesX * numTilesY;
 
             // Prepare descriptors
-            rg->StartPass(1, [&](CommandBuffer *cmd) {
-                  WavefrontDescriptors descriptors;
-                  descriptors.rayQueuePosIndex = rg->GetBufferBindlessIndex(rayQueuePosBuffer);
-                  descriptors.rayQueueDirIndex = rg->GetBufferBindlessIndex(rayQueueDirBuffer);
-                  descriptors.rayQueuePixelIndex =
-                      rg->GetBufferBindlessIndex(rayQueuePixelBuffer);
-                  descriptors.missQueuePixelIndex =
-                      rg->GetBufferBindlessIndex(missQueuePixelBuffer);
-                  descriptors.missQueueDirIndex =
-                      rg->GetBufferBindlessIndex(missQueueDirBuffer);
-                  descriptors.hitShadingQueueClusterIDIndex =
-                      rg->GetBufferBindlessIndex(hitShadingQueueClusterIDBuffer);
-                  descriptors.hitShadingQueueInstanceIDIndex =
-                      rg->GetBufferBindlessIndex(hitShadingQueueInstanceIDBuffer);
-                  descriptors.hitShadingQueueBaryIndex =
-                      rg->GetBufferBindlessIndex(hitShadingQueueBaryBuffer);
-                  descriptors.hitShadingQueuePixelIndex =
-                      rg->GetBufferBindlessIndex(hitShadingQueuePixelBuffer);
-                  descriptors.hitShadingQueueRNGIndex =
-                      rg->GetBufferBindlessIndex(hitShadingQueueRNGBuffer);
-                  descriptors.hitShadingQueueRayTIndex =
-                      rg->GetBufferBindlessIndex(hitShadingQueueRayTBuffer);
-                  descriptors.hitShadingQueueDirIndex =
-                      rg->GetBufferBindlessIndex(hitShadingQueueDirBuffer);
+            rg->StartPass(13,
+                          [&](CommandBuffer *cmd) {
+                              WavefrontDescriptors descriptors;
+                              descriptors.rayQueuePosIndex =
+                                  rg->GetBufferBindlessIndex(rayQueuePosBuffer);
+                              descriptors.rayQueueDirIndex =
+                                  rg->GetBufferBindlessIndex(rayQueueDirBuffer);
+                              descriptors.rayQueuePixelIndex =
+                                  rg->GetBufferBindlessIndex(rayQueuePixelBuffer);
+                              descriptors.missQueuePixelIndex =
+                                  rg->GetBufferBindlessIndex(missQueuePixelBuffer);
+                              descriptors.missQueueDirIndex =
+                                  rg->GetBufferBindlessIndex(missQueueDirBuffer);
+                              descriptors.hitShadingQueueClusterIDIndex =
+                                  rg->GetBufferBindlessIndex(hitShadingQueueClusterIDBuffer);
+                              descriptors.hitShadingQueueInstanceIDIndex =
+                                  rg->GetBufferBindlessIndex(hitShadingQueueInstanceIDBuffer);
+                              descriptors.hitShadingQueueBaryIndex =
+                                  rg->GetBufferBindlessIndex(hitShadingQueueBaryBuffer);
+                              descriptors.hitShadingQueuePixelIndex =
+                                  rg->GetBufferBindlessIndex(hitShadingQueuePixelBuffer);
+                              descriptors.hitShadingQueueRNGIndex =
+                                  rg->GetBufferBindlessIndex(hitShadingQueueRNGBuffer);
+                              descriptors.hitShadingQueueRayTIndex =
+                                  rg->GetBufferBindlessIndex(hitShadingQueueRayTBuffer);
+                              descriptors.hitShadingQueueDirIndex =
+                                  rg->GetBufferBindlessIndex(hitShadingQueueDirBuffer);
 
-                  GPUBuffer *buffer = rg->GetBuffer(wavefrontDescriptorsBuffer);
-                  MemoryCopy(wavefrontDescriptorsStagingBuffer.mappedPtr, &descriptors,
-                             sizeof(descriptors));
-                  cmd->CopyBuffer(buffer, &wavefrontDescriptorsStagingBuffer);
-                  cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                               VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                               VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
-                  cmd->FlushBarriers();
-              }).AddHandle(wavefrontDescriptorsBuffer, ResourceUsageType::Write);
+                              GPUBuffer *buffer = rg->GetBuffer(wavefrontDescriptorsBuffer);
+                              MemoryCopy(wavefrontDescriptorsStagingBuffer.mappedPtr,
+                                         &descriptors, sizeof(descriptors));
+                              cmd->CopyBuffer(buffer, &wavefrontDescriptorsStagingBuffer);
+                              cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                           VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                           VK_ACCESS_2_SHADER_WRITE_BIT |
+                                               VK_ACCESS_2_SHADER_READ_BIT);
+                              GPUImage *imageGPU = rg->GetImage(image);
+                              GPUImage *albedo   = rg->GetImage(albedoHandle);
+                              cmd->Barrier(imageGPU, VK_IMAGE_LAYOUT_UNDEFINED,
+                                           VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_NONE,
+                                           VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                                           VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_WRITE_BIT);
+                              cmd->Barrier(albedo, VK_IMAGE_LAYOUT_UNDEFINED,
+                                           VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_NONE,
+                                           VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                                           VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_WRITE_BIT);
+                              cmd->FlushBarriers();
+                          })
+                .AddHandle(wavefrontDescriptorsBuffer, ResourceUsageType::Write)
+                .AddHandle(rayQueuePosBuffer, ResourceUsageType::RW)
+                .AddHandle(rayQueueDirBuffer, ResourceUsageType::RW)
+                .AddHandle(rayQueuePixelBuffer, ResourceUsageType::RW)
+                .AddHandle(missQueuePixelBuffer, ResourceUsageType::RW)
+                .AddHandle(missQueueDirBuffer, ResourceUsageType::RW)
+                .AddHandle(hitShadingQueueClusterIDBuffer, ResourceUsageType::RW)
+                .AddHandle(hitShadingQueueInstanceIDBuffer, ResourceUsageType::RW)
+                .AddHandle(hitShadingQueueBaryBuffer, ResourceUsageType::RW)
+                .AddHandle(hitShadingQueuePixelBuffer, ResourceUsageType::RW)
+                .AddHandle(hitShadingQueueRNGBuffer, ResourceUsageType::RW)
+                .AddHandle(hitShadingQueueRayTBuffer, ResourceUsageType::RW)
+                .AddHandle(hitShadingQueueDirBuffer, ResourceUsageType::RW);
 
             for (u32 tileIndex = 0; tileIndex < totalTiles; tileIndex += maxTiles)
             {
-                u32 numRaysToTrace = Min((totalTiles - tileIndex) * tileNumRays, maxRays);
+                u32 numTilesInDispatch = Min(totalTiles - tileIndex, maxTiles);
                 // Clear queues
                 rg->StartPass(1, [&](CommandBuffer *cmd) {
+                      cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                   VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                   VK_ACCESS_2_SHADER_WRITE_BIT,
+                                   VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                      cmd->FlushBarriers();
                       GPUBuffer *buffer = rg->GetBuffer(wavefrontQueuesBuffer);
                       cmd->ClearBuffer(buffer);
+
                       cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                    VK_ACCESS_2_TRANSFER_WRITE_BIT,
@@ -1729,27 +1775,26 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 generateRayPush.filterIntegral = filterDistribution.marginal.Integral();
                 generateRayPush.startTileIndex = tileIndex;
 
-                GenerateRayPushConstant *pc = rg->Allocate(&generateRayPush, 1);
-
                 // Generate rays
                 rg->StartComputePass(
-                      generatePrimaryRayPipeline, generatePrimaryRayLayout, 5,
-                      [&](CommandBuffer *cmd) {
+                      generatePrimaryRayPipeline, generatePrimaryRayLayout, 6,
+                      [&, numTilesInDispatch](CommandBuffer *cmd) {
                           device->BeginEvent(cmd, "Generate primary rays");
-                          GPUBuffer *buffer = rg->GetBuffer(wavefrontQueuesBuffer);
-                          cmd->ClearBuffer(buffer);
-                          cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                          cmd->Dispatch(numTilesInDispatch, 1, 1);
+                          cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                       VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                       VK_ACCESS_2_SHADER_WRITE_BIT,
                                        VK_ACCESS_2_SHADER_WRITE_BIT |
                                            VK_ACCESS_2_SHADER_READ_BIT);
                           cmd->FlushBarriers();
                           device->EndEvent(cmd);
                       },
-                      &generateRayPC, pc)
+                      &generateRayPC, &generateRayPush)
                     .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::Write)
                     .AddHandle(wavefrontDescriptorsBuffer, ResourceUsageType::Read)
                     .AddHandle(pixelInfosBuffer, ResourceUsageType::Write)
+                    .AddHandle(sceneTransferBufferHandles[currentBuffer],
+                               ResourceUsageType::Read)
                     .AddHandle(filterCDFBufferHandle, ResourceUsageType::Read)
                     .AddHandle(filterValuesBufferHandle, ResourceUsageType::Read);
 
@@ -1758,15 +1803,14 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 wpc.dispatchQueueIndex = WAVEFRONT_RAY_QUEUE_INDEX;
                 wpc.finishedQueueIndex = -1;
 
-                WavefrontPushConstant *rayPush = rg->Allocate(&wpc, 1);
-
                 rg->StartComputePass(
                       prepareWavefrontPipeline, prepareWavefrontLayout, 2,
                       [&](CommandBuffer *cmd) {
                           device->BeginEvent(cmd, "prepare ray kernel");
                           cmd->Dispatch(1, 1, 1);
                           cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                       VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                                       VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
+                                           VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
                                        VK_ACCESS_2_SHADER_WRITE_BIT,
                                        VK_ACCESS_2_SHADER_WRITE_BIT |
                                            VK_ACCESS_2_SHADER_READ_BIT |
@@ -1774,15 +1818,23 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                           cmd->FlushBarriers();
                           device->EndEvent(cmd);
                       },
-                      &prepareWavefrontPC, rayPush)
+                      &prepareWavefrontPC, &wpc)
                     .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::RW)
                     .AddHandle(wavefrontIndirectBuffer, ResourceUsageType::RW);
 
-                for (u32 depth = 0; depth < maxDepth; depth++)
+                for (u32 depth = 0; depth <= maxDepth; depth++)
                 {
+                    RayPushConstant rayPc;
+                    rayPc.envMap         = envMapBindlessIndex;
+                    rayPc.frameNum       = (u32)device->frameCount;
+                    rayPc.width          = envMap->width;
+                    rayPc.height         = envMap->height;
+                    rayPc.filterIntegral = filterDistribution.marginal.Integral();
+                    rayPc.depth          = depth;
+
                     // Trace rays
                     rg->StartPass(
-                          2,
+                          3,
                           [&](CommandBuffer *cmd) {
                               GPUBuffer *wavefrontQueues =
                                   rg->GetBuffer(wavefrontQueuesBuffer);
@@ -1790,6 +1842,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                   rg->GetBuffer(wavefrontDescriptorsBuffer);
                               GPUBuffer *wavefrontIndirect =
                                   rg->GetBuffer(wavefrontIndirectBuffer);
+                              device->BeginEvent(cmd, "trace rays");
                               cmd->StartBinding(bindPoint, wavefrontPipelineState.pipeline,
                                                 &rayKernelLayout)
                                   .Bind(&ptlasAddress)
@@ -1805,6 +1858,55 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                            VK_ACCESS_2_SHADER_WRITE_BIT |
                                                VK_ACCESS_2_SHADER_READ_BIT);
                               cmd->FlushBarriers();
+                              device->EndEvent(cmd);
+
+                              // if (device->frameCount > 5)
+                              // {
+                              //     GPUBuffer *buffer   = rg->GetBuffer(rayQueuePixelBuffer);
+                              //     GPUBuffer readback0 = device->CreateBuffer(
+                              //         VK_BUFFER_USAGE_TRANSFER_DST_BIT, buffer->size,
+                              //         MemoryUsage::GPU_TO_CPU);
+                              //     cmd->Barrier(
+                              //         VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                              //         VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                              //         VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                              //         VK_ACCESS_2_TRANSFER_READ_BIT);
+                              //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                              //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                              //                  VK_ACCESS_2_SHADER_WRITE_BIT,
+                              //                  VK_ACCESS_2_TRANSFER_READ_BIT);
+                              //     cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                              //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                              //                  VK_ACCESS_2_SHADER_WRITE_BIT,
+                              //                  VK_ACCESS_2_TRANSFER_READ_BIT);
+                              //
+                              //     cmd->FlushBarriers();
+                              //
+                              //     cmd->CopyBuffer(&readback0, buffer);
+                              //     // cmd->CopyBuffer(&readback2, buffer1);
+                              //     // cmd->CopyImageToBuffer(&readback0,
+                              //     // &filterWeightsImage,
+                              //     // &copy,
+                              //     // 1);
+                              //     Semaphore testSemaphore   = device->CreateSemaphore();
+                              //     testSemaphore.signalValue = 1;
+                              //     cmd->SignalOutsideFrame(testSemaphore);
+                              //     device->SubmitCommandBuffer(cmd);
+                              //     device->Wait(testSemaphore);
+                              //
+                              //     u32 *data = (u32 *)readback0.mappedPtr;
+                              //     // u32 *data = (u32 *)readback0.mappedPtr;
+                              //     // Vec3f *data = (Vec3f
+                              //     // *)readback0.mappedPtr; for (int i = 0; i
+                              //     // < numRaysToTrace; i++)
+                              //     // {
+                              //     //     Vec3f &val = data[i];
+                              //     //     Print("%f %f %f\n", val.x, val.y,
+                              //     //     val.z);
+                              //     // }
+                              //
+                              //     int stop = 5;
+                              // }
                           })
                         .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::Write)
                         .AddHandle(wavefrontDescriptorsBuffer, ResourceUsageType::Read)
@@ -1815,15 +1917,14 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     wpc0.dispatchQueueIndex = WAVEFRONT_MISS_QUEUE_INDEX;
                     wpc0.finishedQueueIndex = WAVEFRONT_RAY_QUEUE_INDEX;
 
-                    WavefrontPushConstant *missPush = rg->Allocate(&wpc0, 1);
-
                     rg->StartComputePass(
                           prepareWavefrontPipeline, prepareWavefrontLayout, 2,
                           [&](CommandBuffer *cmd) {
                               device->BeginEvent(cmd, "prepare miss kernel");
                               cmd->Dispatch(1, 1, 1);
                               cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                               VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
                                            VK_ACCESS_2_SHADER_WRITE_BIT,
                                            VK_ACCESS_2_SHADER_WRITE_BIT |
                                                VK_ACCESS_2_SHADER_READ_BIT |
@@ -1831,7 +1932,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                               cmd->FlushBarriers();
                               device->EndEvent(cmd);
                           },
-                          &prepareWavefrontPC, missPush)
+                          &prepareWavefrontPC, &wpc0)
                         .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::RW)
                         .AddHandle(wavefrontIndirectBuffer, ResourceUsageType::RW);
 
@@ -1840,15 +1941,14 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     wpc1.dispatchQueueIndex = WAVEFRONT_SHADE_QUEUE_INDEX;
                     wpc1.finishedQueueIndex = -1;
 
-                    WavefrontPushConstant *shadePush = rg->Allocate(&wpc1, 1);
-
                     rg->StartComputePass(
                           prepareWavefrontPipeline, prepareWavefrontLayout, 2,
                           [&](CommandBuffer *cmd) {
                               device->BeginEvent(cmd, "prepare shade kernel");
                               cmd->Dispatch(1, 1, 1);
                               cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                               VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
                                            VK_ACCESS_2_SHADER_WRITE_BIT,
                                            VK_ACCESS_2_SHADER_WRITE_BIT |
                                                VK_ACCESS_2_SHADER_READ_BIT |
@@ -1856,15 +1956,16 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                               cmd->FlushBarriers();
                               device->EndEvent(cmd);
                           },
-                          &prepareWavefrontPC, shadePush)
+                          &prepareWavefrontPC, &wpc1)
                         .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::RW)
                         .AddHandle(wavefrontIndirectBuffer, ResourceUsageType::RW);
 
                     // Miss kernel
-                    rg->StartIndirectComputePass("miss kernel pass", missKernelPipeline,
-                                                 missKernelLayout, 7, wavefrontIndirectBuffer,
-                                                 sizeof(u32) * 3 * WAVEFRONT_MISS_QUEUE_INDEX,
-                                                 [&](CommandBuffer *cmd) {})
+                    rg->StartIndirectComputePass(
+                          "miss kernel pass", missKernelPipeline, missKernelLayout, 7,
+                          wavefrontIndirectBuffer,
+                          sizeof(u32) * 3 * WAVEFRONT_MISS_QUEUE_INDEX,
+                          [&](CommandBuffer *cmd) {}, &missKernelPC, &rayPc)
                         .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::RW)
                         .AddHandle(wavefrontDescriptorsBuffer, ResourceUsageType::Read)
                         .AddHandle(sceneTransferBufferHandles[currentBuffer],
@@ -1877,7 +1978,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     // Shading kernel
                     rg->StartIndirectComputePass(
                           "shading kernel pass", shadingKernelPipeline, shadingKernelLayout,
-                          13, wavefrontIndirectBuffer,
+                          17, wavefrontIndirectBuffer,
                           sizeof(u32) * 3 * WAVEFRONT_SHADE_QUEUE_INDEX,
                           [&](CommandBuffer *cmd) {
                               cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -1886,7 +1987,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                            VK_ACCESS_2_SHADER_WRITE_BIT |
                                                VK_ACCESS_2_SHADER_READ_BIT);
                               cmd->FlushBarriers();
-                          })
+                          },
+                          &shadingKernelPC, &rayPc)
                         .AddHandle(ptlasHandle, ResourceUsageType::Read)
                         .AddHandle(wavefrontDescriptorsBuffer, ResourceUsageType::Read)
                         .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::RW)
@@ -1894,13 +1996,17 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                    ResourceUsageType::Read)
                         .AddHandle(virtualGeometryManager.resourceBufferHandle,
                                    ResourceUsageType::Read)
+                        .AddHandle(pageHashTableBufferHandle, ResourceUsageType::Read)
                         .AddHandle(virtualGeometryManager.instanceTransformsBufferHandle,
                                    ResourceUsageType::Read)
                         .AddHandle(materialBufferHandle, ResourceUsageType::Read)
+                        .AddHandle(virtualGeometryManager.clusterPageDataBufferHandle,
+                                   ResourceUsageType::Read)
                         .AddHandle(virtualGeometryManager.partitionInfosBufferHandle,
                                    ResourceUsageType::Read)
                         .AddHandle(virtualGeometryManager.instancesBufferHandle,
                                    ResourceUsageType::Read)
+                        .AddHandle(faceDataBufferHandle, ResourceUsageType::Read)
                         .AddHandle(albedoHandle, ResourceUsageType::Write)
                         .AddHandle(normalsHandle, ResourceUsageType::Write)
                         .AddHandle(image, ResourceUsageType::Write)
@@ -1908,12 +2014,12 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                         .AddHandle(feedbackBufferHandles[currentBuffer],
                                    ResourceUsageType::RW);
 
+                    if (depth == maxDepth) break;
+
                     // Prepare next ray kernel
                     WavefrontPushConstant wpc2;
                     wpc2.dispatchQueueIndex = WAVEFRONT_RAY_QUEUE_INDEX;
                     wpc2.finishedQueueIndex = WAVEFRONT_MISS_QUEUE_INDEX;
-
-                    WavefrontPushConstant *rayPush = rg->Allocate(&wpc2, 1);
 
                     rg->StartComputePass(
                           prepareWavefrontPipeline, prepareWavefrontLayout, 2,
@@ -1921,7 +2027,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                               device->BeginEvent(cmd, "prepare ray kernel");
                               cmd->Dispatch(1, 1, 1);
                               cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                           VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                                           VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
+                                               VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
                                            VK_ACCESS_2_SHADER_WRITE_BIT,
                                            VK_ACCESS_2_SHADER_WRITE_BIT |
                                                VK_ACCESS_2_SHADER_READ_BIT |
@@ -1929,7 +2036,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                               cmd->FlushBarriers();
                               device->EndEvent(cmd);
                           },
-                          &prepareWavefrontPC, rayPush)
+                          &prepareWavefrontPC, &wpc2)
                         .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::RW)
                         .AddHandle(wavefrontIndirectBuffer, ResourceUsageType::RW);
 
@@ -1938,14 +2045,14 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     wpc3.dispatchQueueIndex = -1;
                     wpc3.finishedQueueIndex = WAVEFRONT_SHADE_QUEUE_INDEX;
 
-                    WavefrontPushConstant *shadeFlush = rg->Allocate(&wpc3, 1);
                     rg->StartComputePass(
                           prepareWavefrontPipeline, prepareWavefrontLayout, 2,
                           [&](CommandBuffer *cmd) {
                               device->BeginEvent(cmd, "flush shade kernel");
                               cmd->Dispatch(1, 1, 1);
                               cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                           VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                                           VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
+                                               VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
                                            VK_ACCESS_2_SHADER_WRITE_BIT,
                                            VK_ACCESS_2_SHADER_WRITE_BIT |
                                                VK_ACCESS_2_SHADER_READ_BIT |
@@ -1953,11 +2060,24 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                               cmd->FlushBarriers();
                               device->EndEvent(cmd);
                           },
-                          &prepareWavefrontPC, shadeFlush)
+                          &prepareWavefrontPC, &wpc3)
                         .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::RW)
                         .AddHandle(wavefrontIndirectBuffer, ResourceUsageType::RW);
                 }
             }
+            rg->StartPass(12, [](CommandBuffer *cmd) {})
+                .AddHandle(rayQueuePosBuffer, ResourceUsageType::RW)
+                .AddHandle(rayQueueDirBuffer, ResourceUsageType::RW)
+                .AddHandle(rayQueuePixelBuffer, ResourceUsageType::RW)
+                .AddHandle(missQueuePixelBuffer, ResourceUsageType::RW)
+                .AddHandle(missQueueDirBuffer, ResourceUsageType::RW)
+                .AddHandle(hitShadingQueueClusterIDBuffer, ResourceUsageType::RW)
+                .AddHandle(hitShadingQueueInstanceIDBuffer, ResourceUsageType::RW)
+                .AddHandle(hitShadingQueueBaryBuffer, ResourceUsageType::RW)
+                .AddHandle(hitShadingQueuePixelBuffer, ResourceUsageType::RW)
+                .AddHandle(hitShadingQueueRNGBuffer, ResourceUsageType::RW)
+                .AddHandle(hitShadingQueueRayTBuffer, ResourceUsageType::RW)
+                .AddHandle(hitShadingQueueDirBuffer, ResourceUsageType::RW);
 
 #if 0
             rg->StartPass(
@@ -2093,60 +2213,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 .AddHandle(accumulatedAlbedoHandle, ResourceUsageType::Write);
         }
 
-        // if (debug) // numBlas - 1)
-        // {
-        //     // RenderGraph *rg = GetRenderGraph();
-        //     GPUBuffer readback0 = device->CreateBuffer(
-        //         VK_BUFFER_USAGE_TRANSFER_DST_BIT, imageOut.size,
-        //         MemoryUsage::GPU_TO_CPU);
-        //     cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-        //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-        //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-        //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     // cmd->Barrier(&imageOut, VK_IMAGE_LAYOUT_GENERAL,
-        //     //              VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        //     //              VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-        //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //     // VK_ACCESS_2_SHADER_WRITE_BIT,
-        //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-        //
-        //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-        //     //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //     //     // VK_ACCESS_2_SHADER_WRITE_BIT,
-        //     //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     cmd->FlushBarriers();
-        //
-        //     // BufferImageCopy copy = {};
-        //     // copy.extent =
-        //     //     Vec3u(filterWeightsImage.desc.width,
-        //     // filterWeightsImage.desc.height,
-        //     // 1);
-        //
-        //     cmd->CopyBuffer(&readback0, &imageOut);
-        //     // cmd->CopyBuffer(&readback2, buffer1);
-        //     // cmd->CopyImageToBuffer(&readback0, &filterWeightsImage, &copy, 1);
-        //     Semaphore testSemaphore   = device->CreateSemaphore();
-        //     testSemaphore.signalValue = 1;
-        //     cmd->SignalOutsideFrame(testSemaphore);
-        //     device->SubmitCommandBuffer(cmd);
-        //     device->Wait(testSemaphore);
-        //
-        //     Vec3f *data = (Vec3f *)readback0.mappedPtr;
-        //     for (int i = 0; i < targetHeight; i++)
-        //     {
-        //         for (int j = 0; j < targetWidth; j++)
-        //         {
-        //             Vec3f val = data[i * targetWidth + j];
-        //             Print("%f %f %f\n", val.x, val.y, val.z);
-        //         }
-        //     }
-        //
-        //     int stop = 5;
-        // }
-
         Pass &pass = rg->StartComputePass(
             copyDenoisedPipeline, copyDenoisedLayout, 2, [&](CommandBuffer *cmd) {
                 GPUImage *image = rg->GetImage(finalImageHandle);
@@ -2162,7 +2228,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 device->EndEvent(cmd);
             });
 
-        if (numFramesAccumulated > numFramesUntilDenoise)
+        if (0) // numFramesAccumulated > numFramesUntilDenoise)
         {
             pass.AddHandle(imageOutHandle, ResourceUsageType::Read);
         }
@@ -2184,9 +2250,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         debugState.EndFrame(cmd);
 
-        rg->StartPass(1, [&swapchain, finalImageHandle](CommandBuffer *cmd) {
-              GPUImage *image = GetRenderGraph()->GetImage(finalImageHandle);
-              device->CopyFrameBuffer(&swapchain, cmd, image);
+        rg->StartPass(1, [&swapchain, image](CommandBuffer *cmd) {
+              GPUImage *gpuImage = GetRenderGraph()->GetImage(image);
+              device->CopyFrameBuffer(&swapchain, cmd, gpuImage);
           }).AddHandle(finalImageHandle, ResourceUsageType::Read);
 
         rg->Compile();

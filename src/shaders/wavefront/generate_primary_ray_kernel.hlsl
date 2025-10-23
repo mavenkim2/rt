@@ -88,9 +88,6 @@ void main(uint3 dtID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint gro
     filterSample += float2(0.5, 0.5) + float2(swizzledThreadID);
     float2 pLens = rng.Uniform2D();
 
-    half3 throughput = 1;
-    half3 radiance = 0;
-
     float3 pos;
     float3 dir;
     float3 dpdx, dpdy, dddx, dddy;
@@ -108,7 +105,7 @@ void main(uint3 dtID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint gro
 
     PixelInfo info;
     info.radiance = 0;
-    info.throughput = 0;
+    info.throughput = 1;
     info.pixelLocation_specularBounce = (swizzledThreadID.y << 15u) | swizzledThreadID.x;
     info.rayConeWidth = 0.f;
     info.rayConeSpread = atan(2.f * tan(scene.fov / 2.f) / scene.height);

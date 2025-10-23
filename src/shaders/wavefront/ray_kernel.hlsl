@@ -27,15 +27,18 @@ ConstantBuffer<WavefrontDescriptors> descriptors : register(b2);
 void main()
 {
     uint3 dtID = DispatchRaysIndex();
+    uint3 rayDims = DispatchRaysDimensions();
+    uint threadIndex = dtID.x;
+
     uint start = queues[WAVEFRONT_RAY_QUEUE_INDEX].readOffset;
     uint end = queues[WAVEFRONT_RAY_QUEUE_INDEX].writeOffset;
-    uint queueIndex = start + dtID.x;
+    uint queueIndex = start + threadIndex;
+
     if (queueIndex >= end) return;
     queueIndex %= WAVEFRONT_QUEUE_SIZE;
 
     float3 pos = GetFloat3(descriptors.rayQueuePosIndex, queueIndex);
     float3 dir = GetFloat3(descriptors.rayQueueDirIndex, queueIndex);
-    uint pixelIndex = GetUint(descriptors.rayQueuePixelIndex, queueIndex);
 
     RayDesc desc;
     desc.Origin = pos;
@@ -51,8 +54,11 @@ void main()
     if (query.CommittedStatus() == COMMITTED_NOTHING)
     {
         uint outIndex;
-        InterlockedAdd(queues[WAVEFRONT_RAY_QUEUE_INDEX].writeOffset, 1, outIndex);
+        InterlockedAdd(queues[WAVEFRONT_MISS_QUEUE_INDEX].writeOffset, 1, outIndex);
 
+        outIndex %= WAVEFRONT_QUEUE_SIZE;
+
+        uint pixelIndex = GetUint(descriptors.rayQueuePixelIndex, queueIndex);
         StoreUint(pixelIndex, descriptors.missQueuePixelIndex, outIndex);
         StoreFloat3(dir, descriptors.missQueueDirIndex, outIndex);
     }
@@ -68,12 +74,13 @@ void main()
         uint instanceID = query.CommittedInstanceID();
         float2 bary = query.CommittedTriangleBarycentrics();
 
+        uint pixelIndex = GetUint(descriptors.rayQueuePixelIndex, queueIndex);
         uint clusterID_triangleIndex = (clusterID << MAX_CLUSTER_TRIANGLES_BIT) | triangleIndex;
         StoreUint(clusterID_triangleIndex, descriptors.hitShadingQueueClusterIDIndex, outIndex);
         StoreUint(instanceID, descriptors.hitShadingQueueInstanceIDIndex, outIndex);
         StoreFloat2(bary, descriptors.hitShadingQueueBaryIndex, outIndex);
-        StoreUint(pixelIndex, descriptors.hitShadingQueuePixelIndex, queueIndex);
-        StoreFloat(query.CommittedRayT(), descriptors.hitShadingQueueRayTIndex, queueIndex);
-        StoreFloat3(dir, descriptors.hitShadingQueueDirIndex, queueIndex);
+        StoreUint(pixelIndex, descriptors.hitShadingQueuePixelIndex, outIndex);
+        StoreFloat(query.CommittedRayT(), descriptors.hitShadingQueueRayTIndex, outIndex);
+        StoreFloat3(dir, descriptors.hitShadingQueueDirIndex, outIndex);
     }
 }

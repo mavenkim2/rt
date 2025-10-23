@@ -22,8 +22,10 @@ void main(uint3 dtID : SV_DispatchThreadID)
         uint numToDispatch = queues[dispatchQueueIndex].writeOffset 
                              - queues[dispatchQueueIndex].readOffset;
 
-        numToDispatch = dispatchQueueIndex == WAVEFRONT_RAY_QUEUE_INDEX ? numToDispatch : (numToDispatch + 31) / 32;
-        indirectBuffer[3 * dispatchQueueIndex] = numToDispatch;
+        bool isRayTrace = dispatchQueueIndex == WAVEFRONT_RAY_QUEUE_INDEX;
+        uint numToDispatchX = isRayTrace ? numToDispatch : (numToDispatch + 31) / 32;
+
+        indirectBuffer[3 * dispatchQueueIndex] = numToDispatchX;
         indirectBuffer[3 * dispatchQueueIndex + 1] = 1;
         indirectBuffer[3 * dispatchQueueIndex + 2] = 1;
     }
