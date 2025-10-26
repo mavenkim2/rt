@@ -12,7 +12,6 @@ ConstantBuffer<GPUScene> scene : register(b3);
 StructuredBuffer<float> filterCDF : register(t4);
 StructuredBuffer<float> filterValues : register(t5);
 RWStructuredBuffer<int> pixelInfoFreeList : register(u6);
-StructuredBuffer<uint> tileInfo : register(t7);
 
 [[vk::push_constant]] GenerateRayPushConstant push;
 
@@ -21,7 +20,7 @@ void main(uint3 dtID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint gro
 {
     uint imageWidth = push.imageWidth;
     uint imageHeight = push.imageHeight;
-    uint startTileIndex = tileInfo[0];
+    uint startTileIndex = push.startTileIndex;
     const uint tileWidth = 8;
     const uint numTilesX = (imageWidth + tileWidth - 1) / tileWidth;
     const uint numTilesY = (imageHeight + tileWidth - 1) / tileWidth;

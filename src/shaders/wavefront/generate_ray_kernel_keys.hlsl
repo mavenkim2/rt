@@ -28,7 +28,7 @@ void main(uint3 dtID : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex)
     float3 maxPos = -FLT_MAX;
     float3 minPos = FLT_MAX;
 
-    uint numGroups = indirectBuffer[3 * WAVEFRONT_RAY_SORT_INDEX + 0];
+    uint numGroups = indirectBuffer[3 * WAVEFRONT_RAY_QUEUE_INDEX + 0];
     uint waveLaneCount = WaveGetLaneCount();
 
     for (uint i = groupIndex; i < numGroups; i += WORKGROUP_SIZE)

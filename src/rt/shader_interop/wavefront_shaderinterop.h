@@ -18,6 +18,7 @@ struct GenerateRayPushConstant
 {
     int imageWidth;
     int imageHeight;
+    int startTileIndex;
     int frameNum;
     float filterIntegral;
 };
@@ -26,7 +27,7 @@ struct WavefrontPushConstant
 {
     int finishedQueueIndex;
     int dispatchQueueIndex;
-    int flush;
+    bool flush;
 };
 
 struct PixelInfo
@@ -83,8 +84,7 @@ struct WavefrontDescriptors
 #define WAVEFRONT_SHADE_QUEUE_INDEX          1
 #define WAVEFRONT_MISS_QUEUE_INDEX           2
 #define WAVEFRONT_GENERATE_CAMERA_RAYS_INDEX 3
-#define WAVEFRONT_RAY_SORT_INDEX             4
-#define WAVEFRONT_NUM_QUEUES                 5
+#define WAVEFRONT_NUM_QUEUES                 4
 
 #ifdef __cplusplus
 }
