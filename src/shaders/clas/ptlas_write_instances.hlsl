@@ -48,5 +48,5 @@ void main(uint3 dtID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint gro
         worldFromObject = ConvertGPUMatrix(instanceTransforms[instance.transformIndex], info.base, info.scale);
         aabb = aabbs[instance.resourceID];
     }
-    WritePTLASDescriptors(worldFromObject, address, instanceIndex, instanceIndex, aabb, update, flags);
+    WritePTLASDescriptors(worldFromObject, address, instanceIndex, instance.resourceID, aabb, update, flags);
 }

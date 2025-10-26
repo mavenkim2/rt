@@ -257,14 +257,4 @@ float AngleBetween(float3 v1, float3 v2)
     return 2 * asin(length(v2 - v1) / 2.f);
 }
 
-uint MortonCode3(uint x)
-{
-    x &= 0x000003ff;
-    x = (x ^ (x << 16)) & 0xff0000ff;
-    x = (x ^ (x << 8)) & 0x0300f00f;
-    x = (x ^ (x << 4)) & 0x030c30c3;
-    x = (x ^ (x << 2)) & 0x09249249;
-    return x;
-}
-
 #endif

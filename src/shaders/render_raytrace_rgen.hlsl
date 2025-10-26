@@ -231,8 +231,7 @@ void main()
 
             uint triangleIndex = query.CommittedPrimitiveIndex();
             float2 bary = query.CommittedTriangleBarycentrics();
-
-            uint baseAddress = resources[gpuInstances[instanceID].resourceID].baseAddress;
+            uint baseAddress = resources[instanceID].baseAddress;
             DenseGeometry dg = GetDenseGeometryHeader2(clusterID, baseAddress);
 
             materialID = dg.DecodeMaterialID(triangleIndex);

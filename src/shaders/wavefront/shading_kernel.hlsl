@@ -83,8 +83,7 @@ void main(uint3 dtID: SV_DispatchThreadID)
     uint pageIndex = GetPageIndexFromClusterID(clusterID); 
     uint clusterIndex = GetClusterIndexFromClusterID(clusterID);
     
-    GPUInstance instance = gpuInstances[instanceID];
-    uint baseAddress = resources[instance.resourceID].baseAddress;
+    uint baseAddress = resources[instanceID].baseAddress;
     DenseGeometry dg = GetDenseGeometryHeader2(clusterID, baseAddress);
     
     uint materialID = dg.DecodeMaterialID(triangleIndex);
@@ -173,6 +172,7 @@ void main(uint3 dtID: SV_DispatchThreadID)
         reflectance = material.baseColor;
     }
 
+    GPUInstance instance = gpuInstances[instanceID];
     PartitionInfo info = partitionInfos[instance.partitionIndex];
     float3x4 objectToWorld = ConvertGPUMatrix(instanceTransforms[instance.transformIndex], info.base, info.scale);
     float3 origin = TransformP(objectToWorld, hitInfo.hitP);
@@ -191,7 +191,6 @@ void main(uint3 dtID: SV_DispatchThreadID)
     float3 wo = normalize(float3(dot(hitInfo.ss, -dir), dot(frameY, -dir), dot(hitInfo.n, -dir)));
 
     // NEE
-#if 0
     if (!(material.roughness == 0.f && material.specTrans == 1.f))
     {
         float lightSample = rng.Uniform();
@@ -295,16 +294,6 @@ void main(uint3 dtID: SV_DispatchThreadID)
 
         if (all(bsdfVal > 0.f))
         {
-#if 0
-            uint writeOffset;
-            InterlockedAdd(queues[WAVEFRONT_RAY_QUEUE_INDEX].writeOffset, 1, writeOffset);
-            writeOffset %= WAVEFRONT_QUEUE_SIZE;
-
-            StoreFloat3(pos, descriptors.rayQueuePosIndex, writeOffset);
-            StoreFloat3(newDir, descriptors.rayQueueDirIndex, writeOffset);
-            StoreUint(pixelIndex, descriptors.rayQueuePixelIndex, writeOffset);
-#endif
-#if 0
             RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> occludedQuery;
             RayDesc occludedDesc;
             occludedDesc.Origin = OffsetRayOrigin(origin, hitInfo.gn);
@@ -326,9 +315,7 @@ void main(uint3 dtID: SV_DispatchThreadID)
                 radiance += r;
             }
         }
-#endif
     }
-#endif
 
     float2 sample = rng.Uniform2D();
     float sample2 = rng.Uniform();

@@ -58,10 +58,6 @@ struct WavefrontDescriptors
     int rayQueueDirIndex;
     int rayQueuePixelIndex;
 
-    // Ray kernel sorting
-    int rayQueueMinPosIndex;
-    int rayQueueMaxPosIndex;
-
     // Miss kernel
     int missQueuePixelIndex;
     int missQueueDirIndex;

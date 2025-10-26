@@ -23,28 +23,19 @@ RaytracingAccelerationStructure accel : register(t0);
 RWStructuredBuffer<WavefrontQueue> queues : register(u1);
 ConstantBuffer<WavefrontDescriptors> descriptors : register(b2);
 
-#ifdef SECONDARY
-#include "../../rt/shader_interop/radix_sort_shaderinterop.h"
-StructuredBuffer<SortKey> sortKeys : register(t3);
-#endif
-
 [shader("raygeneration")]
 void main()
 {
     uint3 dtID = DispatchRaysIndex();
+    uint3 rayDims = DispatchRaysDimensions();
     uint threadIndex = dtID.x;
 
     uint start = queues[WAVEFRONT_RAY_QUEUE_INDEX].readOffset;
     uint end = queues[WAVEFRONT_RAY_QUEUE_INDEX].writeOffset;
-#ifndef SECONDARY
     uint queueIndex = start + threadIndex;
 
     if (queueIndex >= end) return;
     queueIndex %= WAVEFRONT_QUEUE_SIZE;
-#else
-    if (threadIndex >= end - start) return;
-    uint queueIndex = sortKeys[threadIndex].index;
-#endif
 
     float3 pos = GetFloat3(descriptors.rayQueuePosIndex, queueIndex);
     float3 dir = GetFloat3(descriptors.rayQueueDirIndex, queueIndex);
