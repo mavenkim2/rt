@@ -2396,12 +2396,6 @@ int Vulkan::BindlessStorageIndex(GPUBuffer *buffer, size_t offset, size_t range)
     return index;
 }
 
-void Vulkan::FreeBindlessStorageIndex(int index)
-{
-    BindlessDescriptorPool &descriptorPool = bindlessDescriptorPools[1];
-    descriptorPool.Free(index);
-}
-
 u64 Vulkan::GetMinAlignment(VkBufferUsageFlags flags)
 {
     u64 minAlignment = 0;
@@ -2886,13 +2880,6 @@ void CommandBuffer::TraceRays(RayTracingState *state, u32 width, u32 height, u32
 {
     vkCmdTraceRaysKHR(buffer, &state->raygen, &state->miss, &state->hit, &state->call, width,
                       height, depth);
-}
-
-void CommandBuffer::TraceRaysIndirect(RayTracingState *state, GPUBuffer *indirect, u32 offset)
-{
-    u64 indirectAddress = device->GetDeviceAddress(indirect) + offset;
-    vkCmdTraceRaysIndirectKHR(buffer, &state->raygen, &state->miss, &state->hit, &state->call,
-                              indirectAddress);
 }
 
 void CommandBuffer::Dispatch(u32 groupCountX, u32 groupCountY, u32 groupCountZ)

@@ -108,20 +108,6 @@ ResourceHandle RenderGraph::RegisterExternalResource(string name, GPUImage *imag
     return handle;
 }
 
-ResourceHandle RenderGraph::RegisterExternalResource(string name, u64 ptlasAddress)
-{
-    RenderGraphResource resource = {};
-    resource.name                = PushStr8Copy(arena, name);
-    resource.flags               = ResourceFlags::External | ResourceFlags::PTLAS;
-    resource.ptlasAddress        = ptlasAddress;
-
-    ResourceHandle handle;
-    handle.index = resources.Length();
-
-    resources.Push(resource);
-    return handle;
-}
-
 int RenderGraph::Overlap(const ResourceLifeTimeRange &lhs,
                          const ResourceLifeTimeRange &rhs) const
 {
@@ -234,10 +220,6 @@ void RenderGraph::BindResources(Pass &pass, DescriptorSet &ds)
         {
             ds.Bind(&resource.image, pass.subresources[handleIndex]);
         }
-        else if (IsPTLAS(resource))
-        {
-            ds.Bind(&resource.ptlasAddress);
-        }
     }
 }
 
@@ -266,13 +248,6 @@ GPUBuffer *RenderGraph::GetBuffer(ResourceHandle handle)
     // Assert(EnumHasAllFlags(resource.flags, ResourceFlags::Transient |
     // ResourceFlags::Buffer));
     return &resource.buffer;
-}
-
-int RenderGraph::GetBufferBindlessIndex(ResourceHandle handle)
-{
-    RenderGraphResource &resource = resources[handle.index];
-    Assert(EnumHasAllFlags(resource.flags, ResourceFlags::Buffer | ResourceFlags::Bindless));
-    return resource.bindlessBufferIndex;
 }
 
 GPUImage *RenderGraph::GetImage(ResourceHandle handle)
@@ -311,10 +286,6 @@ void RenderGraph::Compile()
             if (resource.buffer.buffer)
             {
                 device->DestroyBufferHandle(&resource.buffer);
-                if (resource.bindlessBufferIndex != -1)
-                {
-                    device->FreeBindlessStorageIndex(resource.bindlessBufferIndex);
-                }
             }
             resource.buffer = device->CreateAliasedBuffer(resource.bufferUsageFlags,
                                                           resource.size, resource.memUsage);
@@ -569,11 +540,6 @@ void RenderGraph::Compile()
             else if (IsBuffer(r))
             {
                 device->BindBufferMemory(resource.alloc, r.buffer.buffer, r.aliasOffset);
-                if (EnumHasAnyFlags(r.flags, ResourceFlags::Bindless))
-                {
-                    int bindlessIndex     = device->BindlessStorageIndex(&r.buffer);
-                    r.bindlessBufferIndex = bindlessIndex;
-                }
             }
             index = r.aliasNext;
         }

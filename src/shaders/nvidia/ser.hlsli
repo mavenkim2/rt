@@ -1,7 +1,7 @@
 #ifndef SER_HLSLI_
 #define SER_HLSLI_
 
-#include "../payload.hlsli"
+#include "payload.hlsli"
 
 #define HitObjectAttributeNV 5385
 #define OpHitObjectRecordHitMotionNV 5249

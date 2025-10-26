@@ -8,27 +8,6 @@ namespace rt
 {
 #endif
 
-struct WavefrontQueue
-{
-    uint readOffset;
-    uint writeOffset;
-};
-
-struct GenerateRayPushConstant
-{
-    int imageWidth;
-    int imageHeight;
-    int startTileIndex;
-    int frameNum;
-    float filterIntegral;
-};
-
-struct WavefrontPushConstant
-{
-    int finishedQueueIndex;
-    int dispatchQueueIndex;
-};
-
 struct PixelInfo
 {
     float3 radiance;
@@ -36,7 +15,6 @@ struct PixelInfo
     uint pixelLocation_specularBounce;
     float rayConeWidth;
     float rayConeSpread;
-    uint rngState;
 };
 
 struct WavefrontDescriptors
@@ -58,9 +36,9 @@ struct WavefrontDescriptors
     int rayQueueDirIndex;
     int rayQueuePixelIndex;
 
-    // Miss kernel
-    int missQueuePixelIndex;
-    int missQueueDirIndex;
+    int rayQueueRWPosIndex;
+    int rayQueueRWDirIndex;
+    int rayQueueRWPixelIndex;
 
     // Hit shading
     int hitShadingQueueClusterIDIndex;
@@ -70,13 +48,19 @@ struct WavefrontDescriptors
     int hitShadingQueueRNGIndex;
     int hitShadingQueueRayTIndex;
     int hitShadingQueueDirIndex;
+
+    int hitShadingQueueRWClusterIDIndex;
+    int hitShadingQueueRWInstanceIDIndex;
+    int hitShadingQueueRWBaryIndex;
+    int hitShadingQueueRWPixelIndex;
+    int hitShadingQueueRWRNGIndex;
+    int hitShadingQueueRWRayTIndex;
+    int hitShadingQueueRWDirIndex;
 };
 
 #define WAVEFRONT_QUEUE_SIZE        (1u << 20u)
-#define WAVEFRONT_RAY_QUEUE_INDEX   0
-#define WAVEFRONT_SHADE_QUEUE_INDEX 1
-#define WAVEFRONT_MISS_QUEUE_INDEX  2
-#define WAVEFRONT_NUM_QUEUES        3
+#define WAVEFRONT_RAY_QUEUE_INDEX   1
+#define WAVEFRONT_SHADE_QUEUE_INDEX 2
 
 #ifdef __cplusplus
 }

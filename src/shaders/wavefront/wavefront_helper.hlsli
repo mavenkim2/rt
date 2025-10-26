@@ -3,6 +3,12 @@
 
 #include "../common.hlsli"
 
+struct WavefrontQueue 
+{
+    uint readOffset;
+    uint writeOffset;
+};
+
 void StoreFloat3(float3 f, uint descriptorIndex, uint index)
 {
     bindlessRWFloat3s[descriptorIndex][index] = f;

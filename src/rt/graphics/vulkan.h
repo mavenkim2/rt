@@ -797,7 +797,6 @@ struct CommandBuffer
     ResourceBinding StartBindingCompute(VkPipeline pipeline, DescriptorSetLayout *layout);
 
     void TraceRays(RayTracingState *state, u32 width, u32 height, u32 depth);
-    void TraceRaysIndirect(RayTracingState *state, GPUBuffer *indirect, u32 offset);
     void Dispatch(u32 groupCountX, u32 groupCountY, u32 groupCountZ);
     void DispatchIndirect(GPUBuffer *buffer, u32 offset = 0);
     void Barrier(GPUImage *image, VkImageLayout oldLayout, VkImageLayout newLayout,
@@ -1169,7 +1168,6 @@ struct Vulkan
     int BindlessStorageIndex(GPUImage *image, int subresourceIndex = -1);
     int BindlessStorageIndex(GPUBuffer *buffer, size_t offset = 0,
                              size_t range = VK_WHOLE_SIZE);
-    void FreeBindlessStorageIndex(int index);
     u64 GetMinAlignment(VkBufferUsageFlags flags);
     TransferBuffer GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSize,
                                     int numRanges = 0);

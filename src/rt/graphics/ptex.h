@@ -3,7 +3,6 @@
 
 #include <Ptexture.h>
 #include "../platform.h"
-#include "render_graph.h"
 #include "vulkan.h"
 #include "../image.h"
 #include "../shader_interop/virtual_textures_shaderinterop.h"
