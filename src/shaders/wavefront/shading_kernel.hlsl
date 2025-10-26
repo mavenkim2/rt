@@ -18,17 +18,17 @@ ConstantBuffer<WavefrontDescriptors> descriptors : register(b1);
 RWStructuredBuffer<WavefrontQueue> queues : register(u2);
 ConstantBuffer<GPUScene> scene : register(b3);
 StructuredBuffer<Resource> resources : register(t4);
-StructuredBuffer<GPUTransform> instanceTransforms : register(t6);
-StructuredBuffer<GPUMaterial> materials : register(t7);
-StructuredBuffer<PartitionInfo> partitionInfos : register(t9);
-StructuredBuffer<GPUInstance> gpuInstances : register(t10);
+StructuredBuffer<GPUTransform> instanceTransforms : register(t5);
+StructuredBuffer<GPUMaterial> materials : register(t6);
+StructuredBuffer<PartitionInfo> partitionInfos : register(t7);
+StructuredBuffer<GPUInstance> gpuInstances : register(t8);
 
-RWTexture2D<float4> albedo : register(u12);
-RWStructuredBuffer<float3> normals : register(u13);
-RWTexture2D<float4> image : register(u14);
+RWTexture2D<float4> albedo : register(u9);
+RWStructuredBuffer<float3> normals : register(u10);
+RWTexture2D<float4> image : register(u11);
 
-RWStructuredBuffer<PixelInfo> pixelInfos : register(u15);
-RWStructuredBuffer<uint> feedbackBuffer : register(u16);
+RWStructuredBuffer<PixelInfo> pixelInfos : register(u12);
+RWStructuredBuffer<uint> feedbackBuffer : register(u13);
 
 [[vk::push_constant]] RayPushConstant push;
 
@@ -64,17 +64,11 @@ void main(uint3 dtID: SV_DispatchThreadID)
     RNG rng;
     rng.State = pixelInfo.rngState;
 
-    uint2 pixelLocation = uint2(BitFieldExtractU32(packed, 15, 0),
-                                BitFieldExtractU32(packed, 15, 15));
-
     // TODO: rays may not share depth
     uint depth = push.depth;
-    if (depth == 3)
-    {
-        image[pixelLocation] = float4(radiance, 1);
-        return;
-    }
 
+    uint2 pixelLocation = uint2(BitFieldExtractU32(packed, 15, 0),
+                                BitFieldExtractU32(packed, 15, 15));
     bool specularBounce = bool(BitFieldExtractU32(packed, 1, 30));
 
     uint triangleIndex = BitFieldExtractU32(clusterID_triangleIndex, MAX_CLUSTER_TRIANGLES_BIT, 0);
@@ -141,7 +135,7 @@ void main(uint3 dtID: SV_DispatchThreadID)
         Ptex::FaceData faceData = Ptex::GetFaceData(material, hitInfo.faceID);
         int2 dim = int2(1u << faceData.log2Dim.x, 1u << faceData.log2Dim.y);
 
-        float surfaceSpreadAngle = depth == 0 ? rayCone.CalculatePrimaryHitUnifiedSurfaceSpreadAngle(dir, hitInfo.n, hitInfo.p0, hitInfo.p1, hitInfo.p2, hitInfo.n0, hitInfo.n1, hitInfo.n2) 
+        float surfaceSpreadAngle = depth == 1 ? rayCone.CalculatePrimaryHitUnifiedSurfaceSpreadAngle(dir, hitInfo.n, hitInfo.p0, hitInfo.p1, hitInfo.p2, hitInfo.n0, hitInfo.n1, hitInfo.n2) 
             : rayCone.CalculateSecondaryHitSurfaceSpreadAngle(dir, hitInfo.n, hitInfo.p0, hitInfo.p1, hitInfo.p2, hitInfo.n0, hitInfo.n1, hitInfo.n2);
         rayCone.Propagate(surfaceSpreadAngle, rayT);
         float lambda = rayCone.ComputeTextureLOD(hitInfo.p0, hitInfo.p1, hitInfo.p2, hitInfo.uv0, hitInfo.uv1, hitInfo.uv2, dir, hitInfo.n, dim);
@@ -150,7 +144,7 @@ void main(uint3 dtID: SV_DispatchThreadID)
         uint tileIndex = 0;
         reflectance = SampleStochasticCatmullRomBorderless(faceData, material, hitInfo.faceID, hitInfo.uv, mipLevel, filterU, tileIndex);
 
-        if (depth == 0)
+        if (depth == 1)
         {
             uint2 feedbackRequest = uint2(material.textureIndex | (tileIndex << 16u), hitInfo.faceID | (mipLevel << 28u));
             uint4 mask = WaveMatch(feedbackRequest.x);
@@ -322,6 +316,7 @@ void main(uint3 dtID: SV_DispatchThreadID)
 
     float3 sample3 = float3(sample, sample2);
 
+    uint2 virtualPage = ~0u;
     float bsdfPdf;
     dir = SampleDisney(material, sample3, reflectance.xyz, throughput, wo, bsdfPdf);
 
@@ -329,12 +324,12 @@ void main(uint3 dtID: SV_DispatchThreadID)
 
     bool bounceWasSpecular = material.roughness == 0.f && material.specTrans == 1.f;
     uint index = scene.width * pixelLocation.y + pixelLocation.x;
-    if (depth == 0 && !bounceWasSpecular)
+    if (depth == 1 && !bounceWasSpecular)
     {
         normals[index] = hitInfo.n;
         albedo[pixelLocation] = bounceWasSpecular ? 1 : reflectance;
     }
-    else if (depth == 1 && specularBounce)
+    else if (depth == 2 && specularBounce)
     {
         normals[index] = hitInfo.n;
         albedo[pixelLocation] = 1;

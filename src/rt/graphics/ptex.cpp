@@ -765,7 +765,6 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd)
                 u32 faceID             = BitFieldExtractU32(feedbackRequest.y, 28, 0);
                 u32 mipLevel           = BitFieldExtractU32(feedbackRequest.y, 4, 28);
 
-                Assert(faceID < textureInfo[textureIndex].numFaces);
                 u8 faceSizes = textureInfo[textureIndex].faceDataSizes[faceID];
                 u32 maxMip   = Max(BitFieldExtractU32(faceSizes, 4, 0),
                                    BitFieldExtractU32(faceSizes, 4, 4));

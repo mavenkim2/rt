@@ -213,18 +213,17 @@ struct RenderGraph
     }
 
     template <typename T>
-    Pass &StartIndirectComputePass(string name, VkPipeline pipeline,
-                                   DescriptorSetLayout &layout, u32 numResources,
-                                   ResourceHandle indirectBuffer, u32 indirectBufferOffset,
-                                   PassFunction &&func, PushConstant *pc, T *push)
+    Pass &StartIndirectComputePass(VkPipeline pipeline, DescriptorSetLayout &layout,
+                                   u32 numResources, ResourceHandle indirectBuffer,
+                                   u32 indirectBufferOffset, PassFunction &&func,
+                                   PushConstant *pc, T *push)
     {
-        string str    = PushStr8Copy(arena, name);
         u32 passIndex = passes.Length();
         Assert(push);
         T *p = (T *)PushArrayNoZero(arena, u8, sizeof(T));
         MemoryCopy(p, push, sizeof(T));
         auto AddComputePass = [pc, p, passIndex, this, func, indirectBuffer,
-                               indirectBufferOffset, pipeline, str](CommandBuffer *cmd) {
+                               indirectBufferOffset, pipeline](CommandBuffer *cmd) {
             Pass &pass = passes[passIndex];
             cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
             DescriptorSet ds = pass.layout->CreateDescriptorSet();
@@ -233,12 +232,10 @@ struct RenderGraph
                                     pass.layout->pipelineLayout);
             cmd->PushConstants(pc, p, pass.layout->pipelineLayout);
 
-            device->BeginEvent(cmd, str);
             RenderGraphResource &resource = resources[indirectBuffer.index];
             cmd->DispatchIndirect(&resource.buffer, indirectBufferOffset);
 
             func(cmd);
-            device->EndEvent(cmd);
         };
         Pass pass;
         pass.pipeline           = pipeline;

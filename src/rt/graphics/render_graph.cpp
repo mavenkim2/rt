@@ -35,7 +35,6 @@ ResourceHandle RenderGraph::CreateBufferResource(string name, VkBufferUsageFlags
     resource.buffer.buffer       = VK_NULL_HANDLE;
     resource.flags               = flags;
     resource.memUsage            = memUsage;
-    resource.bindlessBufferIndex = -1;
 
     ResourceHandle handle;
     handle.index = resources.Length();
@@ -312,11 +311,9 @@ void RenderGraph::Compile()
             if (resource.buffer.buffer)
             {
                 device->DestroyBufferHandle(&resource.buffer);
-                if (EnumHasAnyFlags(resource.flags, ResourceFlags::Bindless) &&
-                    resource.bindlessBufferIndex != -1)
+                if (resource.bindlessBufferIndex != -1)
                 {
                     device->FreeBindlessStorageIndex(resource.bindlessBufferIndex);
-                    resource.bindlessBufferIndex = -1;
                 }
             }
             resource.buffer = device->CreateAliasedBuffer(resource.bufferUsageFlags,
@@ -539,6 +536,12 @@ void RenderGraph::Compile()
             req.alignment = resource.maxAlignment;
             req.size      = resource.bufferSize;
             req.usage     = resource.memUsage;
+
+            // if (EnumHasAnyFlags(resource.memUsage, MemoryUsage::EXTERNAL))
+            // {
+            //     DebugBreak();
+            //     int stop = 5;
+            // }
 
             resource.alloc   = device->AllocateMemory(req);
             resource.isAlloc = true;
