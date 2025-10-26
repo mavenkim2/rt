@@ -256,6 +256,7 @@ if (USE_GPU)
         "${SHADER_SRC_DIR}/sort/radix_sort_histogram.hlsl"
         "${SHADER_SRC_DIR}/wavefront/find_ray_min_max.hlsl"
         "${SHADER_SRC_DIR}/wavefront/generate_ray_kernel_keys.hlsl"
+        "${SHADER_SRC_DIR}/wavefront/initialize_pixel_info_free_list.hlsl"
     )
     set_property(SOURCE 
         "${SHADER_SRC_DIR}/clas/task.hlsl"
@@ -305,10 +306,8 @@ if (USE_GPU)
         "${SHADER_SRC_DIR}/sort/radix_sort_histogram.hlsl"
         "${SHADER_SRC_DIR}/wavefront/find_ray_min_max.hlsl"
         "${SHADER_SRC_DIR}/wavefront/generate_ray_kernel_keys.hlsl"
+        "${SHADER_SRC_DIR}/wavefront/initialize_pixel_info_free_list.hlsl"
         PROPERTY name "cs")
-    set_property(SOURCE 
-        "${SHADER_SRC_DIR}/wavefront/generate_primary_ray_kernel.hlsl"
-        PROPERTY macros "SECONDARY")
 
     file(GLOB_RECURSE SHADER_INCLUDES "${SHADER_SRC_DIR}/*.hlsl" "${SHADER_SRC_DIR}/*.hlsli")
     file(GLOB_RECURSE SHADER_INTEROP "${CMAKE_CURRENT_SOURCE_DIR}/src/rt/shader_interop/*.h")

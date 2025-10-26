@@ -316,6 +316,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     Shader radixSortHistogramShader =
         device->CreateShader(ShaderStage::Compute, "radix sort histogram", shaderData);
 
+    shaderName = "../src/shaders/initialize_pixel_info_free_list.spv";
+    shaderData = OS_ReadFile(arena, shaderName);
+    Shader initializePixelInfoFreeListShader = device->CreateShader(
+        ShaderStage::Compute, "initialize pixel info free list", shaderData);
+
     // Compile pipelines
 
     // prepare indirect
@@ -384,6 +389,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                         VK_SHADER_STAGE_COMPUTE_BIT);
     generatePrimaryRayLayout.AddBinding(5, DescriptorType::StorageBuffer,
                                         VK_SHADER_STAGE_COMPUTE_BIT);
+    generatePrimaryRayLayout.AddBinding(6, DescriptorType::StorageBuffer,
+                                        VK_SHADER_STAGE_COMPUTE_BIT);
 
     VkPipeline generatePrimaryRayPipeline =
         device->CreateComputePipeline(&generatePrimaryRayShader, &generatePrimaryRayLayout,
@@ -403,6 +410,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     missKernelLayout.AddBinding(4, DescriptorType::StorageImage, VK_SHADER_STAGE_COMPUTE_BIT);
     missKernelLayout.AddBinding(5, DescriptorType::StorageBuffer, VK_SHADER_STAGE_COMPUTE_BIT);
     missKernelLayout.AddBinding(6, DescriptorType::StorageImage, VK_SHADER_STAGE_COMPUTE_BIT);
+    missKernelLayout.AddBinding(7, DescriptorType::StorageBuffer, VK_SHADER_STAGE_COMPUTE_BIT);
     missKernelLayout.AddImmutableSamplers();
 
     VkPipeline missKernelPipeline = device->CreateComputePipeline(
@@ -420,6 +428,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     prepareWavefrontLayout.AddBinding(1, DescriptorType::StorageBuffer,
                                       VK_SHADER_STAGE_COMPUTE_BIT);
     prepareWavefrontLayout.AddBinding(2, DescriptorType::StorageBuffer,
+                                      VK_SHADER_STAGE_COMPUTE_BIT);
+    prepareWavefrontLayout.AddBinding(3, DescriptorType::StorageBuffer,
                                       VK_SHADER_STAGE_COMPUTE_BIT);
     VkPipeline prepareWavefrontPipeline =
         device->CreateComputePipeline(&prepareWavefrontShader, &prepareWavefrontLayout,
@@ -511,6 +521,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                    VK_SHADER_STAGE_COMPUTE_BIT);
     shadingKernelLayout.AddBinding(16, DescriptorType::StorageBuffer,
                                    VK_SHADER_STAGE_COMPUTE_BIT);
+    shadingKernelLayout.AddBinding(17, DescriptorType::StorageBuffer,
+                                   VK_SHADER_STAGE_COMPUTE_BIT);
     shadingKernelLayout.AddImmutableSamplers();
 
     VkPipeline shadingKernelPipeline =
@@ -571,6 +583,15 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     VkPipeline radixSortHistogramPipeline =
         device->CreateComputePipeline(&radixSortHistogramShader, &radixSortHistogramLayout,
                                       &radixSortPush, "radix sort histogram pipeline");
+
+    // initialize pixel info free list
+    DescriptorSetLayout initializePixelInfoFreeListLayout = {};
+    initializePixelInfoFreeListLayout.AddBinding(0, DescriptorType::StorageBuffer,
+                                                 VK_SHADER_STAGE_COMPUTE_BIT);
+
+    VkPipeline initializePixelInfoFreeListPipeline = device->CreateComputePipeline(
+        &initializePixelInfoFreeListShader, &initializePixelInfoFreeListLayout, 0,
+        "initialize pixel info free list pipeline");
 
     // device->GetDLSSTargetDimensions(targetWidth, targetHeight);
     u32 targetWidth  = 2560;
@@ -690,7 +711,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         rg->CreateImageResource("motion vector image", motionVectorDesc);
 
     // wavefront
-    const u32 maxRays                      = 1024 * 1024;
+    const u32 maxRays                      = 512 * 1024;
     ResourceHandle wavefrontIndirectBuffer = rg->CreateBufferResource(
         "wavefront indirect buffer",
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
@@ -700,6 +721,16 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         "wavefront sort indirect buffer",
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
         sizeof(u32) * 3 * WAVEFRONT_NUM_QUEUES);
+
+    ResourceHandle wavefrontTileInfoBuffer = rg->CreateBufferResource(
+        "wavefront tile info buffer",
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+        sizeof(u32) * 2);
+
+    GPUBuffer wavefrontPixelInfoFreeList = device->CreateBuffer(
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(u32) * (WAVEFRONT_QUEUE_SIZE + 1));
+    ResourceHandle wavefrontPixelInfoFreeListHandle = rg->RegisterExternalResource(
+        "wavefront pixel info buffer", &wavefrontPixelInfoFreeList);
 
     ResourceHandle wavefrontRaySortKeysBuffer0 = rg->CreateBufferResource(
         "wavefront ray sort keys buffer 0", VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -1140,7 +1171,14 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         gpuMaterials.Push(material);
     }
 
-    CommandBuffer *newTileCmd          = device->BeginCommandBuffer(QueueType_Compute);
+    CommandBuffer *newTileCmd = device->BeginCommandBuffer(QueueType_Compute);
+    newTileCmd
+        ->StartBindingCompute(initializePixelInfoFreeListPipeline,
+                              &initializePixelInfoFreeListLayout)
+        .Bind(&wavefrontPixelInfoFreeList)
+        .End();
+    newTileCmd->Dispatch(1, 1, 1);
+
     Semaphore newTileSubmitSemaphore   = device->CreateSemaphore();
     newTileSubmitSemaphore.signalValue = 1;
     GPUBuffer materialBuffer =
@@ -1885,46 +1923,87 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 .AddHandle(rayQueueMinPosBuffer, ResourceUsageType::RW)
                 .AddHandle(rayQueueMaxPosBuffer, ResourceUsageType::RW);
 
-            for (u32 tileIndex = 0; tileIndex < totalTiles; tileIndex += maxTiles)
+            u32 maxNumIters = ((totalTiles + maxTiles - 1) / maxTiles) * (maxDepth + 1);
+            for (u32 iter = 0; iter < maxNumIters; iter++)
             {
-                u32 numTilesInDispatch = Min(totalTiles - tileIndex, maxTiles);
+                bool flush = iter + maxDepth + 1 >= maxNumIters;
                 // Clear queues
-                rg->StartPass(1, [&](CommandBuffer *cmd) {
-                      cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                   VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                                   VK_ACCESS_2_SHADER_WRITE_BIT,
-                                   VK_ACCESS_2_TRANSFER_WRITE_BIT);
-                      cmd->FlushBarriers();
-                      GPUBuffer *buffer = rg->GetBuffer(wavefrontQueuesBuffer);
-                      cmd->ClearBuffer(buffer);
+                rg->StartPass(4,
+                              [&](CommandBuffer *cmd) {
+                                  cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                               VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                               VK_ACCESS_2_SHADER_WRITE_BIT,
+                                               VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                                  cmd->FlushBarriers();
+                                  GPUBuffer *buffer = rg->GetBuffer(wavefrontQueuesBuffer);
+                                  cmd->ClearBuffer(buffer);
 
-                      cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                   VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                                   VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
-                      cmd->FlushBarriers();
-                  }).AddHandle(wavefrontQueuesBuffer, ResourceUsageType::Write);
+                                  buffer = rg->GetBuffer(wavefrontTileInfoBuffer);
+                                  cmd->ClearBuffer(buffer);
+
+                                  buffer = rg->GetBuffer(wavefrontIndirectBuffer);
+                                  cmd->ClearBuffer(buffer);
+
+                                  buffer = rg->GetBuffer(wavefrontSortIndirectBuffer);
+                                  cmd->ClearBuffer(buffer);
+
+                                  cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                               VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                               VK_ACCESS_2_SHADER_WRITE_BIT |
+                                                   VK_ACCESS_2_SHADER_READ_BIT);
+                                  cmd->FlushBarriers();
+                              })
+                    .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::Write)
+                    .AddHandle(wavefrontTileInfoBuffer, ResourceUsageType::Write)
+                    .AddHandle(wavefrontIndirectBuffer, ResourceUsageType::Write)
+                    .AddHandle(wavefrontSortIndirectBuffer, ResourceUsageType::Write);
 
                 GenerateRayPushConstant generateRayPush;
                 generateRayPush.imageWidth     = targetWidth;
                 generateRayPush.imageHeight    = targetHeight;
                 generateRayPush.frameNum       = (u32)device->frameCount;
                 generateRayPush.filterIntegral = filterDistribution.marginal.Integral();
-                generateRayPush.startTileIndex = tileIndex;
+
+                // Prepare generate ray dispatch
+                WavefrontPushConstant genWpc;
+                genWpc.dispatchQueueIndex = WAVEFRONT_GENERATE_CAMERA_RAYS_INDEX;
+                genWpc.finishedQueueIndex = -1;
+                genWpc.flush              = flush;
+
+                rg->StartComputePass(
+                      prepareWavefrontPipeline, prepareWavefrontLayout, 4,
+                      [&](CommandBuffer *cmd) {
+                          device->BeginEvent(cmd, "prepare ray kernel");
+                          cmd->Dispatch(1, 1, 1);
+                          cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                           VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+                                       VK_ACCESS_2_SHADER_WRITE_BIT,
+                                       VK_ACCESS_2_SHADER_WRITE_BIT |
+                                           VK_ACCESS_2_SHADER_READ_BIT |
+                                           VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+                          cmd->FlushBarriers();
+                          device->EndEvent(cmd);
+                      },
+                      &prepareWavefrontPC, &genWpc)
+                    .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::RW)
+                    .AddHandle(wavefrontIndirectBuffer, ResourceUsageType::RW)
+                    .AddHandle(wavefrontSortIndirectBuffer, ResourceUsageType::RW)
+                    .AddHandle(wavefrontTileInfoBuffer, ResourceUsageType::RW);
 
                 // Generate rays
-                rg->StartComputePass(
-                      generatePrimaryRayPipeline, generatePrimaryRayLayout, 6,
-                      [&, numTilesInDispatch](CommandBuffer *cmd) {
-                          device->BeginEvent(cmd, "Generate primary rays");
-                          cmd->Dispatch(numTilesInDispatch, 1, 1);
+                rg->StartIndirectComputePass(
+                      "Generate Primary Rays", generatePrimaryRayPipeline,
+                      generatePrimaryRayLayout, 7, wavefrontIndirectBuffer,
+                      sizeof(u32) * 3 * WAVEFRONT_GENERATE_CAMERA_RAYS_INDEX,
+                      [](CommandBuffer *cmd) {
                           cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                        VK_ACCESS_2_SHADER_WRITE_BIT,
                                        VK_ACCESS_2_SHADER_WRITE_BIT |
                                            VK_ACCESS_2_SHADER_READ_BIT);
                           cmd->FlushBarriers();
-                          device->EndEvent(cmd);
                       },
                       &generateRayPC, &generateRayPush)
                     .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::Write)
@@ -1933,15 +2012,17 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     .AddHandle(sceneTransferBufferHandles[currentBuffer],
                                ResourceUsageType::Read)
                     .AddHandle(filterCDFBufferHandle, ResourceUsageType::Read)
-                    .AddHandle(filterValuesBufferHandle, ResourceUsageType::Read);
+                    .AddHandle(filterValuesBufferHandle, ResourceUsageType::Read)
+                    .AddHandle(wavefrontPixelInfoFreeListHandle, ResourceUsageType::RW);
 
                 // Prepare primary ray pass
                 WavefrontPushConstant wpc;
                 wpc.dispatchQueueIndex = WAVEFRONT_RAY_QUEUE_INDEX;
                 wpc.finishedQueueIndex = -1;
+                wpc.flush              = flush;
 
                 rg->StartComputePass(
-                      prepareWavefrontPipeline, prepareWavefrontLayout, 3,
+                      prepareWavefrontPipeline, prepareWavefrontLayout, 4,
                       [&](CommandBuffer *cmd) {
                           device->BeginEvent(cmd, "prepare ray kernel");
                           cmd->Dispatch(1, 1, 1);
@@ -1958,375 +2039,370 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                       &prepareWavefrontPC, &wpc)
                     .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::RW)
                     .AddHandle(wavefrontIndirectBuffer, ResourceUsageType::RW)
-                    .AddHandle(wavefrontSortIndirectBuffer, ResourceUsageType::RW);
+                    .AddHandle(wavefrontSortIndirectBuffer, ResourceUsageType::RW)
+                    .AddHandle(wavefrontTileInfoBuffer, ResourceUsageType::RW);
 
                 // Trace rays
-                rg->StartPass(
-                      3,
+                // rg->StartPass(
+                //       3,
+                //       [&](CommandBuffer *cmd) {
+                //           GPUBuffer *wavefrontQueues = rg->GetBuffer(wavefrontQueuesBuffer);
+                //           GPUBuffer *wavefrontDescriptors =
+                //               rg->GetBuffer(wavefrontDescriptorsBuffer);
+                //           GPUBuffer *wavefrontIndirect =
+                //               rg->GetBuffer(wavefrontIndirectBuffer);
+                //           device->BeginEvent(cmd, "trace rays");
+                //           cmd->StartBinding(bindPoint, wavefrontPipelineState.pipeline,
+                //                             &rayKernelLayout)
+                //               .Bind(&ptlasAddress)
+                //               .Bind(wavefrontQueues)
+                //               .Bind(wavefrontDescriptors)
+                //               .End();
+                //           cmd->TraceRaysIndirect(&wavefrontPipelineState, wavefrontIndirect,
+                //                                  sizeof(u32) * 3 *
+                //                                  WAVEFRONT_RAY_QUEUE_INDEX);
+                //           cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                //                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                //                        VK_ACCESS_2_SHADER_WRITE_BIT,
+                //                        VK_ACCESS_2_SHADER_WRITE_BIT |
+                //                            VK_ACCESS_2_SHADER_READ_BIT);
+                //           cmd->FlushBarriers();
+                //           device->EndEvent(cmd);
+                //       })
+                //     .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::Write)
+                //     .AddHandle(wavefrontDescriptorsBuffer, ResourceUsageType::Read)
+                //     .AddHandle(wavefrontIndirectBuffer, ResourceUsageType::Read);
+
+                // Sort
+                {
+                    rg->StartIndirectComputePass(
+                          "find ray origin min max", findRayMinMaxPipeline,
+                          findRayMinMaxLayout, 2, wavefrontSortIndirectBuffer,
+                          sizeof(u32) * 3 * WAVEFRONT_RAY_QUEUE_INDEX,
+                          [&](CommandBuffer *cmd) {
+                              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                           VK_ACCESS_2_SHADER_WRITE_BIT,
+                                           VK_ACCESS_2_SHADER_READ_BIT);
+                              cmd->FlushBarriers();
+                          })
+                        .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::Write)
+                        .AddHandle(wavefrontDescriptorsBuffer, ResourceUsageType::Read);
+
+                    rg->StartIndirectComputePass(
+                          "generate ray kernel keys", generateRayKernelKeysPipeline,
+                          generateRayKernelKeysLayout, 4, wavefrontSortIndirectBuffer,
+                          sizeof(u32) * 3 * WAVEFRONT_RAY_QUEUE_INDEX,
+                          [&](CommandBuffer *cmd) {
+                              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                           VK_ACCESS_2_SHADER_WRITE_BIT,
+                                           VK_ACCESS_2_SHADER_READ_BIT);
+                              cmd->FlushBarriers();
+                          })
+                        .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::Write)
+                        .AddHandle(wavefrontDescriptorsBuffer, ResourceUsageType::Read)
+                        .AddHandle(wavefrontRaySortKeysBuffer0, ResourceUsageType::Read)
+                        .AddHandle(wavefrontSortIndirectBuffer, ResourceUsageType::Read);
+
+                    u32 numIters = sizeof(SortKey::key);
+                    Assert((numIters & 1) == 0);
+                    for (u32 iter = 0; iter < numIters; iter++)
+                    {
+                        RadixSortPushConstant rpc;
+                        rpc.g_shift    = iter * 8;
+                        rpc.queueIndex = WAVEFRONT_RAY_QUEUE_INDEX;
+
+                        ResourceHandle sortKeys0 = (iter & 1) ? wavefrontRaySortKeysBuffer1
+                                                              : wavefrontRaySortKeysBuffer0;
+                        ResourceHandle sortKeys1 = (iter & 1) ? wavefrontRaySortKeysBuffer0
+                                                              : wavefrontRaySortKeysBuffer1;
+                        rg->StartIndirectComputePass(
+                              "radix sort histogram", radixSortHistogramPipeline,
+                              radixSortHistogramLayout, 4, wavefrontSortIndirectBuffer,
+                              sizeof(u32) * 3 * WAVEFRONT_RAY_QUEUE_INDEX,
+                              [&](CommandBuffer *cmd) {
+                                  cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                               VK_ACCESS_2_SHADER_WRITE_BIT,
+                                               VK_ACCESS_2_SHADER_READ_BIT);
+                                  cmd->FlushBarriers();
+                              },
+                              &radixSortPush, &rpc)
+                            .AddHandle(sortKeys0, ResourceUsageType::Read)
+                            .AddHandle(wavefrontRaySortHistogram, ResourceUsageType::Read)
+                            .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::Read)
+                            .AddHandle(wavefrontSortIndirectBuffer, ResourceUsageType::Read);
+
+                        rg->StartIndirectComputePass(
+                              "radix sort", radixSortPipeline, radixSortLayout, 5,
+                              wavefrontSortIndirectBuffer,
+                              sizeof(u32) * 3 * WAVEFRONT_RAY_QUEUE_INDEX,
+                              [&](CommandBuffer *cmd) {
+                                  cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                               VK_ACCESS_2_SHADER_WRITE_BIT,
+                                               VK_ACCESS_2_SHADER_READ_BIT);
+                                  cmd->FlushBarriers();
+                              },
+                              &radixSortPush, &rpc)
+                            .AddHandle(sortKeys0, ResourceUsageType::Read)
+                            .AddHandle(sortKeys1, ResourceUsageType::Write)
+                            .AddHandle(wavefrontRaySortHistogram, ResourceUsageType::Read)
+                            .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::Read)
+                            .AddHandle(wavefrontSortIndirectBuffer, ResourceUsageType::Read);
+                    }
+                }
+
+                // Trace rays
+                rg->StartPass(4,
+                              [&](CommandBuffer *cmd) {
+                                  GPUBuffer *wavefrontQueues =
+                                      rg->GetBuffer(wavefrontQueuesBuffer);
+                                  GPUBuffer *wavefrontDescriptors =
+                                      rg->GetBuffer(wavefrontDescriptorsBuffer);
+                                  GPUBuffer *wavefrontIndirect =
+                                      rg->GetBuffer(wavefrontIndirectBuffer);
+                                  GPUBuffer *wavefrontSortKeys =
+                                      rg->GetBuffer(wavefrontRaySortKeysBuffer0);
+
+                                  device->BeginEvent(cmd, "trace rays");
+                                  cmd->StartBinding(bindPoint,
+                                                    wavefrontSecondaryPipelineState.pipeline,
+                                                    &raySecondaryKernelLayout)
+                                      .Bind(&ptlasAddress)
+                                      .Bind(wavefrontQueues)
+                                      .Bind(wavefrontDescriptors)
+                                      .Bind(wavefrontSortKeys)
+                                      .End();
+                                  cmd->TraceRaysIndirect(
+                                      &wavefrontSecondaryPipelineState, wavefrontIndirect,
+                                      sizeof(u32) * 3 * WAVEFRONT_RAY_QUEUE_INDEX);
+                                  cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                               VK_ACCESS_2_SHADER_WRITE_BIT,
+                                               VK_ACCESS_2_SHADER_WRITE_BIT |
+                                                   VK_ACCESS_2_SHADER_READ_BIT);
+                                  cmd->FlushBarriers();
+                                  device->EndEvent(cmd);
+                              })
+                    .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::Write)
+                    .AddHandle(wavefrontDescriptorsBuffer, ResourceUsageType::Read)
+                    .AddHandle(wavefrontIndirectBuffer, ResourceUsageType::Read)
+                    .AddHandle(wavefrontRaySortKeysBuffer0, ResourceUsageType::Read);
+
+                RayPushConstant rayPc;
+                rayPc.envMap         = envMapBindlessIndex;
+                rayPc.frameNum       = (u32)device->frameCount;
+                rayPc.width          = envMap->width;
+                rayPc.height         = envMap->height;
+                rayPc.filterIntegral = filterDistribution.marginal.Integral();
+
+                // Prepare miss kernel
+                WavefrontPushConstant wpc0;
+                wpc0.dispatchQueueIndex = WAVEFRONT_MISS_QUEUE_INDEX;
+                wpc0.finishedQueueIndex = WAVEFRONT_RAY_QUEUE_INDEX;
+                wpc0.flush              = flush;
+
+                rg->StartComputePass(
+                      prepareWavefrontPipeline, prepareWavefrontLayout, 4,
                       [&](CommandBuffer *cmd) {
-                          GPUBuffer *wavefrontQueues = rg->GetBuffer(wavefrontQueuesBuffer);
-                          GPUBuffer *wavefrontDescriptors =
-                              rg->GetBuffer(wavefrontDescriptorsBuffer);
-                          GPUBuffer *wavefrontIndirect =
-                              rg->GetBuffer(wavefrontIndirectBuffer);
-                          device->BeginEvent(cmd, "trace rays");
-                          cmd->StartBinding(bindPoint, wavefrontPipelineState.pipeline,
-                                            &rayKernelLayout)
-                              .Bind(&ptlasAddress)
-                              .Bind(wavefrontQueues)
-                              .Bind(wavefrontDescriptors)
-                              .End();
-                          cmd->TraceRaysIndirect(&wavefrontPipelineState, wavefrontIndirect,
-                                                 sizeof(u32) * 3 * WAVEFRONT_RAY_QUEUE_INDEX);
-                          cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                          device->BeginEvent(cmd, "prepare miss kernel");
+                          cmd->Dispatch(1, 1, 1);
+                          cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                           VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+                                       VK_ACCESS_2_SHADER_WRITE_BIT,
+                                       VK_ACCESS_2_SHADER_WRITE_BIT |
+                                           VK_ACCESS_2_SHADER_READ_BIT |
+                                           VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+                          cmd->FlushBarriers();
+                          device->EndEvent(cmd);
+                      },
+                      &prepareWavefrontPC, &wpc0)
+                    .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::RW)
+                    .AddHandle(wavefrontIndirectBuffer, ResourceUsageType::RW)
+                    .AddHandle(wavefrontSortIndirectBuffer, ResourceUsageType::RW)
+                    .AddHandle(wavefrontTileInfoBuffer, ResourceUsageType::RW);
+
+                // Prepare shade kernel
+                WavefrontPushConstant wpc1;
+                wpc1.dispatchQueueIndex = WAVEFRONT_SHADE_QUEUE_INDEX;
+                wpc1.finishedQueueIndex = -1;
+                wpc1.flush              = flush;
+
+                rg->StartComputePass(
+                      prepareWavefrontPipeline, prepareWavefrontLayout, 4,
+                      [&](CommandBuffer *cmd) {
+                          device->BeginEvent(cmd, "prepare shade kernel");
+                          cmd->Dispatch(1, 1, 1);
+                          cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                           VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+                                       VK_ACCESS_2_SHADER_WRITE_BIT,
+                                       VK_ACCESS_2_SHADER_WRITE_BIT |
+                                           VK_ACCESS_2_SHADER_READ_BIT |
+                                           VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+                          cmd->FlushBarriers();
+                          device->EndEvent(cmd);
+                      },
+                      &prepareWavefrontPC, &wpc1)
+                    .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::RW)
+                    .AddHandle(wavefrontIndirectBuffer, ResourceUsageType::RW)
+                    .AddHandle(wavefrontSortIndirectBuffer, ResourceUsageType::RW)
+                    .AddHandle(wavefrontTileInfoBuffer, ResourceUsageType::RW);
+
+                // Miss kernel
+                rg->StartIndirectComputePass(
+                      "miss kernel pass", missKernelPipeline, missKernelLayout, 8,
+                      wavefrontIndirectBuffer, sizeof(u32) * 3 * WAVEFRONT_MISS_QUEUE_INDEX,
+                      [&](CommandBuffer *cmd) {}, &missKernelPC, &rayPc)
+                    .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::RW)
+                    .AddHandle(wavefrontDescriptorsBuffer, ResourceUsageType::Read)
+                    .AddHandle(sceneTransferBufferHandles[currentBuffer],
+                               ResourceUsageType::Read)
+                    .AddHandle(pixelInfosBuffer, ResourceUsageType::Read)
+                    .AddHandle(albedoHandle, ResourceUsageType::Write)
+                    .AddHandle(normalsHandle, ResourceUsageType::Write)
+                    .AddHandle(image, ResourceUsageType::Write)
+                    .AddHandle(wavefrontPixelInfoFreeListHandle, ResourceUsageType::RW);
+
+                // Shading kernel
+                rg->StartIndirectComputePass(
+                      "shading kernel pass", shadingKernelPipeline, shadingKernelLayout, 18,
+                      wavefrontIndirectBuffer, sizeof(u32) * 3 * WAVEFRONT_SHADE_QUEUE_INDEX,
+                      [&](CommandBuffer *cmd) {
+                          cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                        VK_ACCESS_2_SHADER_WRITE_BIT,
                                        VK_ACCESS_2_SHADER_WRITE_BIT |
                                            VK_ACCESS_2_SHADER_READ_BIT);
                           cmd->FlushBarriers();
-                          device->EndEvent(cmd);
-                      })
-                    .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::Write)
+                      },
+                      &shadingKernelPC, &rayPc)
+                    .AddHandle(ptlasHandle, ResourceUsageType::Read)
                     .AddHandle(wavefrontDescriptorsBuffer, ResourceUsageType::Read)
-                    .AddHandle(wavefrontIndirectBuffer, ResourceUsageType::Read);
+                    .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::RW)
+                    .AddHandle(sceneTransferBufferHandles[currentBuffer],
+                               ResourceUsageType::Read)
+                    .AddHandle(virtualGeometryManager.resourceBufferHandle,
+                               ResourceUsageType::Read)
+                    .AddHandle(pageHashTableBufferHandle, ResourceUsageType::Read)
+                    .AddHandle(virtualGeometryManager.instanceTransformsBufferHandle,
+                               ResourceUsageType::Read)
+                    .AddHandle(materialBufferHandle, ResourceUsageType::Read)
+                    .AddHandle(virtualGeometryManager.clusterPageDataBufferHandle,
+                               ResourceUsageType::Read)
+                    .AddHandle(virtualGeometryManager.partitionInfosBufferHandle,
+                               ResourceUsageType::Read)
+                    .AddHandle(virtualGeometryManager.instancesBufferHandle,
+                               ResourceUsageType::Read)
+                    .AddHandle(faceDataBufferHandle, ResourceUsageType::Read)
+                    .AddHandle(albedoHandle, ResourceUsageType::Write)
+                    .AddHandle(normalsHandle, ResourceUsageType::Write)
+                    .AddHandle(image, ResourceUsageType::Write)
+                    .AddHandle(pixelInfosBuffer, ResourceUsageType::RW)
+                    .AddHandle(feedbackBufferHandles[currentBuffer], ResourceUsageType::RW)
+                    .AddHandle(wavefrontPixelInfoFreeListHandle, ResourceUsageType::RW);
 
-                for (u32 depth = 0; depth <= maxDepth; depth++)
-                {
-                    RayPushConstant rayPc;
-                    rayPc.envMap         = envMapBindlessIndex;
-                    rayPc.frameNum       = (u32)device->frameCount;
-                    rayPc.width          = envMap->width;
-                    rayPc.height         = envMap->height;
-                    rayPc.filterIntegral = filterDistribution.marginal.Integral();
-                    rayPc.depth          = depth;
+                // Prepare next ray kernel
+                WavefrontPushConstant wpc2;
+                wpc2.dispatchQueueIndex = WAVEFRONT_RAY_QUEUE_INDEX;
+                wpc2.finishedQueueIndex = WAVEFRONT_MISS_QUEUE_INDEX;
+                wpc2.flush              = flush;
 
-                    // Prepare miss kernel
-                    WavefrontPushConstant wpc0;
-                    wpc0.dispatchQueueIndex = WAVEFRONT_MISS_QUEUE_INDEX;
-                    wpc0.finishedQueueIndex = WAVEFRONT_RAY_QUEUE_INDEX;
+                rg->StartComputePass(
+                      prepareWavefrontPipeline, prepareWavefrontLayout, 4,
+                      [&](CommandBuffer *cmd) {
+                          device->BeginEvent(cmd, "prepare ray kernel");
+                          cmd->Dispatch(1, 1, 1);
+                          cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                       VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
+                                           VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+                                       VK_ACCESS_2_SHADER_WRITE_BIT,
+                                       VK_ACCESS_2_SHADER_WRITE_BIT |
+                                           VK_ACCESS_2_SHADER_READ_BIT |
+                                           VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+                          cmd->FlushBarriers();
+                          device->EndEvent(cmd);
+                      },
+                      &prepareWavefrontPC, &wpc2)
+                    .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::RW)
+                    .AddHandle(wavefrontIndirectBuffer, ResourceUsageType::RW)
+                    .AddHandle(wavefrontSortIndirectBuffer, ResourceUsageType::RW)
+                    .AddHandle(wavefrontTileInfoBuffer, ResourceUsageType::RW);
 
-                    rg->StartComputePass(
-                          prepareWavefrontPipeline, prepareWavefrontLayout, 3,
-                          [&](CommandBuffer *cmd) {
-                              device->BeginEvent(cmd, "prepare miss kernel");
-                              cmd->Dispatch(1, 1, 1);
-                              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                               VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
-                                           VK_ACCESS_2_SHADER_WRITE_BIT,
-                                           VK_ACCESS_2_SHADER_WRITE_BIT |
-                                               VK_ACCESS_2_SHADER_READ_BIT |
-                                               VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
-                              cmd->FlushBarriers();
-                              device->EndEvent(cmd);
-                          },
-                          &prepareWavefrontPC, &wpc0)
-                        .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::RW)
-                        .AddHandle(wavefrontIndirectBuffer, ResourceUsageType::RW)
-                        .AddHandle(wavefrontSortIndirectBuffer, ResourceUsageType::RW);
+                // Flush shade queue
+                WavefrontPushConstant wpc3;
+                wpc3.dispatchQueueIndex = -1;
+                wpc3.finishedQueueIndex = WAVEFRONT_SHADE_QUEUE_INDEX;
+                wpc3.flush              = flush;
 
-                    // Prepare shade kernel
-                    WavefrontPushConstant wpc1;
-                    wpc1.dispatchQueueIndex = WAVEFRONT_SHADE_QUEUE_INDEX;
-                    wpc1.finishedQueueIndex = -1;
-
-                    rg->StartComputePass(
-                          prepareWavefrontPipeline, prepareWavefrontLayout, 3,
-                          [&](CommandBuffer *cmd) {
-                              device->BeginEvent(cmd, "prepare shade kernel");
-                              cmd->Dispatch(1, 1, 1);
-                              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                               VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
-                                           VK_ACCESS_2_SHADER_WRITE_BIT,
-                                           VK_ACCESS_2_SHADER_WRITE_BIT |
-                                               VK_ACCESS_2_SHADER_READ_BIT |
-                                               VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
-                              cmd->FlushBarriers();
-                              device->EndEvent(cmd);
-                          },
-                          &prepareWavefrontPC, &wpc1)
-                        .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::RW)
-                        .AddHandle(wavefrontIndirectBuffer, ResourceUsageType::RW)
-                        .AddHandle(wavefrontSortIndirectBuffer, ResourceUsageType::RW);
-
-                    // Miss kernel
-                    rg->StartIndirectComputePass(
-                          "miss kernel pass", missKernelPipeline, missKernelLayout, 7,
-                          wavefrontIndirectBuffer,
-                          sizeof(u32) * 3 * WAVEFRONT_MISS_QUEUE_INDEX,
-                          [&](CommandBuffer *cmd) {}, &missKernelPC, &rayPc)
-                        .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::RW)
-                        .AddHandle(wavefrontDescriptorsBuffer, ResourceUsageType::Read)
-                        .AddHandle(sceneTransferBufferHandles[currentBuffer],
-                                   ResourceUsageType::Read)
-                        .AddHandle(pixelInfosBuffer, ResourceUsageType::Read)
-                        .AddHandle(albedoHandle, ResourceUsageType::Write)
-                        .AddHandle(normalsHandle, ResourceUsageType::Write)
-                        .AddHandle(image, ResourceUsageType::Write);
-
-                    // Shading kernel
-                    rg->StartIndirectComputePass(
-                          "shading kernel pass", shadingKernelPipeline, shadingKernelLayout,
-                          17, wavefrontIndirectBuffer,
-                          sizeof(u32) * 3 * WAVEFRONT_SHADE_QUEUE_INDEX,
-                          [&](CommandBuffer *cmd) {
-                              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                           VK_ACCESS_2_SHADER_WRITE_BIT,
-                                           VK_ACCESS_2_SHADER_WRITE_BIT |
-                                               VK_ACCESS_2_SHADER_READ_BIT);
-                              cmd->FlushBarriers();
-                          },
-                          &shadingKernelPC, &rayPc)
-                        .AddHandle(ptlasHandle, ResourceUsageType::Read)
-                        .AddHandle(wavefrontDescriptorsBuffer, ResourceUsageType::Read)
-                        .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::RW)
-                        .AddHandle(sceneTransferBufferHandles[currentBuffer],
-                                   ResourceUsageType::Read)
-                        .AddHandle(virtualGeometryManager.resourceBufferHandle,
-                                   ResourceUsageType::Read)
-                        .AddHandle(pageHashTableBufferHandle, ResourceUsageType::Read)
-                        .AddHandle(virtualGeometryManager.instanceTransformsBufferHandle,
-                                   ResourceUsageType::Read)
-                        .AddHandle(materialBufferHandle, ResourceUsageType::Read)
-                        .AddHandle(virtualGeometryManager.clusterPageDataBufferHandle,
-                                   ResourceUsageType::Read)
-                        .AddHandle(virtualGeometryManager.partitionInfosBufferHandle,
-                                   ResourceUsageType::Read)
-                        .AddHandle(virtualGeometryManager.instancesBufferHandle,
-                                   ResourceUsageType::Read)
-                        .AddHandle(faceDataBufferHandle, ResourceUsageType::Read)
-                        .AddHandle(albedoHandle, ResourceUsageType::Write)
-                        .AddHandle(normalsHandle, ResourceUsageType::Write)
-                        .AddHandle(image, ResourceUsageType::Write)
-                        .AddHandle(pixelInfosBuffer, ResourceUsageType::RW)
-                        .AddHandle(feedbackBufferHandles[currentBuffer],
-                                   ResourceUsageType::RW);
-
-                    if (depth == maxDepth) break;
-
-                    // Prepare next ray kernel
-                    WavefrontPushConstant wpc2;
-                    wpc2.dispatchQueueIndex = WAVEFRONT_RAY_QUEUE_INDEX;
-                    wpc2.finishedQueueIndex = WAVEFRONT_MISS_QUEUE_INDEX;
-
-                    rg->StartComputePass(
-                          prepareWavefrontPipeline, prepareWavefrontLayout, 3,
-                          [&](CommandBuffer *cmd) {
-                              device->BeginEvent(cmd, "prepare ray kernel");
-                              cmd->Dispatch(1, 1, 1);
-                              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                           VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
-                                               VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
-                                           VK_ACCESS_2_SHADER_WRITE_BIT,
-                                           VK_ACCESS_2_SHADER_WRITE_BIT |
-                                               VK_ACCESS_2_SHADER_READ_BIT |
-                                               VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
-                              cmd->FlushBarriers();
-                              device->EndEvent(cmd);
-                          },
-                          &prepareWavefrontPC, &wpc2)
-                        .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::RW)
-                        .AddHandle(wavefrontIndirectBuffer, ResourceUsageType::RW)
-                        .AddHandle(wavefrontSortIndirectBuffer, ResourceUsageType::RW);
-
-                    // Sort
-                    {
-                        rg->StartIndirectComputePass(
-                              "find ray origin min max", findRayMinMaxPipeline,
-                              findRayMinMaxLayout, 2, wavefrontSortIndirectBuffer,
-                              sizeof(u32) * 3 * WAVEFRONT_RAY_QUEUE_INDEX,
-                              [&](CommandBuffer *cmd) {
-                                  cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                               VK_ACCESS_2_SHADER_WRITE_BIT,
-                                               VK_ACCESS_2_SHADER_READ_BIT);
-                                  cmd->FlushBarriers();
-                              })
-                            .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::Write)
-                            .AddHandle(wavefrontDescriptorsBuffer, ResourceUsageType::Read);
-                        rg->StartIndirectComputePass(
-                              "generate ray kernel keys", generateRayKernelKeysPipeline,
-                              generateRayKernelKeysLayout, 4, wavefrontSortIndirectBuffer,
-                              sizeof(u32) * 3 * WAVEFRONT_RAY_QUEUE_INDEX,
-                              [&](CommandBuffer *cmd) {
-                                  cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                               VK_ACCESS_2_SHADER_WRITE_BIT,
-                                               VK_ACCESS_2_SHADER_READ_BIT);
-                                  cmd->FlushBarriers();
-                              })
-                            .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::Write)
-                            .AddHandle(wavefrontDescriptorsBuffer, ResourceUsageType::Read)
-                            .AddHandle(wavefrontRaySortKeysBuffer0, ResourceUsageType::Read)
-                            .AddHandle(wavefrontSortIndirectBuffer, ResourceUsageType::Read);
-
-                        u32 numIters = sizeof(SortKey::key);
-                        Assert((numIters & 1) == 0);
-                        for (u32 iter = 0; iter < numIters; iter++)
-                        {
-                            RadixSortPushConstant rpc;
-                            rpc.g_shift    = iter * 8;
-                            rpc.queueIndex = WAVEFRONT_RAY_QUEUE_INDEX;
-
-                            ResourceHandle sortKeys0 = (iter & 1)
-                                                           ? wavefrontRaySortKeysBuffer1
-                                                           : wavefrontRaySortKeysBuffer0;
-                            ResourceHandle sortKeys1 = (iter & 1)
-                                                           ? wavefrontRaySortKeysBuffer0
-                                                           : wavefrontRaySortKeysBuffer1;
-                            rg->StartIndirectComputePass(
-                                  "radix sort histogram", radixSortHistogramPipeline,
-                                  radixSortHistogramLayout, 4, wavefrontSortIndirectBuffer,
-                                  sizeof(u32) * 3 * WAVEFRONT_RAY_QUEUE_INDEX,
-                                  [&](CommandBuffer *cmd) {
-                                      cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                                   VK_ACCESS_2_SHADER_WRITE_BIT,
-                                                   VK_ACCESS_2_SHADER_READ_BIT);
-                                      cmd->FlushBarriers();
-                                  },
-                                  &radixSortPush, &rpc)
-                                .AddHandle(sortKeys0, ResourceUsageType::Read)
-                                .AddHandle(wavefrontRaySortHistogram, ResourceUsageType::Read)
-                                .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::Read)
-                                .AddHandle(wavefrontSortIndirectBuffer,
-                                           ResourceUsageType::Read);
-
-                            rg->StartIndirectComputePass(
-                                  "radix sort", radixSortPipeline, radixSortLayout, 5,
-                                  wavefrontSortIndirectBuffer,
-                                  sizeof(u32) * 3 * WAVEFRONT_RAY_QUEUE_INDEX,
-                                  [&](CommandBuffer *cmd) {
-                                      cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                                   VK_ACCESS_2_SHADER_WRITE_BIT,
-                                                   VK_ACCESS_2_SHADER_READ_BIT);
-                                      cmd->FlushBarriers();
-                                  },
-                                  &radixSortPush, &rpc)
-                                .AddHandle(sortKeys0, ResourceUsageType::Read)
-                                .AddHandle(sortKeys1, ResourceUsageType::Write)
-                                .AddHandle(wavefrontRaySortHistogram, ResourceUsageType::Read)
-                                .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::Read)
-                                .AddHandle(wavefrontSortIndirectBuffer,
-                                           ResourceUsageType::Read);
-                        }
-                    }
-
-                    // Flush shade queue
-                    WavefrontPushConstant wpc3;
-                    wpc3.dispatchQueueIndex = -1;
-                    wpc3.finishedQueueIndex = WAVEFRONT_SHADE_QUEUE_INDEX;
-
-                    rg->StartComputePass(
-                          prepareWavefrontPipeline, prepareWavefrontLayout, 3,
-                          [&](CommandBuffer *cmd) {
-                              device->BeginEvent(cmd, "flush shade kernel");
-                              cmd->Dispatch(1, 1, 1);
-                              cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                           VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
-                                               VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
-                                           VK_ACCESS_2_SHADER_WRITE_BIT,
-                                           VK_ACCESS_2_SHADER_WRITE_BIT |
-                                               VK_ACCESS_2_SHADER_READ_BIT |
-                                               VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
-                              cmd->FlushBarriers();
-                              device->EndEvent(cmd);
-
-                              // if (device->frameCount > 5)
-                              // {
-                              //     GPUBuffer *buffer   =
-                              //     rg->GetBuffer(wavefrontQueuesBuffer); GPUBuffer readback0
-                              //     = device->CreateBuffer(
-                              //         VK_BUFFER_USAGE_TRANSFER_DST_BIT, buffer->size,
-                              //         MemoryUsage::GPU_TO_CPU);
-                              //     cmd->Barrier(
-                              //         VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                              //         VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                              //         VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                              //         VK_ACCESS_2_TRANSFER_READ_BIT);
-                              //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                              //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                              //                  VK_ACCESS_2_SHADER_WRITE_BIT,
-                              //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-                              //     cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                              //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                              //                  VK_ACCESS_2_SHADER_WRITE_BIT,
-                              //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-                              //
-                              //     cmd->FlushBarriers();
-                              //
-                              //     cmd->CopyBuffer(&readback0, buffer);
-                              //     // cmd->CopyBuffer(&readback2, buffer1);
-                              //     // cmd->CopyImageToBuffer(&readback0,
-                              //     // &filterWeightsImage,
-                              //     // &copy,
-                              //     // 1);
-                              //     Semaphore testSemaphore   = device->CreateSemaphore();
-                              //     testSemaphore.signalValue = 1;
-                              //     cmd->SignalOutsideFrame(testSemaphore);
-                              //     device->SubmitCommandBuffer(cmd);
-                              //     device->Wait(testSemaphore);
-                              //
-                              //     u32 *data = (u32 *)readback0.mappedPtr;
-                              //     // u32 *data = (u32 *)readback0.mappedPtr;
-                              //     // Vec3f *data = (Vec3f
-                              //     // *)readback0.mappedPtr; for (int i = 0; i
-                              //     // < numRaysToTrace; i++)
-                              //     // {
-                              //     //     Vec3f &val = data[i];
-                              //     //     Print("%f %f %f\n", val.x, val.y,
-                              //     //     val.z);
-                              //     // }
-                              //
-                              //     int stop = 5;
-                              // }
-                          },
-                          &prepareWavefrontPC, &wpc3)
-                        .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::RW)
-                        .AddHandle(wavefrontIndirectBuffer, ResourceUsageType::RW)
-                        .AddHandle(wavefrontSortIndirectBuffer, ResourceUsageType::RW);
-
-                    // Trace secondary rays
-                    rg->StartPass(
-                          4,
-                          [&](CommandBuffer *cmd) {
-                              GPUBuffer *wavefrontQueues =
-                                  rg->GetBuffer(wavefrontQueuesBuffer);
-                              GPUBuffer *wavefrontDescriptors =
-                                  rg->GetBuffer(wavefrontDescriptorsBuffer);
-                              GPUBuffer *wavefrontIndirect =
-                                  rg->GetBuffer(wavefrontIndirectBuffer);
-                              GPUBuffer *wavefrontSortKeys =
-                                  rg->GetBuffer(wavefrontRaySortKeysBuffer0);
-
-                              device->BeginEvent(cmd, "trace rays");
-                              cmd->StartBinding(bindPoint,
-                                                wavefrontSecondaryPipelineState.pipeline,
-                                                &raySecondaryKernelLayout)
-                                  .Bind(&ptlasAddress)
-                                  .Bind(wavefrontQueues)
-                                  .Bind(wavefrontDescriptors)
-                                  .Bind(wavefrontSortKeys)
-                                  .End();
-                              cmd->TraceRaysIndirect(
-                                  &wavefrontSecondaryPipelineState, wavefrontIndirect,
-                                  sizeof(u32) * 3 * WAVEFRONT_RAY_QUEUE_INDEX);
-                              cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                           VK_ACCESS_2_SHADER_WRITE_BIT,
-                                           VK_ACCESS_2_SHADER_WRITE_BIT |
-                                               VK_ACCESS_2_SHADER_READ_BIT);
-                              cmd->FlushBarriers();
-                              device->EndEvent(cmd);
-                          })
-                        .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::Write)
-                        .AddHandle(wavefrontDescriptorsBuffer, ResourceUsageType::Read)
-                        .AddHandle(wavefrontIndirectBuffer, ResourceUsageType::Read)
-                        .AddHandle(wavefrontRaySortKeysBuffer0, ResourceUsageType::Read);
-                }
+                rg->StartComputePass(
+                      prepareWavefrontPipeline, prepareWavefrontLayout, 4,
+                      [&](CommandBuffer *cmd) {
+                          // if (device->frameCount > 5)
+                          // {
+                          //     GPUBuffer *buffer =
+                          //         rg->GetBuffer(wavefrontRaySortKeysBuffer0);
+                          //     // GPUBuffer *buffer2  = rg->GetBuffer(rayQueuePosBuffer);
+                          //     GPUBuffer readback0 = device->CreateBuffer(
+                          //         VK_BUFFER_USAGE_TRANSFER_DST_BIT, buffer->size,
+                          //         MemoryUsage::GPU_TO_CPU);
+                          //     // GPUBuffer readback1 = device->CreateBuffer(
+                          //     //     VK_BUFFER_USAGE_TRANSFER_DST_BIT, buffer2->size,
+                          //     //     MemoryUsage::GPU_TO_CPU);
+                          //     cmd->Barrier(
+                          //         VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                          //         VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                          //         VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                          //         VK_ACCESS_2_TRANSFER_READ_BIT);
+                          //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                          //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                          //                  VK_ACCESS_2_SHADER_WRITE_BIT,
+                          //                  VK_ACCESS_2_TRANSFER_READ_BIT);
+                          //     cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                          //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                          //                  VK_ACCESS_2_SHADER_WRITE_BIT,
+                          //                  VK_ACCESS_2_TRANSFER_READ_BIT);
+                          //
+                          //     cmd->FlushBarriers();
+                          //
+                          //     cmd->CopyBuffer(&readback0, buffer);
+                          //     // cmd->CopyBuffer(&readback1, buffer2);
+                          //     // cmd->CopyBuffer(&readback2, buffer1);
+                          //     // cmd->CopyImageToBuffer(&readback0,
+                          //     // &filterWeightsImage,
+                          //     // &copy,
+                          //     // 1);
+                          //     Semaphore testSemaphore   = device->CreateSemaphore();
+                          //     testSemaphore.signalValue = 1;
+                          //     cmd->SignalOutsideFrame(testSemaphore);
+                          //     device->SubmitCommandBuffer(cmd);
+                          //     device->Wait(testSemaphore);
+                          //
+                          //     SortKey *data = (SortKey *)readback0.mappedPtr;
+                          //     // Vec3f *data2 = (Vec3f *)readback1.mappedPtr;
+                          //
+                          //     int stop = 5;
+                          // }
+                          device->BeginEvent(cmd, "flush shade kernel");
+                          cmd->Dispatch(1, 1, 1);
+                          cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                       VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
+                                           VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+                                       VK_ACCESS_2_SHADER_WRITE_BIT,
+                                       VK_ACCESS_2_SHADER_WRITE_BIT |
+                                           VK_ACCESS_2_SHADER_READ_BIT |
+                                           VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+                          cmd->FlushBarriers();
+                          device->EndEvent(cmd);
+                      },
+                      &prepareWavefrontPC, &wpc3)
+                    .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::RW)
+                    .AddHandle(wavefrontIndirectBuffer, ResourceUsageType::RW)
+                    .AddHandle(wavefrontSortIndirectBuffer, ResourceUsageType::RW)
+                    .AddHandle(wavefrontTileInfoBuffer, ResourceUsageType::RW);
             }
             rg->StartPass(14, [](CommandBuffer *cmd) {})
                 .AddHandle(rayQueuePosBuffer, ResourceUsageType::RW)

@@ -27,6 +27,7 @@ struct WavefrontPushConstant
 {
     int finishedQueueIndex;
     int dispatchQueueIndex;
+    bool flush;
 };
 
 struct PixelInfo
@@ -37,6 +38,7 @@ struct PixelInfo
     float rayConeWidth;
     float rayConeSpread;
     uint rngState;
+    uint depth;
 };
 
 struct WavefrontDescriptors
@@ -76,11 +78,13 @@ struct WavefrontDescriptors
     int hitShadingQueueDirIndex;
 };
 
-#define WAVEFRONT_QUEUE_SIZE        (1u << 20u)
-#define WAVEFRONT_RAY_QUEUE_INDEX   0
-#define WAVEFRONT_SHADE_QUEUE_INDEX 1
-#define WAVEFRONT_MISS_QUEUE_INDEX  2
-#define WAVEFRONT_NUM_QUEUES        3
+#define WAVEFRONT_QUEUE_SIZE                 (1u << 20u)
+#define WAVEFRONT_WORKING_SET_SIZE           (1u << 19u)
+#define WAVEFRONT_RAY_QUEUE_INDEX            0
+#define WAVEFRONT_SHADE_QUEUE_INDEX          1
+#define WAVEFRONT_MISS_QUEUE_INDEX           2
+#define WAVEFRONT_GENERATE_CAMERA_RAYS_INDEX 3
+#define WAVEFRONT_NUM_QUEUES                 4
 
 #ifdef __cplusplus
 }
