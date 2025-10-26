@@ -11,7 +11,6 @@ RWStructuredBuffer<PixelInfo> pixelInfos : register(u2);
 ConstantBuffer<GPUScene> scene : register(b3);
 StructuredBuffer<float> filterCDF : register(t4);
 StructuredBuffer<float> filterValues : register(t5);
-RWStructuredBuffer<int> pixelInfoFreeList : register(u6);
 
 [[vk::push_constant]] GenerateRayPushConstant push;
 
@@ -98,9 +97,7 @@ void main(uint3 dtID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint gro
     InterlockedAdd(queues[WAVEFRONT_RAY_QUEUE_INDEX].writeOffset, 1, writeIndex);
     writeIndex %= WAVEFRONT_QUEUE_SIZE;
 
-    int freeListIndex;
-    InterlockedAdd(pixelInfoFreeList[0], -1, freeListIndex);
-    uint pixelIndex = pixelInfoFreeList[freeListIndex];
+    uint pixelIndex = dtID.x;
 
     StoreFloat3(pos, descriptors.rayQueuePosIndex, writeIndex);
     StoreFloat3(dir, descriptors.rayQueueDirIndex, writeIndex);
@@ -113,7 +110,6 @@ void main(uint3 dtID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint gro
     info.rayConeWidth = 0.f;
     info.rayConeSpread = atan(2.f * tan(scene.fov / 2.f) / scene.height);
     info.rngState = rng.State;
-    info.depth = 0;
 
     pixelInfos[pixelIndex] = info;
 }

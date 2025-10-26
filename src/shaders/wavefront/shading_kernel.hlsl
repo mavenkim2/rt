@@ -29,7 +29,6 @@ RWTexture2D<float4> image : register(u14);
 
 RWStructuredBuffer<PixelInfo> pixelInfos : register(u15);
 RWStructuredBuffer<uint> feedbackBuffer : register(u16);
-RWStructuredBuffer<int> pixelInfoFreeList : register(u17);
 
 [[vk::push_constant]] RayPushConstant push;
 
@@ -57,7 +56,6 @@ void main(uint3 dtID: SV_DispatchThreadID)
     uint packed = pixelInfo.pixelLocation_specularBounce;
     float3 throughput = pixelInfo.throughput;
     float3 radiance = pixelInfo.radiance;
-    uint depth = pixelInfo.depth;
 
     RayCone rayCone;
     rayCone.width = pixelInfo.rayConeWidth;
@@ -70,12 +68,10 @@ void main(uint3 dtID: SV_DispatchThreadID)
                                 BitFieldExtractU32(packed, 15, 15));
 
     // TODO: rays may not share depth
+    uint depth = push.depth;
     if (depth == 3)
     {
         image[pixelLocation] = float4(radiance, 1);
-        uint freeListIndex;
-        InterlockedAdd(pixelInfoFreeList[0], 1, freeListIndex);
-        pixelInfoFreeList[freeListIndex + 1] = pixelIndex;
         return;
     }
 
@@ -195,7 +191,7 @@ void main(uint3 dtID: SV_DispatchThreadID)
     float3 wo = normalize(float3(dot(hitInfo.ss, -dir), dot(frameY, -dir), dot(hitInfo.n, -dir)));
 
     // NEE
-#if 1
+#if 0
     if (!(material.roughness == 0.f && material.specTrans == 1.f))
     {
         float lightSample = rng.Uniform();
@@ -308,7 +304,7 @@ void main(uint3 dtID: SV_DispatchThreadID)
             StoreFloat3(newDir, descriptors.rayQueueDirIndex, writeOffset);
             StoreUint(pixelIndex, descriptors.rayQueuePixelIndex, writeOffset);
 #endif
-#if 1
+#if 0
             RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> occludedQuery;
             RayDesc occludedDesc;
             occludedDesc.Origin = OffsetRayOrigin(origin, hitInfo.gn);
@@ -342,13 +338,7 @@ void main(uint3 dtID: SV_DispatchThreadID)
     float bsdfPdf;
     dir = SampleDisney(material, sample3, reflectance.xyz, throughput, wo, bsdfPdf);
 
-    if (dir.z == 0) 
-    {
-        uint freeListIndex;
-        InterlockedAdd(pixelInfoFreeList[0], 1, freeListIndex);
-        pixelInfoFreeList[freeListIndex + 1] = pixelIndex;
-        return;
-    }
+    if (dir.z == 0) return;
 
     bool bounceWasSpecular = material.roughness == 0.f && material.specTrans == 1.f;
     uint index = scene.width * pixelLocation.y + pixelLocation.x;
@@ -375,9 +365,6 @@ void main(uint3 dtID: SV_DispatchThreadID)
     if (russianRoulette) 
     {
         image[pixelLocation] = float4(radiance, 1);
-        uint freeListIndex;
-        InterlockedAdd(pixelInfoFreeList[0], 1, freeListIndex);
-        pixelInfoFreeList[freeListIndex + 1] = pixelIndex;
     }
     else 
     {
@@ -389,7 +376,6 @@ void main(uint3 dtID: SV_DispatchThreadID)
         pixelInfos[pixelIndex].rayConeWidth = rayCone.width;
         pixelInfos[pixelIndex].rayConeSpread = rayCone.spreadAngle;
         pixelInfos[pixelIndex].rngState = rng.State;
-        pixelInfos[pixelIndex].depth = depth + 1;
 
         uint writeOffset;
         InterlockedAdd(queues[WAVEFRONT_RAY_QUEUE_INDEX].writeOffset, 1, writeOffset);

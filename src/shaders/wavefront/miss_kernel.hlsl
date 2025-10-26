@@ -13,7 +13,6 @@ StructuredBuffer<PixelInfo> pixelInfos : register(t3);
 RWTexture2D<float4> albedo : register(u4);
 RWStructuredBuffer<float3> normals : register(u5);
 RWTexture2D<float4> image : register(u6);
-RWStructuredBuffer<int> pixelInfoFreeList : register(u7);
 
 [[vk::push_constant]] RayPushConstant push;
 
@@ -35,10 +34,11 @@ void main(uint3 dtID : SV_DispatchThreadID)
     uint2 pixelLoc = uint2(BitFieldExtractU32(pixelInfo.pixelLocation_specularBounce, 15, 0),
                            BitFieldExtractU32(pixelInfo.pixelLocation_specularBounce, 15, 15));
     bool specularBounce = bool(BitFieldExtractU32(pixelInfo.pixelLocation_specularBounce, 1, 30));
-    uint depth = pixelInfo.depth;
 
     float3 imageLe = EnvMapLe(scene.lightFromRender, push.envMap, dir);
     radiance += throughput * imageLe;
+
+    uint depth = push.depth;
 
     if (depth == 0 || (depth == 1 && specularBounce))
     {
@@ -47,8 +47,4 @@ void main(uint3 dtID : SV_DispatchThreadID)
         normals[index] = 0;
     }
     image[pixelLoc] = float4(radiance, 1);
-
-    uint freeListIndex;
-    InterlockedAdd(pixelInfoFreeList[0], 1, freeListIndex);
-    pixelInfoFreeList[freeListIndex + 1] = pixelIndex;
 }

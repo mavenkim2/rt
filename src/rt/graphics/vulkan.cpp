@@ -1295,9 +1295,9 @@ void Vulkan::CheckInitializedThreadPool(int threadIndex)
         poolSize[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         poolSize[1].descriptorCount = 30;
         poolSize[2].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        poolSize[2].descriptorCount = 120;
+        poolSize[2].descriptorCount = 60;
         poolSize[3].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        poolSize[3].descriptorCount = 2000;
+        poolSize[3].descriptorCount = 550;
         poolSize[4].type            = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
         poolSize[4].descriptorCount = 30;
         poolSize[5].type            = VK_DESCRIPTOR_TYPE_SAMPLER;
@@ -1307,7 +1307,7 @@ void Vulkan::CheckInitializedThreadPool(int threadIndex)
 
         poolCreateInfo.pPoolSizes    = poolSize;
         poolCreateInfo.poolSizeCount = ArrayLength(poolSize);
-        poolCreateInfo.maxSets       = 800;
+        poolCreateInfo.maxSets       = 500;
 
         vkCreateDescriptorPool(device, &poolCreateInfo, 0, &pool.descriptorPool[0]);
         vkCreateDescriptorPool(device, &poolCreateInfo, 0, &pool.descriptorPool[1]);

@@ -21,16 +21,6 @@ void main(uint3 dtID : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex, uin
     if (queueIndex >= end) return;
     queueIndex %= WAVEFRONT_QUEUE_SIZE;
 
-    if (groupIndex == 0)
-    {
-        for (int i = 0; i < WORKGROUP_SIZE / SUBGROUP_SIZE; i++)
-        {
-            minPs[i] = FLT_MAX;
-            maxPs[i] = -FLT_MAX;
-        }
-    }
-    GroupMemoryBarrierWithGroupSync();
-
     float3 pos = GetFloat3(descriptors.rayQueuePosIndex, queueIndex);
 
     float3 minP = WaveActiveMin(pos);
@@ -47,13 +37,12 @@ void main(uint3 dtID : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex, uin
 
     uint maxWavesInGroup = WORKGROUP_SIZE / WaveGetLaneCount();
 
-    uint waveIndex = WaveGetLaneIndex();
-    if (waveIndex < maxWavesInGroup)
+    if (groupIndex < maxWavesInGroup)
     {
-        float3 minPos = minPs[waveIndex];
+        float3 minPos = minPs[groupIndex];
         minP = WaveActiveMin(minPos);
 
-        float3 maxPos = maxPs[waveIndex];
+        float3 maxPos = maxPs[groupIndex];
         maxP = WaveActiveMax(maxPos);
 
         if (groupIndex == 0)
