@@ -35,8 +35,7 @@
 StructuredBuffer<SortKey> g_elements_in : register(t0);
 RWStructuredBuffer<uint> g_histograms : register(u1);
 
-StructuredBuffer<WavefrontQueue> queues : register(t2);
-StructuredBuffer<uint> indirectBuffer : register(t3);
+StructuredBuffer<uint> numElements : register(t2);
 
 groupshared uint histogram[RADIX_SORT_BINS];
 
@@ -44,7 +43,7 @@ groupshared uint histogram[RADIX_SORT_BINS];
 void main(uint groupIndex : SV_GroupIndex, uint3 groupID : SV_GroupID) 
 {
     const uint g_num_blocks_per_workgroup = 32;
-    const uint g_num_elements = queues[pc.queueIndex].writeOffset - queues[pc.queueIndex].readOffset;
+    const uint g_num_elements = numElements[0];
 
     if (groupID.x * g_num_blocks_per_workgroup + groupIndex > g_num_elements) return;
 
