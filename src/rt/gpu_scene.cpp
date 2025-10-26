@@ -296,23 +296,23 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     Shader shadingKernelShader =
         device->CreateShader(ShaderStage::Compute, "shading kernel", shadingKernelData);
 
-    string findRayMinMaxName = "../src/shaders/find_ray_min_max.spv";
+    string findRayMinMaxName = "../src/shader/find_ray_min_max.spv";
     string findRayMinMaxData = OS_ReadFile(arena, findRayMinMaxName);
     Shader findRayMinMaxShader =
         device->CreateShader(ShaderStage::Compute, "find ray min max", findRayMinMaxData);
 
-    shaderName = "../src/shaders/generate_ray_kernel_keys.spv";
-    shaderData = OS_ReadFile(arena, shaderName);
+    shaderName = "../src/shader/generateRayKernelKeysName.spv";
+    shaderData = OS_ReadFile(arena, shaderData);
     Shader generateRayKernelKeysShader =
         device->CreateShader(ShaderStage::Compute, "generate ray kernel keys", shaderData);
 
-    shaderName = "../src/shaders/radix_sort.spv";
-    shaderData = OS_ReadFile(arena, shaderName);
+    shaderName = "../src/shader/radix_sort.spv";
+    shaderData = OS_ReadFile(arena, shaderData);
     Shader radixSortShader =
         device->CreateShader(ShaderStage::Compute, "radix sort", shaderData);
 
-    shaderName = "../src/shaders/radix_sort_histogram.spv";
-    shaderData = OS_ReadFile(arena, shaderName);
+    shaderName = "../src/shader/radix_sort_histogram.spv";
+    shaderData = OS_ReadFile(arena, shaderData);
     Shader radixSortHistogramShader =
         device->CreateShader(ShaderStage::Compute, "radix sort histogram", shaderData);
 
@@ -542,11 +542,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         &generateRayKernelKeysShader, &generateRayKernelKeysLayout);
 
     // radix sort
-    PushConstant radixSortPush;
-    radixSortPush.offset = 0;
-    radixSortPush.size   = sizeof(RadixSortPushConstant);
-    radixSortPush.stage  = ShaderStage::Compute;
-
     DescriptorSetLayout radixSortLayout = {};
     radixSortLayout.AddBinding(0, DescriptorType::StorageBuffer, VK_SHADER_STAGE_COMPUTE_BIT);
     radixSortLayout.AddBinding(1, DescriptorType::StorageBuffer, VK_SHADER_STAGE_COMPUTE_BIT);
@@ -554,8 +549,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     radixSortLayout.AddBinding(3, DescriptorType::StorageBuffer, VK_SHADER_STAGE_COMPUTE_BIT);
     radixSortLayout.AddBinding(4, DescriptorType::StorageBuffer, VK_SHADER_STAGE_COMPUTE_BIT);
 
-    VkPipeline radixSortPipeline = device->CreateComputePipeline(
-        &radixSortShader, &radixSortLayout, &radixSortPush, "radix sort histogram pipeline");
+    VkPipeline radixSortPipeline =
+        device->CreateComputePipeline(&radixSortShader, &radixSortLayout);
 
     // radix sort histogram
     DescriptorSetLayout radixSortHistogramLayout = {};
@@ -569,8 +564,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                         VK_SHADER_STAGE_COMPUTE_BIT);
 
     VkPipeline radixSortHistogramPipeline =
-        device->CreateComputePipeline(&radixSortHistogramShader, &radixSortHistogramLayout,
-                                      &radixSortPush, "radix sort histogram pipeline");
+        device->CreateComputePipeline(&radixSortHistogramShader, &radixSortHistogramLayout);
 
     // device->GetDLSSTargetDimensions(targetWidth, targetHeight);
     u32 targetWidth  = 2560;
@@ -2162,14 +2156,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                             .AddHandle(wavefrontRaySortKeysBuffer0, ResourceUsageType::Read)
                             .AddHandle(wavefrontSortIndirectBuffer, ResourceUsageType::Read);
 
-                        u32 numIters = sizeof(SortKey::key);
+                        u32 numIters = sizeof(SortKey::key) / 8;
                         Assert((numIters & 1) == 0);
                         for (u32 iter = 0; iter < numIters; iter++)
                         {
-                            RadixSortPushConstant rpc;
-                            rpc.g_shift    = iter * 8;
-                            rpc.queueIndex = WAVEFRONT_RAY_QUEUE_INDEX;
-
                             ResourceHandle sortKeys0 = (iter & 1)
                                                            ? wavefrontRaySortKeysBuffer1
                                                            : wavefrontRaySortKeysBuffer0;
@@ -2186,8 +2176,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                                    VK_ACCESS_2_SHADER_WRITE_BIT,
                                                    VK_ACCESS_2_SHADER_READ_BIT);
                                       cmd->FlushBarriers();
-                                  },
-                                  &radixSortPush, &rpc)
+                                  })
                                 .AddHandle(sortKeys0, ResourceUsageType::Read)
                                 .AddHandle(wavefrontRaySortHistogram, ResourceUsageType::Read)
                                 .AddHandle(wavefrontQueuesBuffer, ResourceUsageType::Read)
@@ -2204,8 +2193,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                                    VK_ACCESS_2_SHADER_WRITE_BIT,
                                                    VK_ACCESS_2_SHADER_READ_BIT);
                                       cmd->FlushBarriers();
-                                  },
-                                  &radixSortPush, &rpc)
+                                  })
                                 .AddHandle(sortKeys0, ResourceUsageType::Read)
                                 .AddHandle(sortKeys1, ResourceUsageType::Write)
                                 .AddHandle(wavefrontRaySortHistogram, ResourceUsageType::Read)
@@ -2515,8 +2503,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         debugState.EndFrame(cmd);
 
-        rg->StartPass(1, [&swapchain, finalImageHandle](CommandBuffer *cmd) {
-              GPUImage *gpuImage = GetRenderGraph()->GetImage(finalImageHandle);
+        rg->StartPass(1, [&swapchain, image](CommandBuffer *cmd) {
+              GPUImage *gpuImage = GetRenderGraph()->GetImage(image);
               device->CopyFrameBuffer(&swapchain, cmd, gpuImage);
           }).AddHandle(finalImageHandle, ResourceUsageType::Read);
 

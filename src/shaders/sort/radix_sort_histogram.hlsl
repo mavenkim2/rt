@@ -43,11 +43,8 @@ groupshared uint histogram[RADIX_SORT_BINS];
 [numthreads(WORKGROUP_SIZE, 1, 1)]
 void main(uint groupIndex : SV_GroupIndex, uint3 groupID : SV_GroupID) 
 {
-    const uint g_num_blocks_per_workgroup = 32;
+    const uint g_num_blocks_per_workgroup = 1;
     const uint g_num_elements = queues[pc.queueIndex].writeOffset - queues[pc.queueIndex].readOffset;
-
-    if (groupID.x * g_num_blocks_per_workgroup + groupIndex > g_num_elements) return;
-
     uint g_shift = pc.g_shift;
 
     // initialize histogram
