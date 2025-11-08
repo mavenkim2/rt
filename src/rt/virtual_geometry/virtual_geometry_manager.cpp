@@ -35,6 +35,11 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
     Shader decodeDgfClustersShader = device->CreateShader(
         ShaderStage::Compute, "decode dgf clusters", decodeDgfClustersData);
 
+    string decodeClustersNoClasName   = "../src/shaders/decode_clusters_no_clas.spv";
+    string decodeClustersNoClasData   = OS_ReadFile(arena, decodeClustersNoClasName);
+    Shader decodeClustersNoClasShader = device->CreateShader(
+        ShaderStage::Compute, "decode clusters no clas", decodeClustersNoClasData);
+
     string decodeVoxelClustersName   = "../src/shaders/decode_voxel_aabbs.spv";
     string decodeVoxelClustersData   = OS_ReadFile(arena, decodeVoxelClustersName);
     Shader decodeVoxelClustersShader = device->CreateShader(
@@ -189,6 +194,21 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
     decodeDgfClustersPipeline =
         device->CreateComputePipeline(&decodeDgfClustersShader, &decodeDgfClustersLayout,
                                       &decodeDgfPush, "decode dgf clusters");
+
+    // temp
+    {
+        for (int i = 0; i <= 2; i++)
+        {
+            decodeClustersNoClasLayout.AddBinding(i, DescriptorType::StorageBuffer,
+                                                  VK_SHADER_STAGE_COMPUTE_BIT);
+        }
+        decodeClustersNoClasLayout.AddBinding((u32)RTBindings::ClusterPageData,
+                                              DescriptorType::StorageBuffer,
+                                              VK_SHADER_STAGE_COMPUTE_BIT);
+        decodeClustersNoClasPipeline = device->CreateComputePipeline(
+            &decodeClustersNoClasShader, &decodeClustersNoClasLayout, &decodeDgfPush,
+            "decode clusters no clas");
+    }
 
     decodeVoxelClustersPush.stage  = ShaderStage::Compute;
     decodeVoxelClustersPush.size   = sizeof(NumPushConstant);
@@ -407,6 +427,12 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
         118000000);
 
+    indexBuffer2 = device->CreateBuffer(
+        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+        sizeof(u32) * 118000000);
+
     vertexBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
@@ -552,7 +578,9 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
 }
 
 u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, string filename,
-                                       bool cullSubPixel)
+                                       bool cullSubPixel,
+                                       GPUAccelerationStructurePayload &payload,
+                                       QueryPool &pool)
 {
     string clusterPageData = OS_ReadFile(arena, filename);
 
@@ -642,12 +670,34 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, string 
         .End();
 
     cmd->Dispatch(groupCountX, groupCountY, 1);
+
+    // temp test
+#if 0
+    {
+        cmd->StartBindingCompute(decodeClustersNoClasPipeline, &decodeClustersNoClasLayout)
+            .Bind(&indexBuffer2)
+            .Bind(&decodeClusterDataBuffer)
+            .Bind(&clasGlobalsBuffer)
+            .Bind(&clusterPageDataBuffer)
+            .PushConstants(&decodeDgfPush, &decodePush)
+            .End();
+
+        cmd->Dispatch(groupCountX, groupCountY, 1);
+    }
+#endif
+
     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                  VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                  VK_ACCESS_2_SHADER_WRITE_BIT,
                  VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
                      VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
     cmd->FlushBarriers();
+
+#if 0
+    payload = cmd->BuildTriangleBLAS(&indexBuffer2, &vertexBuffer,
+                                     Min(numClusters * MAX_CLUSTER_TRIANGLES, 118000000u / 3));
+    pool    = cmd->GetCompactionSizes(&payload);
+#endif
 
     u32 clasScratchSize, clasAccelerationStructureSize;
     device->GetCLASBuildSizes(CLASOpMode::ExplicitDestinations, numClusters, 118000000 / 3,

@@ -907,6 +907,8 @@ struct CommandBuffer
     VkAccelerationStructureKHR BuildTLAS(GPUBuffer *accelBuffer, GPUBuffer *scratchBuffer,
                                          GPUBuffer *instanceData, GPUBuffer *buildRangeBuffer,
                                          u32 maxInstances);
+    GPUAccelerationStructurePayload BuildTriangleBLAS(GPUBuffer *indices, GPUBuffer *positions,
+                                                      u32 numTriangles);
     GPUAccelerationStructurePayload BuildCustomBLAS(GPUBuffer *aabbsBuffer, u32 numAabbs);
     void BuildCustomBLAS(StaticArray<AccelBuildInfo> &blasBuildInfos);
     void ClearBuffer(GPUBuffer *b, u32 val = 0, uint64_t dstOffset = 0,

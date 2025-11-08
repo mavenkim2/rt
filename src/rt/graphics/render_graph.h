@@ -92,8 +92,14 @@ struct ResidentResource
 
 struct Pass
 {
+    Pass(Arena *arena, u32 numResources);
+    Pass(Arena *arena, u32 numResources, PassFunction func);
+    Pass(Arena *arena, u32 numResources, PassFunction func, VkPipeline pipeline,
+         DescriptorSetLayout *layout);
+
     PassFunction func;
     StaticArray<ResourceHandle> resourceHandles;
+    StaticArray<u32> resourceOffsets;
     StaticArray<ResourceUsageType> resourceUsageTypes;
     StaticArray<int> subresources;
 
@@ -103,7 +109,8 @@ struct Pass
 
     // Image aliasing
 
-    Pass &AddHandle(ResourceHandle handle, ResourceUsageType type, int subresource = -1);
+    Pass &AddHandle(ResourceHandle handle, ResourceUsageType type, int subresource = -1,
+                    u32 offset = 0);
 };
 
 struct RenderGraph
@@ -150,6 +157,7 @@ struct RenderGraph
     Pass &StartPass(u32 numResources, PassFunction &&func);
     Pass &StartComputePass(VkPipeline pipeline, DescriptorSetLayout &layout, u32 numResources,
                            PassFunction &&func);
+    // TODO IMPORTANT: is this lifetime properly preserved???
     Pass &StartIndirectComputePass(string name, VkPipeline pipeline,
                                    DescriptorSetLayout &layout, u32 numResources,
                                    ResourceHandle indirectBuffer, u32 indirectBufferOffset,
@@ -188,29 +196,29 @@ struct RenderGraph
 
             func(cmd);
         };
-        Pass pass;
-        pass.pipeline           = pipeline;
-        pass.layout             = &layout;
-        pass.resourceHandles    = StaticArray<ResourceHandle>(arena, numResources);
-        pass.resourceUsageTypes = StaticArray<ResourceUsageType>(arena, numResources);
-        pass.subresources       = StaticArray<int>(arena, numResources);
-        pass.func               = AddComputePass;
+        Pass pass(arena, numResources, AddComputePass, pipeline, &layout);
         passes.Push(pass);
         return passes[passes.Length() - 1];
     }
 
     template <typename T>
-    Pass &StartIndirectComputePass(VkPipeline pipeline, DescriptorSetLayout &layout,
-                                   u32 numResources, ResourceHandle indirectBuffer,
-                                   u32 indirectBufferOffset, PassFunction &&func,
-                                   PushConstant *pc, T *push)
+    Pass &StartIndirectComputePass(string name, VkPipeline pipeline,
+                                   DescriptorSetLayout &layout, u32 numResources,
+                                   ResourceHandle indirectBuffer, u32 indirectBufferOffset,
+                                   PassFunction &&func, PushConstant *pc, T *push)
     {
-        u32 passIndex = passes.Length();
+        string str                    = PushStr8Copy(arena, name);
+        u32 passIndex                 = passes.Length();
+        RenderGraphResource &resource = resources[indirectBuffer.index];
+        if (EnumHasAnyFlags(resource.flags, ResourceFlags::Transient))
+        {
+            resource.lifeTime.Extend(passIndex, QueueType_Graphics);
+        }
         Assert(push);
         T *p = (T *)PushArrayNoZero(arena, u8, sizeof(T));
         MemoryCopy(p, push, sizeof(T));
         auto AddComputePass = [pc, p, passIndex, this, func, indirectBuffer,
-                               indirectBufferOffset, pipeline](CommandBuffer *cmd) {
+                               indirectBufferOffset, pipeline, str](CommandBuffer *cmd) {
             Pass &pass = passes[passIndex];
             cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
             DescriptorSet ds = pass.layout->CreateDescriptorSet();
@@ -220,17 +228,13 @@ struct RenderGraph
             cmd->PushConstants(pc, p, pass.layout->pipelineLayout);
 
             RenderGraphResource &resource = resources[indirectBuffer.index];
+            device->BeginEvent(cmd, str);
             cmd->DispatchIndirect(&resource.buffer, indirectBufferOffset);
+            device->EndEvent(cmd);
 
             func(cmd);
         };
-        Pass pass;
-        pass.pipeline           = pipeline;
-        pass.layout             = &layout;
-        pass.resourceHandles    = StaticArray<ResourceHandle>(arena, numResources);
-        pass.resourceUsageTypes = StaticArray<ResourceUsageType>(arena, numResources);
-        pass.subresources       = StaticArray<int>(arena, numResources);
-        pass.func               = AddComputePass;
+        Pass pass(arena, numResources, AddComputePass, pipeline, &layout);
         passes.Push(pass);
         return passes[passes.Length() - 1];
     }

@@ -272,6 +272,14 @@ transpose(float4x3(
             4384.43992535694, 
             2008.4837393869711, 
             1063.38314698681)),
+
+           //uniform bool collection:lightLink:includeRoot = 0
+           //prepend rel collection:lightLink:includes = </island/osOcean/geometry/ocean_geo>
+           //custom int primvars:ri:attributes:visibility:camera = 0
+           //custom int ri:light:traceLightPaths = 1
+           //float3 xformOp:rotateXYZ = (-40, 25, 0)
+           //double3 xformOp:translate = (0, 74.417, 0)
+           //uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
 };
 
 static const float4 areaLightColors[] = 

@@ -67,6 +67,7 @@ void IntersectAABB(float3 boundsMin, float3 boundsMax, float3 o, float3 invDir, 
     tLeave = min(tMax.x, min(tMax.y, tMax.z));
 }
 
+static float4 causticLightColor = pow(2, 13.6) * float4(1.0, 0.7681251, 0.56915444, 1.0);
 
 [shader("raygeneration")]
 void main()
@@ -159,6 +160,7 @@ void main()
 
     bool specularBounce = false;
     float bsdfPdf = 0.f;
+    uint flags = 0;
 
     while (true)
     {
@@ -176,9 +178,15 @@ void main()
         if (query.CommittedStatus() == COMMITTED_NOTHING)
         {
             float3 imageLe = EnvMapLe(scene.lightFromRender, push.envMap, dir);
-            if (1)//specularBounce || depth == 0)
+            if (specularBounce || depth == 0)
             {
                 radiance += throughput * imageLe;
+#if 0
+                if (flags == 0x1)
+                {
+                    radiance += throughput * causticLightColor;
+                }
+#endif
             }
             else 
             {
@@ -199,11 +207,38 @@ void main()
             break;
         }
 
-        // TODO: emitter intersection
         if (depth++ >= maxDepth)
         {
             break;
         }
+
+#if 0 
+        // Emitter intersection
+        {
+            uint lightIndex = 0;
+            if (specularBounce || depth == 1)
+            {
+                float3 Le = areaLightColors[lightIndex];
+                L += beta * Le;
+            }
+            else
+            {
+                float3 Le = areaLightColors[lightIndex];
+                float pmf = LightPDF(scene);
+                float lightPdf =
+                    pmf * DiffuseAreaLight::PDF_Li(scene, si.lightIndices, prevSi.p, si,
+                    true);
+                float w_l = PowerHeuristic(1, bsdfPdf, 1, lightPdf);
+                L += beta * w_l * Le;
+            }
+            pos = ?;
+
+            float3 gn;
+            gn = dot(dir, gn) < 0.f ? -gn : gn;
+            pos = OffsetRayOrigin(origin, gn);
+            continue;
+        }
+#endif
 
 #if 0
         [[vk::ext_storage_class(HitObjectAttributeNV)]] BuiltInTriangleIntersectionAttributes attributes;
@@ -375,6 +410,11 @@ void main()
                                      dot(frameY, -query.WorldRayDirection()),
                                      dot(hitInfo.n, -query.WorldRayDirection())));
 
+        // Photon mapping
+        if (!(material.roughness == 0.f && material.specTrans == 1.f))
+        {
+        }
+
         // NEE
         if (!(material.roughness == 0.f && material.specTrans == 1.f))
         {
@@ -469,7 +509,7 @@ void main()
                 tMax = length(origin - lightSamplePos) * .99f;
             }
 
-            float lightBsdfPdf;
+            float lightBsdfPdf = 0.f;
             float3 wi = normalize(float3(dot(hitInfo.ss, lightSampleDirection), 
                                          dot(frameY, lightSampleDirection),
                                          dot(hitInfo.n, lightSampleDirection)));
@@ -491,13 +531,13 @@ void main()
 
                 if (occludedQuery.CommittedStatus() == COMMITTED_NOTHING)
                 {
-                    //float weight = Sqr(lightPdf) / (Sqr(lightBsdfPdf) + Sqr(lightPdf));
+                    float weight = Sqr(lightPdf) / (Sqr(lightBsdfPdf) + Sqr(lightPdf));
                     float3 L = deltaLight ? 
                                 EnvMapLe(scene.lightFromRender, push.envMap, lightSampleDirection)
                                 : areaLightColors[lightSampleIndex].xyz;
                     
-                    //float3 r = throughput * bsdfVal * weight * L / lightPdf;
-                    float3 r = throughput * bsdfVal * L / lightPdf;
+                    float3 r = throughput * bsdfVal * weight * L / lightPdf;
+                    //float3 r = throughput * bsdfVal * L / lightPdf;
                     radiance += r;
                 }
             }

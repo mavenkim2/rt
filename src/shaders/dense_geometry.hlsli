@@ -94,6 +94,8 @@ struct DenseGeometry
         uint mask = (1u << bitIndex) - 1u;
 
         // x = restarts, y = edge, z = backtrack
+        //dwordIndex = 0;
+
         uint address = baseAddress + geoBaseAddress + ctrlOffset + dwordIndex * 12;
         uint2 vals = GetAlignedAddressAndBitOffset(address, 0);
         uint4 stripBitmasks = clusterPageData.Load4(vals[0]);
@@ -101,6 +103,7 @@ struct DenseGeometry
         stripBitmasks[1] = BitAlignU32(stripBitmasks[2], stripBitmasks[1], vals[1]);
         stripBitmasks[2] = BitAlignU32(stripBitmasks[3], stripBitmasks[2], vals[1]);
 
+#if 1
         const uint restartBitmask = stripBitmasks[0];
         const uint edgeBitmask = stripBitmasks[1];
         const uint backtrackBitmask = stripBitmasks[2] & mask;
@@ -115,6 +118,77 @@ struct DenseGeometry
         const uint isBacktrack = BitFieldExtractU32(stripBitmasks[2], 1, bitIndex);
 
         const uint isEdge1Bitmask = 0u - isEdge1;
+#endif
+
+#if 0
+        int r = 1;
+        int bt;
+        int3 prev;
+        int prevCtrl;
+        int ctrl = Restart;
+
+        for (int k = 1; k <= triangleIndex; k++)
+        {
+            if ((k & 31u) == 0)
+            {
+                dwordIndex++;
+                uint address = baseAddress + geoBaseAddress + ctrlOffset + dwordIndex * 12;
+                uint2 vals = GetAlignedAddressAndBitOffset(address, 0);
+                stripBitmasks = clusterPageData.Load4(vals[0]);
+                stripBitmasks[0] = BitAlignU32(stripBitmasks[1], stripBitmasks[0], vals[1]);
+                stripBitmasks[1] = BitAlignU32(stripBitmasks[2], stripBitmasks[1], vals[1]);
+                stripBitmasks[2] = BitAlignU32(stripBitmasks[3], stripBitmasks[2], vals[1]);
+            }
+            const uint testRestart = BitFieldExtractU32(stripBitmasks[0], 1, k & 31u);
+            const uint testEdge1 = BitFieldExtractU32(stripBitmasks[1], 1, k & 31u);
+            const uint testBacktrack = BitFieldExtractU32(stripBitmasks[2], 1, k & 31u);
+            if (testRestart)
+            {
+                ctrl = Restart;
+            }
+            else if (testBacktrack) 
+            {
+                ctrl = Backtrack;
+            }
+            else if (testEdge1)
+            {
+                ctrl = Edge1;
+            }
+            else 
+            {
+                ctrl = Edge2;
+            }
+
+            prev = indexAddress;
+            if (ctrl == Restart)
+            {
+                r++;
+                indexAddress = int3(2 * r + k - 2, 2 * r + k - 1, 2 * r + k);
+            }
+            else if (ctrl == Edge1)
+            {
+                indexAddress = int3(prev[2], prev[1], 2 * r + k);
+                bt = prev[0];
+            }
+            else if (ctrl == Edge2)
+            {
+                indexAddress = int3(prev[0], prev[2], 2 * r + k);
+                bt = prev[1];
+            }
+            else if (ctrl == Backtrack)
+            {
+                if (prevCtrl == Edge1)
+                {
+                    indexAddress = int3(bt, prev[0], 2 * r + k);
+                }
+                else 
+                {
+                    indexAddress = int3(prev[1], bt, 2 * r + k);
+                }
+            }
+            prevCtrl = ctrl;
+        }
+#else
 
         // Restart
         if (isRestart)
@@ -160,6 +234,7 @@ struct DenseGeometry
 
             indexAddress = isEdge1 ? indexAddress.yxz : indexAddress;
         }
+#endif
 
         // Get the first bits mask
         uint2 baseAligned_bitOffset = GetAlignedAddressAndBitOffset(baseAddress + geoBaseAddress, firstBitOffset);

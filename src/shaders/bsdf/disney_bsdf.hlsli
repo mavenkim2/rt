@@ -127,7 +127,7 @@ float3 SampleDisney(GPUMaterial material, float3 u, float3 baseColor, inout floa
     else if (u.z < probSpecReflect + probSpecRefract)
     {
         float etap;
-        bool success = Refract(wo, wm, material.ior, etap, wi);
+        bool success = Refract(wo, wm, 1.1, etap, wi);
         if (!success)
         {
             return 0;

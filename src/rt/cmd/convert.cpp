@@ -4032,6 +4032,7 @@ static void LoadMoanaJSON(Arena *arena, string directory)
     string testFilename = "../../data/island/pbrt-v4/json/isMountainB/isMountainB.json";
     LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
 
+#if 0
     testFilename = "../../data/island/pbrt-v4/json/osOcean/osOcean.json";
     LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
 
@@ -4088,6 +4089,7 @@ static void LoadMoanaJSON(Arena *arena, string directory)
 
     testFilename = "../../data/island/pbrt-v4/json/isDunesB/isDunesB.json";
     LoadMoanaJSON(&sls, &baseInfo, directory, testFilename, disneyMaterials);
+#endif
 
     WriteFile(directory, &baseInfo, 0, &disneyMaterials);
 }

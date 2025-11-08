@@ -170,6 +170,7 @@ set (VULKAN_INCLUDE_DIR
 
 if (USE_GPU)
     list (APPEND RT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/gpu_scene.cpp)
+    list (APPEND RT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/photon_mapping/photon_mapping.cpp)
     list (APPEND RT_DEFINITIONS "USE_GPU")
 else()
     list (APPEND RT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/cpu_scene.cpp)
@@ -248,6 +249,18 @@ if (USE_GPU)
         "${SHADER_SRC_DIR}/accumulate_frames.hlsl"
         "${SHADER_SRC_DIR}/copy_denoised_output.hlsl"
         "${SHADER_SRC_DIR}/wavefront/shading_kernel.hlsl"
+        # "${SHADER_SRC_DIR}/photon_mapping/photons.hlsl"
+        "${SHADER_SRC_DIR}/sort/downsweep.hlsl"
+        "${SHADER_SRC_DIR}/sort/upsweep.hlsl"
+        "${SHADER_SRC_DIR}/sort/spine.hlsl"
+        "${SHADER_SRC_DIR}/kd_tree/update_tags.hlsl"
+        "${SHADER_SRC_DIR}/kd_tree/calculate_bounds.hlsl"
+        "${SHADER_SRC_DIR}/kd_tree/create_sort_keys.hlsl"
+        "${SHADER_SRC_DIR}/kd_tree/kd_tree_prepare_indirect.hlsl"
+        "${SHADER_SRC_DIR}/photon_mapping/generate_random_points.hlsl"
+        "${SHADER_SRC_DIR}/kd_tree/finalize_calculate_bounds.hlsl"
+        "${SHADER_SRC_DIR}/clas/decode_clusters_no_clas.hlsl"
+        "${SHADER_SRC_DIR}/kd_tree/initialize_indices.hlsl"
     )
     set_property(SOURCE 
         "${SHADER_SRC_DIR}/clas/task.hlsl"
@@ -256,6 +269,7 @@ if (USE_GPU)
         "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl" 
         "${SHADER_SRC_DIR}/render_raytrace_miss.hlsl"
         "${SHADER_SRC_DIR}/render_raytrace_hit.hlsl"
+        # "${SHADER_SRC_DIR}/photon_mapping/photons.hlsl"
         PROPERTY name "rt")
     set_property(SOURCE 
         "${SHADER_SRC_DIR}/compress/block_compress.hlsl"
@@ -288,6 +302,17 @@ if (USE_GPU)
         "${SHADER_SRC_DIR}/accumulate_frames.hlsl"
         "${SHADER_SRC_DIR}/copy_denoised_output.hlsl"
         "${SHADER_SRC_DIR}/wavefront/shading_kernel.hlsl"
+        "${SHADER_SRC_DIR}/sort/downsweep.hlsl"
+        "${SHADER_SRC_DIR}/sort/upsweep.hlsl"
+        "${SHADER_SRC_DIR}/sort/spine.hlsl"
+        "${SHADER_SRC_DIR}/kd_tree/update_tags.hlsl"
+        "${SHADER_SRC_DIR}/kd_tree/calculate_bounds.hlsl"
+        "${SHADER_SRC_DIR}/kd_tree/create_sort_keys.hlsl"
+        "${SHADER_SRC_DIR}/kd_tree/kd_tree_prepare_indirect.hlsl"
+        "${SHADER_SRC_DIR}/photon_mapping/generate_random_points.hlsl"
+        "${SHADER_SRC_DIR}/kd_tree/finalize_calculate_bounds.hlsl"
+        "${SHADER_SRC_DIR}/clas/decode_clusters_no_clas.hlsl"
+        "${SHADER_SRC_DIR}/kd_tree/initialize_indices.hlsl"
         PROPERTY name "cs")
     
     file(GLOB_RECURSE SHADER_INCLUDES "${SHADER_SRC_DIR}/*.hlsl" "${SHADER_SRC_DIR}/*.hlsli")

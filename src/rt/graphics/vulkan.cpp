@@ -3340,9 +3340,10 @@ GPUAccelerationStructurePayload CommandBuffer::BuildAS(
                                             VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                                             &buildInfo, maxPrimitiveCounts, &sizeInfo);
 
-    GPUBuffer scratch = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                 VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                             sizeInfo.buildScratchSize);
+    GPUBuffer scratch = device->CreateBuffer(
+        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        sizeInfo.buildScratchSize);
 
     VkBufferDeviceAddressInfo info = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
     info.buffer                    = scratch.buffer;
@@ -3430,6 +3431,28 @@ GPUAccelerationStructurePayload CommandBuffer::BuildCustomBLAS(GPUBuffer *aabbsB
 
     return BuildAS(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, &geometry, 1, &rangeInfo,
                    &numAabbs);
+}
+
+GPUAccelerationStructurePayload
+CommandBuffer::BuildTriangleBLAS(GPUBuffer *indices, GPUBuffer *positions, u32 numTriangles)
+{
+    VkAccelerationStructureGeometryKHR geometry = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+    geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+    auto &triangles       = geometry.geometry.triangles;
+    triangles.sType     = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+    triangles.indexType = VK_INDEX_TYPE_UINT32;
+    triangles.indexData.deviceAddress  = device->GetDeviceAddress(indices);
+    triangles.vertexData.deviceAddress = device->GetDeviceAddress(positions);
+    triangles.vertexFormat             = VK_FORMAT_R32G32B32_SFLOAT;
+    triangles.maxVertex                = 22000000;
+    triangles.vertexStride             = 12;
+
+    VkAccelerationStructureBuildRangeInfoKHR rangeInfo = {};
+    rangeInfo.primitiveCount                           = numTriangles;
+
+    return BuildAS(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, &geometry, 1, &rangeInfo,
+                   &numTriangles);
 }
 
 void CommandBuffer::BuildCustomBLAS(StaticArray<AccelBuildInfo> &blasBuildInfos)

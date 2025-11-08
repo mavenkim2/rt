@@ -188,6 +188,9 @@ struct VirtualGeometryManager
     DescriptorSetLayout decodeDgfClustersLayout = {};
     VkPipeline decodeDgfClustersPipeline;
 
+    DescriptorSetLayout decodeClustersNoClasLayout = {};
+    VkPipeline decodeClustersNoClasPipeline;
+
     PushConstant decodeVoxelClustersPush;
     DescriptorSetLayout decodeVoxelClustersLayout = {};
     VkPipeline decodeVoxelClustersPipeline;
@@ -266,6 +269,8 @@ struct VirtualGeometryManager
     ResourceHandle clusterAccelSizesHandle;
 
     GPUBuffer indexBuffer;
+    // temp
+    GPUBuffer indexBuffer2;
     GPUBuffer vertexBuffer;
     GPUBuffer clasGlobalsBuffer;
 
@@ -385,7 +390,8 @@ struct VirtualGeometryManager
                         ResourceHandle scene);
     bool ProcessInstanceRequests(CommandBuffer *cmd);
     void ProcessRequests(CommandBuffer *cmd, bool test);
-    u32 AddNewMesh(Arena *arena, CommandBuffer *cmd, string filename, bool cullSubpixel);
+    u32 AddNewMesh(Arena *arena, CommandBuffer *cmd, string filename, bool cullSubpixel,
+                   GPUAccelerationStructurePayload &temp, QueryPool &pool);
     void FinalizeResources(CommandBuffer *cmd);
     void PrepareInstances(CommandBuffer *cmd, ResourceHandle sceneBuffer, bool ptlas);
     void BuildPTLAS(CommandBuffer *cmd);

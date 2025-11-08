@@ -6,6 +6,28 @@ namespace rt
 {
 RenderGraph *renderGraph_;
 
+Pass::Pass(Arena *arena, u32 numResources)
+{
+    resourceHandles    = StaticArray<ResourceHandle>(arena, numResources);
+    resourceOffsets    = StaticArray<u32>(arena, numResources);
+    resourceUsageTypes = StaticArray<ResourceUsageType>(arena, numResources);
+    subresources       = StaticArray<int>(arena, numResources);
+}
+
+Pass::Pass(Arena *arena, u32 numResources, PassFunction inFunc) : Pass(arena, numResources)
+{
+    func = inFunc;
+}
+
+Pass::Pass(Arena *arena, u32 numResources, PassFunction inFunc, VkPipeline inPipeline,
+           DescriptorSetLayout *inLayout)
+    : Pass(arena, numResources)
+{
+    func     = inFunc;
+    pipeline = inPipeline;
+    layout   = inLayout;
+}
+
 // GPU Zen 3: Advance Rendering Technique Chapter 5 Resource Management with Frame Graph in
 // Messiah
 void ResourceLifeTimeRange::Extend(u32 pass, QueueType queue)
@@ -125,11 +147,7 @@ int RenderGraph::Overlap(const ResourceLifeTimeRange &lhs,
 
 Pass &RenderGraph::StartPass(u32 numResources, PassFunction &&func)
 {
-    Pass pass;
-    pass.resourceHandles    = StaticArray<ResourceHandle>(arena, numResources);
-    pass.resourceUsageTypes = StaticArray<ResourceUsageType>(arena, numResources);
-    pass.subresources       = StaticArray<int>(arena, numResources);
-    pass.func               = func;
+    Pass pass(arena, numResources, func);
     passes.Push(pass);
     return passes[passes.Length() - 1];
 }
@@ -148,13 +166,7 @@ Pass &RenderGraph::StartComputePass(VkPipeline pipeline, DescriptorSetLayout &la
 
         func(cmd);
     };
-    Pass pass;
-    pass.pipeline           = pipeline;
-    pass.layout             = &layout;
-    pass.resourceHandles    = StaticArray<ResourceHandle>(arena, numResources);
-    pass.resourceUsageTypes = StaticArray<ResourceUsageType>(arena, numResources);
-    pass.subresources       = StaticArray<int>(arena, numResources);
-    pass.func               = AddComputePass;
+    Pass pass(arena, numResources, AddComputePass, pipeline, &layout);
     passes.Push(pass);
     return passes[passes.Length() - 1];
 }
@@ -164,8 +176,14 @@ Pass &RenderGraph::StartIndirectComputePass(string name, VkPipeline pipeline,
                                             ResourceHandle indirectBuffer,
                                             u32 indirectBufferOffset, PassFunction &&func)
 {
-    string str          = PushStr8Copy(arena, name);
-    u32 passIndex       = passes.Length();
+    string str                    = PushStr8Copy(arena, name);
+    u32 passIndex                 = passes.Length();
+    RenderGraphResource &resource = resources[indirectBuffer.index];
+    if (EnumHasAnyFlags(resource.flags, ResourceFlags::Transient))
+    {
+        resource.lifeTime.Extend(passIndex, QueueType_Graphics);
+    }
+
     auto AddComputePass = [str, passIndex, this, func, indirectBuffer, indirectBufferOffset,
                            pipeline](CommandBuffer *cmd) {
         Pass &pass = passes[passIndex];
@@ -181,20 +199,16 @@ Pass &RenderGraph::StartIndirectComputePass(string name, VkPipeline pipeline,
         func(cmd);
         device->EndEvent(cmd);
     };
-    Pass pass;
-    pass.pipeline           = pipeline;
-    pass.layout             = &layout;
-    pass.resourceHandles    = StaticArray<ResourceHandle>(arena, numResources);
-    pass.resourceUsageTypes = StaticArray<ResourceUsageType>(arena, numResources);
-    pass.subresources       = StaticArray<int>(arena, numResources);
-    pass.func               = AddComputePass;
+    Pass pass(arena, numResources, AddComputePass, pipeline, &layout);
     passes.Push(pass);
     return passes[passes.Length() - 1];
 }
 
-Pass &Pass::AddHandle(ResourceHandle handle, ResourceUsageType type, int subresource)
+Pass &Pass::AddHandle(ResourceHandle handle, ResourceUsageType type, int subresource,
+                      u32 offset)
 {
     resourceHandles.Push(handle);
+    resourceOffsets.Push(offset);
     resourceUsageTypes.Push(type);
     subresources.Push(subresource);
 
@@ -214,7 +228,7 @@ void RenderGraph::BindResources(Pass &pass, DescriptorSet &ds)
         RenderGraphResource &resource = resources[handle.index];
         if (IsBuffer(resource))
         {
-            ds.Bind(&resource.buffer);
+            ds.Bind(&resource.buffer, pass.resourceOffsets[handleIndex]);
         }
         else if (IsImage(resource))
         {

@@ -1,6 +1,8 @@
 #ifndef SAMPLING_HLSI_
 #define SAMPLING_HLSI_
 
+#include "common.hlsli"
+
 struct RNG
 {
     static uint PCG(uint x)

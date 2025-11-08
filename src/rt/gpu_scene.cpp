@@ -29,6 +29,7 @@
 #include "win32.h"
 #include "graphics/ptex.h"
 #include "virtual_geometry/virtual_geometry_manager.h"
+#include "photon_mapping/photon_mapping.h"
 
 #include "../../third_party/streamline/include/sl.h"
 #include "../../third_party/oidn/include/OpenImageDenoise/oidn.hpp"
@@ -132,10 +133,6 @@ static void FlattenInstances(ScenePrimitives *currentScene, const AffineSpace &t
         Instance &instance = sceneInstances[i];
         AffineSpace newTransform =
             transform * currentScene->affineTransforms[instance.transformIndex];
-        if (newTransform[0][0] > 1e10)
-        {
-            int stop = 5;
-        }
         ScenePrimitives *nextScene = currentScene->childScenes[instance.id];
 
         if (nextScene->geometryType == GeometryType::Instance)
@@ -504,7 +501,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     oidnSetFilterBool_p(filter, "hdr", true);
     oidnSetFilterInt_p(filter, "quality", OIDN_QUALITY_HIGH);
-    oidnCommitFilter_p(filter);
+    // oidnCommitFilter_p(filter);
 
     transferCmd->Barrier(&gpuEnvMap, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                          VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
@@ -797,7 +794,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     u32 numBlas = blasScenes.Length();
 
     // Virtual geometry initialization
-
     VirtualGeometryManager virtualGeometryManager(sceneScratch.temp.arena, targetWidth,
                                                   targetHeight, blasScenes.Length());
     StaticArray<AABB> blasSceneBounds(sceneScratch.temp.arena, numBlas);
@@ -807,9 +803,15 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     Semaphore geoSemaphore   = device->CreateSemaphore();
     geoSemaphore.signalValue = 0;
-    GPUBuffer sizeReadback   = device->CreateBuffer(
+
+    u32 lastSize           = 0;
+    int totalSaved         = 0;
+    GPUBuffer sizeReadback = device->CreateBuffer(
         VK_BUFFER_USAGE_TRANSFER_DST_BIT, virtualGeometryManager.totalAccelSizesBuffer.size,
         MemoryUsage::GPU_TO_CPU);
+
+    GPUBuffer globalsReadback = device->CreateBuffer(
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT, GLOBALS_SIZE * sizeof(u32), MemoryUsage::GPU_TO_CPU);
 
     PerformanceCounter blasCounter = OS_StartCounter();
     for (int sceneIndex = 0; sceneIndex < numBlas; sceneIndex++)
@@ -841,10 +843,15 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         if (sceneIndex > 0)
         {
             bool result = device->Wait(geoSemaphore, 10e9);
-            Assert(result);
+            ErrorExit(result, "failed scene %u\n", sceneIndex);
         }
         device->ResetDescriptorPool(0);
         CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Compute);
+
+        if (sceneIndex == 258)
+        {
+            int stop = 5;
+        }
 
         if (sceneIndex == 0)
         {
@@ -870,8 +877,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             Contains(virtualGeoFilename, "isCoral", MatchFlag_CaseInsensitive) |
             Contains(virtualGeoFilename, "isCoastline", MatchFlag_CaseInsensitive) |
             Contains(virtualGeoFilename, "isBayCedarA1", MatchFlag_CaseInsensitive);
+
+        QueryPool pool;
+        GPUAccelerationStructurePayload payload;
         u32 meshInfoIndex = virtualGeometryManager.AddNewMesh(
-            sceneScratch.temp.arena, cmd, virtualGeoFilename, cullSubpixel);
+            sceneScratch.temp.arena, cmd, virtualGeoFilename, cullSubpixel, payload, pool);
 
         if (virtualGeometryManager.meshInfos[meshInfoIndex].numClusters < 10 && !cullSubpixel)
         {
@@ -885,8 +895,32 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         cmd->FlushBarriers();
 
         cmd->CopyBuffer(&sizeReadback, &virtualGeometryManager.totalAccelSizesBuffer);
+        cmd->CopyBuffer(&globalsReadback, &virtualGeometryManager.clasGlobalsBuffer);
 
         device->SubmitCommandBuffer(cmd);
+
+#if 0
+        bool result = device->Wait(geoSemaphore, 10e9);
+
+        u32 clasSize               = *(u32 *)sizeReadback.mappedPtr;
+        VkDeviceSize compactedSize = 0;
+        vkGetQueryPoolResults(device->device, pool.queryPool, 0, 1, sizeof(VkDeviceSize),
+                              &compactedSize, 0,
+                              VK_QUERY_RESULT_WAIT_BIT | VK_QUERY_RESULT_64_BIT);
+
+        u32 actualSize = clasSize - lastSize;
+        Print("%S %u %llu num v %u num tri %u\n", virtualGeoFilename, actualSize,
+              compactedSize,
+              ((u32 *)globalsReadback.mappedPtr)[GLOBALS_VERTEX_BUFFER_OFFSET_INDEX],
+              ((u32 *)globalsReadback.mappedPtr)[GLOBALS_INDEX_BUFFER_OFFSET_INDEX]);
+
+        totalSaved += (int)compactedSize - (int)actualSize;
+
+        lastSize = clasSize;
+        device->DestroyAccelerationStructure(payload.as.as);
+        device->DestroyBuffer(&payload.as.buffer);
+        device->DestroyBuffer(&payload.scratch);
+#endif
 
         auto &meshInfo =
             virtualGeometryManager.meshInfos[virtualGeometryManager.meshInfos.Length() - 1];
@@ -906,7 +940,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     Assert(result);
 
     f32 blasTime = OS_GetMilliseconds(blasCounter);
+
+#if 0
+    Print("total saved: %i\n", totalSaved);
     printf("blas build time: %fms\n", blasTime);
+#endif
 
     // count++;
     // TODO: destroy temp memory
@@ -920,6 +958,30 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     CommandBuffer *dgfTransferCmd = device->BeginCommandBuffer(QueueType_Compute);
     virtualGeometryManager.FinalizeResources(dgfTransferCmd);
+
+    // Photon mapping
+    PhotonMapper photonMapper(sceneScratch.temp.arena);
+
+    //     def DistantLight "en_SUN_refract" (
+    //     active = false
+    // )
+    // {
+    //     uniform bool collection:lightLink:includeRoot = 0
+    //     prepend rel collection:lightLink:includes = </island/osOcean/geometry/ocean_geo>
+    //     color3f inputs:color = (1, 0.7681251, 0.56915444)
+    //     float inputs:exposure = 13.6
+    //     custom int primvars:ri:attributes:visibility:camera = 0
+    //     custom int ri:light:traceLightPaths = 1
+    //     float3 xformOp:rotateXYZ = (-40, 25, 0)
+    //     double3 xformOp:translate = (0, 74.417, 0)
+    //     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+    // }
+
+    // AffineSpace::Rotate(const Vec3f &axis, f32 theta);
+    AffineSpace lightTransform = AffineSpace::Rotate(Vec3f(0, 1, 0), Radians(25.f)) *
+                                 AffineSpace::Rotate(Vec3f(1, 0, 0), Radians(-40.f)) *
+                                 AffineSpace::Translate(Vec3f(0.f, 74.417, 0.f)) *
+                                 params->renderFromWorld;
 
     Semaphore sem   = device->CreateSemaphore();
     sem.signalValue = 1;
@@ -1294,6 +1356,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         virtualTextureManager.Update(cmd);
 
+        photonMapper.BuildKDTree();
+
         rg->StartPass(2,
                       [&clasGlobals      = virtualGeometryManager.clasGlobalsBuffer,
                        instanceBitVector = virtualGeometryManager.instanceBitVectorHandle,
@@ -1391,18 +1455,16 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         // TODO: not adding the handle of all of the barriers. maybe will need to if
         // automatic synchronization is done in the future
 
-        if (numFramesAccumulated > numFramesUntilDenoise)
+        if (0) // numFramesAccumulated > numFramesUntilDenoise)
         {
             rg->StartPass(1, [&](CommandBuffer *cmd) {
                   RenderGraph *rg = GetRenderGraph();
                   u32 offset;
-                  // DebugBreak();
                   GPUBuffer *imageOut       = rg->GetBuffer(imageOutHandle, offset);
                   HANDLE imageOutOIDNHandle = device->GetWin32Handle(imageOut);
                   OIDNBuffer outputBuf      = oidnNewSharedBufferFromWin32Handle_p(
                       oidnDevice, OIDN_EXTERNAL_MEMORY_TYPE_FLAG_OPAQUE_WIN32,
                       imageOutOIDNHandle, 0, imageOutSize);
-                  // DebugBreak();
                   oidnSetFilterImage_p(filter, "color", colorBuf, OIDN_FORMAT_FLOAT3,
                                        targetWidth, targetHeight, 0, 0, 0);
                   oidnSetFilterImage_p(filter, "albedo", albedoBuf, OIDN_FORMAT_FLOAT3,
@@ -1411,11 +1473,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                        targetWidth, targetHeight, 0, 0, 0);
                   oidnSetFilterImage_p(filter, "output", outputBuf, OIDN_FORMAT_FLOAT3,
                                        targetWidth, targetHeight, 0, 0, 0);
-                  // DebugBreak();
                   oidnCommitFilter_p(filter);
-                  // DebugBreak();
                   oidnExecuteFilter_p(filter);
-                  // DebugBreak();
 
                   CloseHandle(imageOutOIDNHandle);
               }).AddHandle(imageOutHandle, ResourceUsageType::Write);
@@ -1554,60 +1613,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 .AddHandle(accumulatedAlbedoHandle, ResourceUsageType::Write);
         }
 
-        // if (debug) // numBlas - 1)
-        // {
-        //     // RenderGraph *rg = GetRenderGraph();
-        //     GPUBuffer readback0 = device->CreateBuffer(
-        //         VK_BUFFER_USAGE_TRANSFER_DST_BIT, imageOut.size,
-        //         MemoryUsage::GPU_TO_CPU);
-        //     cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-        //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-        //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-        //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     // cmd->Barrier(&imageOut, VK_IMAGE_LAYOUT_GENERAL,
-        //     //              VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        //     //              VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-        //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //     // VK_ACCESS_2_SHADER_WRITE_BIT,
-        //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-        //
-        //     // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-        //     //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //     //     // VK_ACCESS_2_SHADER_WRITE_BIT,
-        //     //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     cmd->FlushBarriers();
-        //
-        //     // BufferImageCopy copy = {};
-        //     // copy.extent =
-        //     //     Vec3u(filterWeightsImage.desc.width,
-        //     // filterWeightsImage.desc.height,
-        //     // 1);
-        //
-        //     cmd->CopyBuffer(&readback0, &imageOut);
-        //     // cmd->CopyBuffer(&readback2, buffer1);
-        //     // cmd->CopyImageToBuffer(&readback0, &filterWeightsImage, &copy, 1);
-        //     Semaphore testSemaphore   = device->CreateSemaphore();
-        //     testSemaphore.signalValue = 1;
-        //     cmd->SignalOutsideFrame(testSemaphore);
-        //     device->SubmitCommandBuffer(cmd);
-        //     device->Wait(testSemaphore);
-        //
-        //     Vec3f *data = (Vec3f *)readback0.mappedPtr;
-        //     for (int i = 0; i < targetHeight; i++)
-        //     {
-        //         for (int j = 0; j < targetWidth; j++)
-        //         {
-        //             Vec3f val = data[i * targetWidth + j];
-        //             Print("%f %f %f\n", val.x, val.y, val.z);
-        //         }
-        //     }
-        //
-        //     int stop = 5;
-        // }
-
         Pass &pass = rg->StartComputePass(
             copyDenoisedPipeline, copyDenoisedLayout, 2, [&](CommandBuffer *cmd) {
                 GPUImage *image = rg->GetImage(finalImageHandle);
@@ -1623,7 +1628,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 device->EndEvent(cmd);
             });
 
-        if (numFramesAccumulated > numFramesUntilDenoise)
+        if (0) // numFramesAccumulated > numFramesUntilDenoise)
         {
             pass.AddHandle(imageOutHandle, ResourceUsageType::Read);
         }
