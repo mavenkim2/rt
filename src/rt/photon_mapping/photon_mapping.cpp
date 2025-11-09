@@ -400,8 +400,8 @@ void PhotonMapper::BuildKDTree()
                              })
             .AddHandle(photonPositionsBufferHandle, ResourceUsageType::Read)
             .AddHandle(kdTreeDimensionsBufferHandle, ResourceUsageType::Read)
-            .AddHandle(kdTreeTags, ResourceUsageType::RW, -1, offset)
-            .AddHandle(tempIndices0, ResourceUsageType::Read, -1, offset);
+            .AddHandle(kdTreeTags, ResourceUsageType::RW)
+            .AddHandle(tempIndices0, ResourceUsageType::Read);
 
         Sort();
 

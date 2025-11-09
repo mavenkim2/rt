@@ -1,4 +1,5 @@
 #include "../radix_sort.h"
+#include "../hash.h"
 #include "vulkan.h"
 #include "render_graph.h"
 #include <algorithm>
@@ -159,8 +160,7 @@ Pass &RenderGraph::StartComputePass(VkPipeline pipeline, DescriptorSetLayout &la
     auto AddComputePass = [passIndex, this, func, pipeline](CommandBuffer *cmd) {
         Pass &pass = passes[passIndex];
         cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-        DescriptorSet ds = pass.layout->CreateDescriptorSet();
-        BindResources(pass, ds);
+        DescriptorSet &ds = BindResources(pass);
         cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
                                 pass.layout->pipelineLayout);
 
@@ -188,8 +188,7 @@ Pass &RenderGraph::StartIndirectComputePass(string name, VkPipeline pipeline,
                            pipeline](CommandBuffer *cmd) {
         Pass &pass = passes[passIndex];
         cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-        DescriptorSet ds = pass.layout->CreateDescriptorSet();
-        BindResources(pass, ds);
+        DescriptorSet &ds = BindResources(pass);
         cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
                                 pass.layout->pipelineLayout);
         device->BeginEvent(cmd, str);
@@ -220,21 +219,68 @@ Pass &Pass::AddHandle(ResourceHandle handle, ResourceUsageType type, int subreso
     return *this;
 }
 
-void RenderGraph::BindResources(Pass &pass, DescriptorSet &ds)
+DescriptorSet &RenderGraph::BindResources(Pass &pass)
 {
-    for (int handleIndex = 0; handleIndex < pass.resourceHandles.Length(); handleIndex++)
+    int hash = MixBits(pass.resourceHandles[0].index);
+    for (int handleIndex = 1; handleIndex < pass.resourceHandles.Length(); handleIndex++)
     {
-        ResourceHandle handle         = pass.resourceHandles[handleIndex];
-        RenderGraphResource &resource = resources[handle.index];
-        if (IsBuffer(resource))
+        hash ^= MixBits(pass.resourceHandles[handleIndex].index);
+    }
+
+    int descriptorSetIndex = -1;
+    int passIndex          = int(&pass - passes.data);
+    for (int hashIndex = descriptorSetHash.FirstInHash(hash); hashIndex != -1;
+         hashIndex     = descriptorSetHash.NextInHash(hashIndex))
+    {
+        Pass &otherPass = passes[hashIndex];
+        if (otherPass.resourceHandles.Length() == pass.resourceHandles.Length())
         {
-            ds.Bind(&resource.buffer, pass.resourceOffsets[handleIndex]);
-        }
-        else if (IsImage(resource))
-        {
-            ds.Bind(&resource.image, pass.subresources[handleIndex]);
+            bool same = true;
+            for (int handleIndex = 0; handleIndex < otherPass.resourceHandles.Length();
+                 handleIndex++)
+            {
+                if (otherPass.resourceHandles[handleIndex].index !=
+                    pass.resourceHandles[handleIndex].index)
+                {
+                    same = false;
+                    break;
+                }
+            }
+            if (same)
+            {
+                descriptorSetIndex = passDescriptorSetIndices[hashIndex];
+                break;
+            }
         }
     }
+    if (descriptorSetIndex == -1)
+    {
+        descriptorSetHash.AddInHash(hash, passIndex);
+        descriptorSetIndex = descriptorSets.Length();
+
+        DescriptorSet &ds = descriptorSets.AddBack();
+        ds                = pass.layout->CreateDescriptorSet();
+
+        for (int handleIndex = 0; handleIndex < pass.resourceHandles.Length(); handleIndex++)
+        {
+            ResourceHandle handle         = pass.resourceHandles[handleIndex];
+            RenderGraphResource &resource = resources[handle.index];
+            if (IsBuffer(resource))
+            {
+                ds.Bind(&resource.buffer, pass.resourceOffsets[handleIndex]);
+            }
+            else if (IsImage(resource))
+            {
+                ds.Bind(&resource.image, pass.subresources[handleIndex]);
+            }
+        }
+    }
+    else
+    {
+        int stop = 5;
+    }
+    passDescriptorSetIndices[passIndex] = descriptorSetIndex;
+    return descriptorSets[descriptorSetIndex];
 }
 
 GPUBuffer *RenderGraph::GetBuffer(ResourceHandle handle, u32 &offset, u32 &size)
@@ -277,6 +323,11 @@ GPUImage *RenderGraph::GetImage(ResourceHandle handle)
 void RenderGraph::Compile()
 {
     ScratchArena scratch;
+
+    descriptorSets           = StaticArray<DescriptorSet>(arena, passes.Length());
+    u32 num                  = NextPowerOfTwo(passes.Length());
+    descriptorSetHash        = HashIndex(arena, num, num);
+    passDescriptorSetIndices = StaticArray<int>(arena, passes.Length(), passes.Length());
 
     for (RenderGraphResource &resource : resources)
     {
@@ -613,6 +664,12 @@ void RenderGraph::BeginFrame()
 void RenderGraph::EndFrame()
 {
     ArenaPopTo(arena, watermark);
+    for (DescriptorSet &set : descriptorSets)
+    {
+        set.descriptorInfo.clear();
+        set.writeDescriptorSets.clear();
+    }
+    descriptorSets.Clear();
     passes.Clear();
 }
 

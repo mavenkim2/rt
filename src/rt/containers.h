@@ -109,6 +109,13 @@ struct StaticArray
 
     __forceinline T &Last() { return data[size_ - 1]; }
 
+    T &AddBack()
+    {
+        Assert(size_ < capacity);
+        size_++;
+        return Last();
+    }
+
     __forceinline u32 Length() const { return size_; }
     __forceinline u32 size() const { return Length(); }
     __forceinline i32 &size() { return size_; }
@@ -454,6 +461,8 @@ struct HashIndex
     i32 hashSize;
     i32 indexChainSize;
     i32 hashMask;
+
+    HashIndex() {}
 
     HashIndex(Arena *arena, i32 inHashSize, i32 inChainSize) : arena(arena)
     {

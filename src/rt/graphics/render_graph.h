@@ -119,8 +119,11 @@ struct RenderGraph
     StaticArray<Pass> passes;
     StaticArray<RenderGraphResource> resources;
 
+    StaticArray<DescriptorSet> descriptorSets;
+    StaticArray<int> passDescriptorSetIndices;
+    HashIndex descriptorSetHash;
+
     u32 watermark;
-    // HashIndex residentResourceHash;
     StaticArray<ResidentResource> residentResources;
     bool submit;
     bool wait;
@@ -162,7 +165,7 @@ struct RenderGraph
                                    DescriptorSetLayout &layout, u32 numResources,
                                    ResourceHandle indirectBuffer, u32 indirectBufferOffset,
                                    PassFunction &&func);
-    void BindResources(Pass &pass, DescriptorSet &ds);
+    DescriptorSet &BindResources(Pass &pass);
 
     template <typename T>
     T *Allocate(T *ptr, u32 count)
@@ -188,8 +191,7 @@ struct RenderGraph
         auto AddComputePass = [pc, p, passIndex, this, func, pipeline](CommandBuffer *cmd) {
             Pass &pass = passes[passIndex];
             cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-            DescriptorSet ds = pass.layout->CreateDescriptorSet();
-            BindResources(pass, ds);
+            DescriptorSet &ds = BindResources(pass);
             cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
                                     pass.layout->pipelineLayout);
             cmd->PushConstants(pc, p, pass.layout->pipelineLayout);
@@ -221,8 +223,7 @@ struct RenderGraph
                                indirectBufferOffset, pipeline, str](CommandBuffer *cmd) {
             Pass &pass = passes[passIndex];
             cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-            DescriptorSet ds = pass.layout->CreateDescriptorSet();
-            BindResources(pass, ds);
+            DescriptorSet &ds = BindResources(pass);
             cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
                                     pass.layout->pipelineLayout);
             cmd->PushConstants(pc, p, pass.layout->pipelineLayout);
