@@ -8,7 +8,7 @@ if (MSVC)
     add_definitions(/D _CRT_SECURE_NO_WARNINGS /Dstrdup=_strdup
         /wd4018 /wd4100 /wd4101 /wd4127 /wd4146 /wd4232 /wd4242 /wd4244 /wd4245 /wd4267 /wd4305 /wd4309 
         /wd4310 /wd4334 /wd4456 /wd4464 /wd4668 /wd4701 /wd4703 /wd4711 /wd4756 /wd4820 /wd5045 /wd5250
-        /wd4130 /wd4389)
+        /wd4130 /wd4389 /wd4275)
 endif ()
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -104,7 +104,7 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     endif()
 elseif (MSVC)
     message(STATUS "Using MSVC Compiler")
-    list (APPEND RT_CXX_FLAGS "-FC" "-Zi" "-EHsc" "-nologo" "-WX" "-W4" "-wd4305" "-wd4324" "-wd4127" 
+    list (APPEND RT_CXX_FLAGS "-FC" "-Zi" "-EHsc" "-nologo" "-W4" "-wd4305" "-wd4324" "-wd4127" 
         "-wd4700" "-wd4701" "-wd4505" "-wd4189" "-wd4201" "-wd4100" "/arch:SSE2" "/arch:AVX2")
 endif ()
 
@@ -378,8 +378,9 @@ target_include_directories(convert PRIVATE
     ${NANOVDB_INCLUDE_DIR}
     ${ZLIB_INCLUDE_DIR}
     ${VULKAN_INCLUDE_DIR}
+    ${OPENVDB_INCLUDE_DIR}
 )
-target_link_libraries(convert PRIVATE ${PTEX_LIBRARY} ${GK_LIBRARY} ${METIS_LIBRARY})
+target_link_libraries(convert PRIVATE ${PTEX_LIBRARY} ${GK_LIBRARY} ${METIS_LIBRARY} ${OPENVDB_LIBRARY})
 target_compile_definitions(convert PRIVATE ${RT_DEFINITIONS})
 target_compile_options(convert PRIVATE ${RT_CXX_FLAGS})
 

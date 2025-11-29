@@ -28,7 +28,7 @@ struct Vec3
         T e[3];
     };
     // TODO: see if this breaks anything
-    __forceinline Vec3() : x(zero), y(zero), z(zero) {}
+    __forceinline Vec3() : x(ZeroTy()), y(ZeroTy()), z(ZeroTy()) {}
     __forceinline Vec3(T e0) : x(e0), y(e0), z(e0) {}
     __forceinline Vec3(T e0, T e1, T e2) : x(e0), y(e1), z(e2) {}
     __forceinline Vec3(Vec2<T> v, T e2) : x(v.x), y(v.y), z(e2) {}
@@ -328,7 +328,7 @@ __forceinline Vec3<T> FMS(const Vec3<T> &a, const Vec3<T> &b, const Vec3<T> &c)
 template <typename T>
 inline Vec3<T> ClampZero(const Vec3<T> &v)
 {
-    return Vec3<T>(Max(T(zero), v.x), Max(T(zero), v.y), Max(T(zero), v.z));
+    return Vec3<T>(Max(T(ZeroTy()), v.x), Max(T(ZeroTy()), v.y), Max(T(ZeroTy()), v.z));
 }
 
 typedef Vec3<f32> Vec3f;

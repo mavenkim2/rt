@@ -376,7 +376,7 @@ struct ObjectBinner
     Lane8U32 Bin(const Lane8F32 &in, const u32 dim) const
     {
         Lane8F32 result = (in - base[dim]) * scale[dim];
-        return Clamp(Flooru(result), Lane8U32(zero), Lane8U32(numBins - 1));
+        return Clamp(Flooru(result), Lane8U32(ZeroTy()), Lane8U32(numBins - 1));
     }
     u32 Bin(const f32 in, const u32 dim) const
     {
@@ -431,7 +431,7 @@ struct SplitBinner
     // SplitBinner(const Lane8F32 &l) : SplitBinner(Bounds(-Extract4<0>(l), Extract4<1>(l))) {}
     __forceinline Lane8U32 BinMin(const Lane8F32 &min, const u32 dim) const
     {
-        return Clamp(Flooru((base[dim] + min) * scaleNegArr[dim]), Lane8U32(zero),
+        return Clamp(Flooru((base[dim] + min) * scaleNegArr[dim]), Lane8U32(ZeroTy()),
                      Lane8U32(numBins - 1));
     }
     __forceinline u32 BinMin(const f32 min, const u32 dim) const
@@ -441,7 +441,7 @@ struct SplitBinner
     }
     __forceinline Lane8U32 BinMax(const Lane8F32 &max, const u32 dim) const
     {
-        return Clamp(Flooru((max - base[dim]) * scale[dim]), Lane8U32(zero),
+        return Clamp(Flooru((max - base[dim]) * scale[dim]), Lane8U32(ZeroTy()),
                      Lane8U32(numBins - 1));
     }
     __forceinline u32 BinMax(const f32 max, const u32 dim) const

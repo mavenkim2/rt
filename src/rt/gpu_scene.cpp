@@ -1356,7 +1356,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         virtualTextureManager.Update(cmd);
 
-        photonMapper.BuildKDTree();
+        // photonMapper.BuildKDTree();
 
         rg->StartPass(2,
                       [&clasGlobals      = virtualGeometryManager.clasGlobalsBuffer,

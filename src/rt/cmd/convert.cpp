@@ -30,6 +30,13 @@
 #include "../mesh.h"
 #ifdef USE_GPU
 #include "../virtual_geometry/mesh_simplification.h"
+#include <openvdb/openvdb.h>
+#include <openvdb/io/Stream.h>
+// #include <nanovdb/NanoVDB.h>
+// #include <nanovdb/util/OpenToNanoVDB.h>
+// #include <nanovdb/util/GridHandle.h>
+// #include <nanovdb/util/IO.h>
+// #include <nanovdb/util/SampleFromVoxels.h>
 #endif
 
 namespace rt
@@ -1283,7 +1290,8 @@ static string WriteNanite(PBRTFileInfo *state, SceneLoadState *sls, string direc
 
         if (!result)
         {
-            CreateClusters2(meshes.data, newNumMeshes, materialIndices, virtualGeoFilename);
+            CreateClusters(meshes.data, newNumMeshes, materialIndices, virtualGeoFilename);
+            // CreateClusters2(meshes.data, newNumMeshes, materialIndices, virtualGeoFilename);
         }
         else
         {
@@ -4153,6 +4161,11 @@ int main(int argc, char **argv)
     ValidationMode mode = ValidationMode::Verbose;
     Vulkan *v           = PushStructConstruct(arena, Vulkan)(mode);
     device              = v;
+
+    // std::ifstream ifile("../../data/wdas_cloud/wdas_cloud.vdb", std::ios_base::binary);
+    // auto grids = openvdb::io::Stream(ifile).getGrids();
+
+    // nanovdb::openToNanoVDB();
 
 #if 0
     LoadPBRT(arena, filename);

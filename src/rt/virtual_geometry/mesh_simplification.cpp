@@ -5022,7 +5022,8 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
 
             // if (depth != 0 &&
             //     (bool(voxelGroupCount.load()) || bool(potentialVoxelGroupCount.load())))
-            if (0)
+            if ((bool(voxelGroupCount.load()) || bool(potentialVoxelGroupCount.load())))
+            // if (0)
             {
                 ParallelForLoop(
                     0, partitionResult.ranges.Length(), 1, 1, [&](int jobID, int groupIndex) {
@@ -5192,7 +5193,8 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
                     });
             }
 
-            if (0) // voxelGroupCount.load())
+            // if (0)
+            if (voxelGroupCount.load())
             {
                 voxelStartDepth = Min(voxelStartDepth, depth + 1);
                 ParallelForLoop(
@@ -5488,9 +5490,9 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
                                 cluster.triangleIndices = triangleIndices;
                                 cluster.geomIDs         = newGeomIDs;
 
-                                groupBuildData->WriteTriangleData(
-                                    cluster.triangleIndices, cluster.geomIDs,
-                                    groupData.simplifiedMesh, materialIndices);
+                                // groupBuildData->WriteTriangleData(
+                                //     cluster.triangleIndices, cluster.geomIDs,
+                                //     groupData.simplifiedMesh, materialIndices);
                             }
                             ClusterGroup newClusterGroup;
                             newClusterGroup.vertexData     = (f32 *)groupData.simplifiedMesh.p;
@@ -5514,7 +5516,7 @@ static ClusterizationOutput CreateClusters(Arena *arena, Mesh *meshes, u32 numMe
             }
 
             // Write obj to disk
-#if 0
+#if 1
             ArrayView<ClusterGroup> levelClusterGroups(clusterGroups, totalNumGroups,
                                                        partitionResult.ranges.Length());
             u32 vertexCount = numVertices.load();
@@ -5970,10 +5972,10 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     ClusterizationOutput output =
         CreateClusters(scratch.temp.arena, meshes, numMeshes, materialIndices, filename,
                        buildDatas, useVoxels, rootClusterMax);
-    ClusterWriteOutput clusterWriteOutput =
-        PackClustersToPages(scratch.temp.arena, output, filename, buildDatas);
-    WriteHierarchies(scratch.temp.arena, output, clusterWriteOutput);
-    WriteClustersToDisk(output, clusterWriteOutput);
+    // ClusterWriteOutput clusterWriteOutput =
+    //     PackClustersToPages(scratch.temp.arena, output, filename, buildDatas);
+    // WriteHierarchies(scratch.temp.arena, output, clusterWriteOutput);
+    // WriteClustersToDisk(output, clusterWriteOutput);
 }
 
 template <typename T>

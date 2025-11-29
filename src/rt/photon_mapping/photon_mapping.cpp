@@ -215,8 +215,25 @@ void PhotonMapper::Sort()
     RenderGraph *rg = GetRenderGraph();
     ScratchArena scratch;
 
-    for (int i = 0; i < 4; i++)
+    rg->StartPass(1, [&](CommandBuffer *cmd) {
+          RenderGraph *rg = GetRenderGraph();
+          cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                       VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                       VK_ACCESS_2_TRANSFER_READ_BIT);
+          cmd->FlushBarriers();
+          GPUBuffer *buffer = rg->GetBuffer(globalHistogramBuffer);
+          cmd->ClearBuffer(buffer);
+          cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                       VK_ACCESS_2_SHADER_READ_BIT);
+          cmd->FlushBarriers();
+      }).AddHandle(globalHistogramBuffer, ResourceUsageType::Write);
+
+    for (int i = 0; i < 8; i++)
     {
+        // .AddHandle(globalHistogramBuffer, ResourceUsageType::Write)
+        //     .AddHandle(partitionHistogram, ResourceUsageType::Write)
+
         ResourceHandle keys0 = (i & 1) ? sortTempTags : kdTreeTags;
         ResourceHandle keys1 = (i & 1) ? kdTreeTags : sortTempTags;
 
@@ -366,8 +383,7 @@ void PhotonMapper::BuildKDTree()
                          })
         .AddHandle(tempIndices0, ResourceUsageType::Write);
 
-    // for (u32 i = 0; i < L - 1; i++)
-    u32 i = 0;
+    for (u32 i = 0; i < L - 1; i++)
     {
         // Prepare Indirect
         // rg->StartComputePass(prepareIndirectPipeline, prepareIndirectLayout, 2,
@@ -425,59 +441,63 @@ void PhotonMapper::BuildKDTree()
             .AddHandle(photonPositionsBufferHandle, ResourceUsageType::Read)
             .AddHandle(photonBoundsBuffer, ResourceUsageType::Read);
 
-        rg->StartPass(0, [&](CommandBuffer *cmd) {
-            // if (debug) // numBlas - 1)
-            {
-                RenderGraph *rg     = GetRenderGraph();
-                GPUBuffer *buffer   = rg->GetBuffer(kdTreeTags);
-                GPUBuffer readback0 = device->CreateBuffer(
-                    VK_BUFFER_USAGE_TRANSFER_DST_BIT, buffer->size, MemoryUsage::GPU_TO_CPU);
+        if (i == 1)
+        {
+            rg->StartPass(0, [&](CommandBuffer *cmd) {
+                // if (debug) // numBlas - 1)
+                {
+                    RenderGraph *rg   = GetRenderGraph();
+                    GPUBuffer *buffer = rg->GetBuffer(kdTreeTags);
+                    GPUBuffer readback0 =
+                        device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT, buffer->size,
+                                             MemoryUsage::GPU_TO_CPU);
 
-                cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                             VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                             VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                             VK_ACCESS_2_TRANSFER_READ_BIT);
-                cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                             VK_ACCESS_2_TRANSFER_READ_BIT);
-                // cmd->Barrier(&imageOut, VK_IMAGE_LAYOUT_GENERAL,
-                //              VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                // VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                // VK_ACCESS_2_SHADER_WRITE_BIT,
-                //              VK_ACCESS_2_TRANSFER_READ_BIT);
+                    cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                 VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                 VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                                 VK_ACCESS_2_TRANSFER_READ_BIT);
+                    cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                 VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                 VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+                    // cmd->Barrier(&imageOut, VK_IMAGE_LAYOUT_GENERAL,
+                    //              VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    // VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                    //              VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                    // VK_ACCESS_2_SHADER_WRITE_BIT,
+                    //              VK_ACCESS_2_TRANSFER_READ_BIT);
 
-                //
-                //
-                //
-                // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                //     // VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                //     // VK_ACCESS_2_SHADER_WRITE_BIT,
-                //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-                // cmd->FlushBarriers();
+                    //
+                    //
+                    //
+                    // cmd->Barrier(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                    //     // VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                    //     // VK_ACCESS_2_SHADER_WRITE_BIT,
+                    //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
+                    // cmd->FlushBarriers();
 
-                // BufferImageCopy copy = {};
-                // copy.extent =
-                //     Vec3u(filterWeightsImage.desc.width,
-                // filterWeightsImage.desc.height,
-                // 1);
+                    // BufferImageCopy copy = {};
+                    // copy.extent =
+                    //     Vec3u(filterWeightsImage.desc.width,
+                    // filterWeightsImage.desc.height,
+                    // 1);
 
-                cmd->CopyBuffer(&readback0, buffer);
-                // cmd->CopyBuffer(&readback2, buffer1);
-                // cmd->CopyImageToBuffer(&readback0,
-                // &filterWeightsImage,
-                // &copy, 1);
-                Semaphore testSemaphore   = device->CreateSemaphore();
-                testSemaphore.signalValue = 1;
-                cmd->SignalOutsideFrame(testSemaphore);
-                device->SubmitCommandBuffer(cmd);
-                device->Wait(testSemaphore);
+                    cmd->CopyBuffer(&readback0, buffer);
+                    // cmd->CopyBuffer(&readback2, buffer1);
+                    // cmd->CopyImageToBuffer(&readback0,
+                    // &filterWeightsImage,
+                    // &copy, 1);
+                    Semaphore testSemaphore   = device->CreateSemaphore();
+                    testSemaphore.signalValue = 1;
+                    cmd->SignalOutsideFrame(testSemaphore);
+                    device->SubmitCommandBuffer(cmd);
+                    device->Wait(testSemaphore);
 
-                u64 *data = (u64 *)readback0.mappedPtr;
+                    u64 *data = (u64 *)readback0.mappedPtr;
 
-                int stop = 5;
-            }
-        });
+                    int stop = 5;
+                }
+            });
+        }
 
         offset += (1u << i);
     }

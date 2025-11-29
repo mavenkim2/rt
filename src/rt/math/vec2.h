@@ -16,7 +16,7 @@ struct Vec2
             T x, y;
         };
     };
-    Vec2() : e{zero, zero} {}
+    Vec2() : e{ZeroTy(), ZeroTy()} {}
     Vec2(T e0) : e{e0, e0} {}
     Vec2(T e0, T e1) : e{e0, e1} {}
     Vec2(const Vec2<T> &other) : x(other.x), y(other.y) {}

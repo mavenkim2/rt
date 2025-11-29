@@ -681,7 +681,7 @@ Mask<LaneF32<N>> TriangleIntersect(const TravRay<N> &ray, const LaneF32<N> &tFar
     }
 
     Mask<LaneF32<N>> mask =
-        (det != LaneF32<N>(zero)) & (u >= 0) & (v >= 0) & (u + v <= absDet);
+        (det != LaneF32<N>(ZeroTy())) & (u >= 0) & (v >= 0) & (u + v <= absDet);
 
     if (None(mask)) return false;
 

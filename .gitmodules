@@ -1,7 +1,3 @@
-[submodule "src/third_party/openvdb"]
-	path = src/third_party/openvdb
-	url = https://github.com/mavenkim2/openvdb.git
-	branch = main
 [submodule "src/third_party/ptex"]
 	path = src/third_party/ptex
 	url = https://github.com/wdas/ptex.git
@@ -20,3 +16,7 @@
 [submodule "src/third_party/GKlib"]
 	path = src/third_party/GKlib
 	url = https://github.com/KarypisLab/GKlib.git
+[submodule "oneTBB"]
+	path = src/third_party/tbb
+	url = https://github.com/uxlfoundation/oneTBB.git
+	branch = onetbb_2021

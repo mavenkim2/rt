@@ -689,7 +689,7 @@ struct AffineSpace
     }
     static AffineSpace Identity()
     {
-        AffineSpace result = AffineSpace(zero);
+        AffineSpace result = AffineSpace(ZeroTy());
         result[0][0]       = 1;
         result[1][1]       = 1;
         result[2][2]       = 1;

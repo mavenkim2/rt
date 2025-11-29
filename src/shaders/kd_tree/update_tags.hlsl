@@ -74,7 +74,7 @@ struct Push
 void main(uint3 dtID : SV_DispatchThreadID)
 {
     // TODO IMPORTANT
-    uint num = 8;//1u << 20u;
+    uint num = 1u << 20u;
     uint L = pc.L;
 
     if (dtID.x >= num) return;

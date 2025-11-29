@@ -48,8 +48,41 @@ set (OPENSUBDIV_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/OpenSubdiv
 
 set(OSD_LIBRARY osd_static_cpu PARENT_SCOPE)
 
-set (NANOVDB_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/openvdb/nanovdb 
-    ${CMAKE_CURRENT_BINARY_DIR}openvdb/nanovdb PARENT_SCOPE)
+# TBB for openvdb
+set(TBB_TEST OFF)
+# set (TEMP_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
+add_subdirectory("tbb")
+# set(BUILD_SHARED_LIBS ${TEMP_BUILD_SHARED_LIBS})
+
+# find_package(TBB) 
+# if (NOT TBB_FOUND)
+#     message(STATUS "WORKS")
+#     # set (TEMP_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
+#     set(TBB_TEST OFF)
+#     add_subdirectory("tbb")
+#     install(TARGETS tbb EXPORT TBBTargets DESTINATION lib)
+#     install(EXPORT TBBTargets
+#             DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/TBB)
+#
+#     # set(BUILD_SHARED_LIBS ${TEMP_BUILD_SHARED_LIBS})
+# endif ()
+
+# openvdb
+set(USE_NANOVDB ON)
+set(USE_BLOSC OFF)
+set(OPENVDB_USE_DELAYED_LOADING OFF)
+set(OPENVDB_BUILD_BINARIES OFF)
+set(Tbb_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tbb/include)
+
+get_target_property(TBB_LIBRARY_OUTPUT_DIR tbb LIBRARY_OUTPUT_DIRECTORY)
+# message(STATUS "TBB Library output: ${TBB_LIBRARY_OUTPUT_DIR}")
+set(Tbb_tbb_LIBRARY_RELEASE ${TBB_LIBRARY_OUTPUT_DIR}/tbb12.lib)
+# message(STATUS ${Tbb_tbb_LIBRARY_RELEASE})
+add_subdirectory("openvdb")
+set(OPENVDB_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/openvdb PARENT_SCOPE)
+set(OPENVDB_LIBRARY openvdb_shared PARENT_SCOPE)
+# set (NANOVDB_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/openvdb/nanovdb 
+#     ${CMAKE_CURRENT_BINARY_DIR}openvdb/nanovdb PARENT_SCOPE)
 
 # nvapi
 set (NVAPI_LIBRARY ${CMAKE_CURRENT_SOURCE_DIR}/nvapi/amd64/nvapi64.lib PARENT_SCOPE)

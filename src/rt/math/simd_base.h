@@ -57,7 +57,7 @@ struct ZeroTy
     __forceinline operator unsigned char() const { return 0; }
 };
 
-const constexpr ZeroTy zero = ZeroTy();
+// const constexpr ZeroTy zero = ZeroTy();
 
 struct OneTy
 {

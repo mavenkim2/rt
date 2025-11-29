@@ -229,6 +229,7 @@ DescriptorSet &RenderGraph::BindResources(Pass &pass)
 
     int descriptorSetIndex = -1;
     int passIndex          = int(&pass - passes.data);
+
     for (int hashIndex = descriptorSetHash.FirstInHash(hash); hashIndex != -1;
          hashIndex     = descriptorSetHash.NextInHash(hashIndex))
     {
@@ -236,6 +237,7 @@ DescriptorSet &RenderGraph::BindResources(Pass &pass)
         if (otherPass.resourceHandles.Length() == pass.resourceHandles.Length())
         {
             bool same = true;
+            // NOTE: this assumes that the register locations are the same
             for (int handleIndex = 0; handleIndex < otherPass.resourceHandles.Length();
                  handleIndex++)
             {

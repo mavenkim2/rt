@@ -53,6 +53,8 @@ RWStructuredBuffer<float3> normals : register(u23);
 StructuredBuffer<float> filterCDF : register(t26);
 StructuredBuffer<float> filterValues : register(t27);
 
+StructuredBuffer<uint> kdTreeDims : register(t28);
+
 [[vk::push_constant]] RayPushConstant push;
 
 void IntersectAABB(float3 boundsMin, float3 boundsMax, float3 o, float3 invDir, out float tEntry, out float tLeave)
@@ -410,10 +412,57 @@ void main()
                                      dot(frameY, -query.WorldRayDirection()),
                                      dot(hitInfo.n, -query.WorldRayDirection())));
 
+#if 0
         // Photon mapping
+        // A Stack-Free Traversal Algorithm for Left-Balanced k-d Trees
+        // https://doi.org/10.48550/arXiv.2210.12859
         if (!(material.roughness == 0.f && material.specTrans == 1.f))
         {
+            uint numPoints = 0; // TODO
+            int curr = 0;
+            int prev = -1;
+            for (;;)
+            {
+                int parent = (curr + 1) / 2 - 1;
+                if (curr >= numPoints)
+                {
+                    prev = curr;
+                    curr = parent;
+                    continue;
+                }
+                bool fromParent = prev < curr;
+                if (fromParent)
+                {
+                    // TODO add contribution if photon within radius
+                }
+                int splitDim = kdTreeDims[curr];
+                float splitPos = kdTreePoints[curr][splitDim];
+                float signedDist = origin - splitPos;
+                int closeSide = signedDist > 0.f;
+                int closeChild = 2 * curr + 1 + closeSide;
+                int farChild = 2 * curr + 2 - closeSide;
+                bool farInRange = abs(signedDist) <= maxSearchRadius;
+
+                int next;
+                if (fromParent)
+                {
+                    next = closeChild;
+                }
+                else if (prev == closeChild)
+                {
+                    next = farChild;
+                }
+                else 
+                {
+                    next = parent;
+                }
+
+                if (next == -1) break;
+                prev = curr;
+                curr = next;
+            }
         }
+#endif
 
         // NEE
         if (!(material.roughness == 0.f && material.specTrans == 1.f))
