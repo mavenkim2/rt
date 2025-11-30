@@ -20,3 +20,9 @@
 	path = src/third_party/tbb
 	url = https://github.com/uxlfoundation/oneTBB.git
 	branch = onetbb_2021
+[submodule "src/third_party/blosc"]
+	path = src/third_party/blosc
+	url = https://github.com/Blosc/c-blosc.git
+[submodule "openvdb"]
+	path = src/third_party/openvdb
+	url = https://github.com/AcademySoftwareFoundation/openvdb.git

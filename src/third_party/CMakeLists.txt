@@ -58,7 +58,7 @@ set(Tbb_tbb_LIBRARY_RELEASE ${TBB_LIBRARY_OUTPUT_DIR}/tbb12.lib)
 # Blosc for openvdb
 add_subdirectory("blosc")
 set(Blosc_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/blosc/blosc)
-set(Blosc_LIBRARY_DEBUG ${CMAKE_CURRENT_BINARY_DIR}/blosc/blosc/Debug/blosc.lib)
+# set(Blosc_LIBRARY_DEBUG ${CMAKE_CURRENT_BINARY_DIR}/blosc/blosc/Debug/blosc.lib)
 set(Blosc_LIBRARY_RELEASE ${CMAKE_CURRENT_BINARY_DIR}/blosc/blosc/Release/blosc.lib)
 
 # openvdb
