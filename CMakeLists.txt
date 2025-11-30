@@ -153,6 +153,7 @@ set (RT_SOURCE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/scene/scene.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/image.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/graphics/render_graph.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/volume.cpp
 )
 
 if (NOT USE_GPU)
@@ -261,6 +262,7 @@ if (USE_GPU)
         "${SHADER_SRC_DIR}/kd_tree/finalize_calculate_bounds.hlsl"
         "${SHADER_SRC_DIR}/clas/decode_clusters_no_clas.hlsl"
         "${SHADER_SRC_DIR}/kd_tree/initialize_indices.hlsl"
+        "${SHADER_SRC_DIR}/volume/volume_rgen.hlsl"
     )
     set_property(SOURCE 
         "${SHADER_SRC_DIR}/clas/task.hlsl"
@@ -269,6 +271,7 @@ if (USE_GPU)
         "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl" 
         "${SHADER_SRC_DIR}/render_raytrace_miss.hlsl"
         "${SHADER_SRC_DIR}/render_raytrace_hit.hlsl"
+        "${SHADER_SRC_DIR}/volume/volume_rgen.hlsl"
         # "${SHADER_SRC_DIR}/photon_mapping/photons.hlsl"
         PROPERTY name "rt")
     set_property(SOURCE 
