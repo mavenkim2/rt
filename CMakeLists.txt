@@ -379,8 +379,20 @@ target_include_directories(convert PRIVATE
     ${ZLIB_INCLUDE_DIR}
     ${VULKAN_INCLUDE_DIR}
     ${OPENVDB_INCLUDE_DIR}
+    ${NANOVDB_INCLUDE_DIR}
 )
-target_link_libraries(convert PRIVATE ${PTEX_LIBRARY} ${GK_LIBRARY} ${METIS_LIBRARY} ${OPENVDB_LIBRARY})
+
+add_custom_command(TARGET convert POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:openvdb_shared>
+        $<TARGET_FILE_DIR:convert>
+
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:blosc_shared>
+        $<TARGET_FILE_DIR:convert>
+)
+
+target_link_libraries(convert PRIVATE ${PTEX_LIBRARY} ${GK_LIBRARY} ${METIS_LIBRARY} ${OPENVDB_LIBRARY} ${NANOVDB_LIBRARY})
 target_compile_definitions(convert PRIVATE ${RT_DEFINITIONS})
 target_compile_options(convert PRIVATE ${RT_CXX_FLAGS})
 

@@ -20,6 +20,7 @@
 #include "../thread_context.h"
 #include "../hash.h"
 #include <functional>
+#include <sstream>
 #include "../radix_sort.h"
 #include "../random.h"
 #include "../parallel.h"
@@ -31,12 +32,10 @@
 #ifdef USE_GPU
 #include "../virtual_geometry/mesh_simplification.h"
 #include <openvdb/openvdb.h>
-#include <openvdb/io/Stream.h>
-// #include <nanovdb/NanoVDB.h>
-// #include <nanovdb/util/OpenToNanoVDB.h>
-// #include <nanovdb/util/GridHandle.h>
-// #include <nanovdb/util/IO.h>
-// #include <nanovdb/util/SampleFromVoxels.h>
+#include <openvdb/io/File.h>
+#include <nanovdb/tools/CreateNanoGrid.h>
+#include <nanovdb/io/IO.h>
+#include <nanovdb/GridHandle.h>
 #endif
 
 namespace rt
@@ -4162,10 +4161,22 @@ int main(int argc, char **argv)
     Vulkan *v           = PushStructConstruct(arena, Vulkan)(mode);
     device              = v;
 
-    // std::ifstream ifile("../../data/wdas_cloud/wdas_cloud.vdb", std::ios_base::binary);
-    // auto grids = openvdb::io::Stream(ifile).getGrids();
+    openvdb::initialize();
+    openvdb::io::File vdbFile(std::string("../../data/wdas_cloud/wdas_cloud.vdb"));
+    vdbFile.open(false);
+    auto grids = vdbFile.getGrids();
 
-    // nanovdb::openToNanoVDB();
+    std::vector<nanovdb::GridHandle<nanovdb::HostBuffer>> handles;
+    for (openvdb::GridBase::Ptr &grid : *grids)
+    {
+        handles.push_back(nanovdb::tools::openToNanoVDB(grid));
+    }
+    auto handle = nanovdb::mergeGrids<nanovdb::HostBuffer, std::vector>(handles);
+
+    std::string outputFile("../../data/wdas_cloud/wdas_cloud.nvdb");
+    std::ofstream os(outputFile, std::ios::out | std::ios::binary);
+    nanovdb::io::Codec codec = nanovdb::io::Codec::NONE;
+    nanovdb::io::writeGrid(os, handle, codec);
 
 #if 0
     LoadPBRT(arena, filename);
