@@ -29,6 +29,14 @@ void Volumes()
     FixedArray<Bounds, 128> stack;
     stack.Push(rootBounds);
 
+    struct StackEntry 
+    {
+        OctreeNode node;
+    };
+
+    std::vector<OctreeNode> nodes;
+    nodes.reserve(64);
+
     const float T = Abs(1.f / std::log(0.5f));
 
     while (stack.Length())
@@ -44,9 +52,9 @@ void Volumes()
         float minValue = pos_inf;
         for (int x = (int)i0[0]; x <= (int)i1[0]; x++)
         {
-            for (int y = (int)i0[1]; y <= (int)i1[1]; y++)
+            for (int y = -100; y <= 100; y++)
             {
-                for (int z = (int)i0[2]; z <= (int)i1[2]; z++)
+                for (int z = -100; z <= 100; z++)
                 {
                     float value = accessor.getValue({x, y, z});
                     maxValue    = Max(maxValue, value);
@@ -80,9 +88,5 @@ void Volumes()
             }
         }
     }
-
-    // volume bounds
-
-    // for every volume, iterate over the bounds
 }
 } // namespace rt

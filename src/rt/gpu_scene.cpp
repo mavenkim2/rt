@@ -30,6 +30,7 @@
 #include "graphics/ptex.h"
 #include "virtual_geometry/virtual_geometry_manager.h"
 #include "photon_mapping/photon_mapping.h"
+#include "volume.h"
 
 #include "../../third_party/streamline/include/sl.h"
 #include "../../third_party/oidn/include/OpenImageDenoise/oidn.hpp"
@@ -203,6 +204,7 @@ static float GaussianEvaluate(Vec2f p, float sigma, float expX, float expY)
 
 void Render(RenderParams2 *params, int numScenes, Image *envMap)
 {
+    Volumes();
     ScenePrimitives **scenes = GetScenes();
 
     PerformanceCounter counter = OS_StartCounter();
