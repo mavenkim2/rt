@@ -204,7 +204,8 @@ static float GaussianEvaluate(Vec2f p, float sigma, float expX, float expY)
 
 void Render(RenderParams2 *params, int numScenes, Image *envMap)
 {
-    Volumes();
+    Arena *arena = params->arenas[GetThreadIndex()];
+    Volumes(arena);
     ScenePrimitives **scenes = GetScenes();
 
     PerformanceCounter counter = OS_StartCounter();
@@ -217,7 +218,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     Shader copyDenoisedShader;
 
     RayTracingShaderGroup groups[3];
-    Arena *arena = params->arenas[GetThreadIndex()];
     {
         string raygenShaderName = "../src/shaders/render_raytrace_rgen.spv";
         string missShaderName   = "../src/shaders/render_raytrace_miss.spv";

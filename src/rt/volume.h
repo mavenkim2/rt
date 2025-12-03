@@ -3,7 +3,8 @@
 
 namespace rt
 {
-void Volumes();
-}
+struct Arena;
+void Volumes(Arena *arena);
+} // namespace rt
 
 #endif
