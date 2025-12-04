@@ -332,4 +332,6 @@ float CosineHemispherePDF(float cosTheta)
 {
     return cosTheta * InvPi;
 }
+
+float SampleExponential(float u, float a) { return -log(1 - u) / a; }
 #endif

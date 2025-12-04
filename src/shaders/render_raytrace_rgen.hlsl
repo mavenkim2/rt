@@ -29,6 +29,10 @@
 #include "voxel.hlsli"
 #include "lights_temp.hlsli"
 #include "lights/envmap.hlsli"
+#include "volume/volume.hlsli"
+
+#define PNANOVDB_HLSL
+#include "../third_party/openvdb/nanovdb/nanovdb/PNanoVDB.h"
 
 RaytracingAccelerationStructure accel : register(t0);
 RWTexture2D<float4> image : register(u1);
@@ -56,18 +60,6 @@ StructuredBuffer<float> filterValues : register(t27);
 StructuredBuffer<uint> kdTreeDims : register(t28);
 
 [[vk::push_constant]] RayPushConstant push;
-
-void IntersectAABB(float3 boundsMin, float3 boundsMax, float3 o, float3 invDir, out float tEntry, out float tLeave)
-{
-    float3 tIntersectMin = (boundsMin - o) * invDir;
-    float3 tIntersectMax = (boundsMax - o) * invDir;
-
-    float3 tMin = min(tIntersectMin, tIntersectMax);
-    float3 tMax = max(tIntersectMin, tIntersectMax);
-
-    tEntry = max(tMin.x, max(tMin.y, tMin.z));
-    tLeave = min(tMax.x, min(tMax.y, tMax.z));
-}
 
 static float4 causticLightColor = pow(2, 13.6) * float4(1.0, 0.7681251, 0.56915444, 1.0);
 
@@ -164,7 +156,52 @@ void main()
     float bsdfPdf = 0.f;
     uint flags = 0;
 
-    while (true)
+    float3 volumeMinP, volumeMaxP;
+
+    // temp volume rendering...
+    for (int i = 0; i < 10000; i++)
+    {
+        VolumeIterator iterator;
+        iterator.Start(volumeMinP, volumeMaxP, pos, dir);
+
+        while (iterator.Next())
+        {
+            float tMin, tMax, minorant, majorant;
+            iterator.GetSegmentProperties(tMin, tMax, minorant, majorant);
+            float u = rng.Uniform();
+            float tStep = majorant == 0.f ? tMax - tMin : SampleExponential(u, majorant);
+            u = rng.Uniform();
+
+            for (;;)
+            {
+                float t = iterator.GetCurrentT();
+                // TODO: if majorant is 0, could this be false due to floating point precision?
+                if (t + tStep >= tMax)
+                {
+                    float deltaT = tMax - t;
+                    iterator.Step(deltaT);
+                    //throughput *= exp(-deltaT * majorant);
+                    break;
+                }
+                else 
+                {
+                    float density;
+                    //throughput *= exp(-tStep * majorant);
+
+                    // scatter
+                    if (u < density / majorant)
+                    {
+                        break;
+                    }
+                    iterator.Step(tStep);
+                }
+            }
+        }
+
+        float t = iterator.GetCurrentT();
+    }
+
+    while (false)
     {
         RayDesc desc;
         desc.Origin = pos;

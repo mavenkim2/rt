@@ -1,3 +1,4 @@
+#include "bxdf.h"
 #include "containers.h"
 #include "math/basemath.h"
 #include "math/math_include.h"
@@ -371,6 +372,12 @@ void Volumes(Arena *arena)
         bool more = iterator.Next();
         times++;
         if (!more) break;
+
+        for (;;)
+        {
+            // SampleExponential(u, iterator.f32 a);
+        }
+
         iterator.currentT = iterator.tMax;
     }
     Print("times %u\n", times);

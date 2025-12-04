@@ -257,4 +257,15 @@ float AngleBetween(float3 v1, float3 v2)
     return 2 * asin(length(v2 - v1) / 2.f);
 }
 
+float NextFloatUp(float v)
+{
+    if (isinf(v) && v > 0.f) return v;
+    if (v == -0.f) v = 0.f;
+
+    uint ui = asuint(v);
+    if (v >= 0) ++ui;
+    else --ui;
+    return asfloat(ui);
+}
+
 #endif
