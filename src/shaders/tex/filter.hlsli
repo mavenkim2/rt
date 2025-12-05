@@ -70,6 +70,7 @@ CatmullRomPositionsAndWeights GenerateCatmullRomWeights(in float2 uv, in float2 
     return Create(texPos0, texPos12, texPos3, w0, w12, w3);
 }
 
+#if 0
 template <typename Func>
 float3 SampleTextureCatmullRom(in Texture2D tex, in SamplerState linearSampler, in float2 uv, in float2 texSize)
 {
@@ -112,6 +113,7 @@ float3 SampleTextureCatmullRom(in Texture2DArray tex, in SamplerState linearSamp
 
     return result;
 }
+#endif
 
 float3 IntersectRayPlane(float3 planeN, float3 planeP, float3 rayP, float3 rayD)
 {

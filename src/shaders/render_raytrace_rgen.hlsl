@@ -1,11 +1,6 @@
 #define ShaderInvocationReorderNV 5383
 #define RayTracingClusterAccelerationStructureNV 5437
 
-[[vk::ext_capability(ShaderInvocationReorderNV)]]
-[[vk::ext_extension("SPV_NV_shader_invocation_reorder")]]
-[[vk::ext_capability(RayTracingClusterAccelerationStructureNV)]]
-[[vk::ext_extension("SPV_NV_cluster_acceleration_structure")]]
-
 #include "common.hlsli"
 #include "hit.hlsli"
 #include "bsdf/bxdf.hlsli"
@@ -23,16 +18,20 @@
 #include "../rt/shader_interop/ray_shaderinterop.h"
 #include "../rt/shader_interop/hit_shaderinterop.h"
 #include "../rt/shader_interop/debug_shaderinterop.h"
-#include "nvidia/ser.hlsli"
-#include "nvidia/clas.hlsli"
+//#include "nvidia/ser.hlsli"
 #include "wave_intrinsics.hlsli"
 #include "voxel.hlsli"
 #include "lights_temp.hlsli"
 #include "lights/envmap.hlsli"
 #include "volume/volume.hlsli"
 
-#define PNANOVDB_HLSL
-#include "../third_party/openvdb/nanovdb/nanovdb/PNanoVDB.h"
+#if 1
+//[[vk::ext_capability(ShaderInvocationReorderNV)]]
+//[[vk::ext_extension("SPV_NV_shader_invocation_reorder")]]
+[[vk::ext_capability(RayTracingClusterAccelerationStructureNV)]]
+[[vk::ext_extension("SPV_NV_cluster_acceleration_structure")]]
+#include "nvidia/clas.hlsli"
+#endif
 
 RaytracingAccelerationStructure accel : register(t0);
 RWTexture2D<float4> image : register(u1);
@@ -57,7 +56,7 @@ RWStructuredBuffer<float3> normals : register(u23);
 StructuredBuffer<float> filterCDF : register(t26);
 StructuredBuffer<float> filterValues : register(t27);
 
-StructuredBuffer<uint> kdTreeDims : register(t28);
+//StructuredBuffer<uint> kdTreeDims : register(t28);
 
 [[vk::push_constant]] RayPushConstant push;
 
@@ -158,6 +157,7 @@ void main()
 
     float3 volumeMinP, volumeMaxP;
 
+#if 0
     // temp volume rendering...
     for (int i = 0; i < 10000; i++)
     {
@@ -185,6 +185,29 @@ void main()
                 }
                 else 
                 {
+                    iterator.Step(tStep);
+
+                    // TODO: DXC compiler is bugging out when I pass buffers as function arguments
+                    pnanovdb_grid_handle_t grid = {0};
+
+                    int nanovdbIndex = -1;
+                    pnanovdb_tree_handle_t tree = pnanovdb_grid_get_tree(nanovdbIndex, grid);
+                    pnanovdb_root_handle_t root = pnanovdb_tree_get_root(nanovdbIndex, tree);
+                    pnanovdb_uint32_t gridType = pnanovdb_grid_get_grid_type(nanovdbIndex, grid);
+
+                    pnanovdb_readaccessor_t accessor;
+                    pnanovdb_readaccessor_init(accessor, root);
+
+                    float3 gridPos = pos + iterator.GetCurrentT() * dir;
+                    float3 indexSpacePosition = pnanovdb_grid_world_to_indexf(nanovdbIndex, grid, gridPos);
+                    pnanovdb_coord_t coord = pnanovdb_hdda_pos_to_ijk(indexSpacePosition);
+
+                    // Clamp to valid range, it can't get outside the bounding box
+                    //coord = clamp(coord, bboxMin, bboxMax);
+
+                    // Get the address of the value at the coordinate
+                    pnanovdb_address_t valueAddr = pnanovdb_readaccessor_get_value_address(gridType, nanovdbIndex, accessor, coord);
+
                     float density;
                     //throughput *= exp(-tStep * majorant);
 
@@ -193,15 +216,23 @@ void main()
                     {
                         break;
                     }
-                    iterator.Step(tStep);
                 }
             }
         }
 
         float t = iterator.GetCurrentT();
-    }
 
-    while (false)
+        radiance += throughput * float3(0.03, 0.07, 0.23);
+        //radiance += beta * float3(0.03, 0.07, 0.23);
+        //LightSource "distant"
+        //"point3 to" [-0.5826 -0.7660 -0.2717]
+        //"rgb L" [2.6 2.5 2.3]
+
+
+    }
+#endif
+
+    while (true)
     {
         RayDesc desc;
         desc.Origin = pos;

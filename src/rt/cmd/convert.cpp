@@ -1289,8 +1289,7 @@ static string WriteNanite(PBRTFileInfo *state, SceneLoadState *sls, string direc
 
         if (!result)
         {
-            CreateClusters(meshes.data, newNumMeshes, materialIndices, virtualGeoFilename);
-            // CreateClusters2(meshes.data, newNumMeshes, materialIndices, virtualGeoFilename);
+            CreateClusters2(meshes.data, newNumMeshes, materialIndices, virtualGeoFilename);
         }
         else
         {

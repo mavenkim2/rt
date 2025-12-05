@@ -1,7 +1,6 @@
 #ifndef VOLUME_HLSLI_
 #define VOLUME_HLSLI_
 
-#include "../common.hlsli"
 #include "../intersect_ray_aabb.hlsli"
 
 struct OctreeNode 
@@ -12,7 +11,22 @@ struct OctreeNode
     int parentIndex;
 };
 
+float NextFloatUp(float v)
+{
+    if (isinf(v) && v > 0.f) return v;
+    if (v == -0.f) v = 0.f;
+
+    uint ui = asuint(v);
+    if (v >= 0) ++ui;
+    else --ui;
+    return asfloat(ui);
+}
+
 StructuredBuffer<OctreeNode> nodes : register(t29);
+StructuredBuffer<uint> gridBuffer : register(t30);
+
+#define PNANOVDB_HLSL
+#include "PNanoVDB.h"
 
 struct VolumeIterator
 {
@@ -28,6 +42,9 @@ struct VolumeIterator
     int prev;
     int current;
 
+#ifdef __SLANG__
+    [mutating]
+#endif
     void Start(float3 mins, float3 maxs, float3 o, float3 d)
     {
         boundsMin = mins;
@@ -48,6 +65,9 @@ struct VolumeIterator
     //      - Next() terminates
     //      - return majorant and minorant
 
+#ifdef __SLANG__
+    [mutating]
+#endif
     bool Next()
     {
         if (current == -1) return false;
@@ -135,6 +155,10 @@ struct VolumeIterator
         minor = nodes[current].minValue;
         major = nodes[current].maxValue;
     }
+
+#ifdef __SLANG__
+    [mutating]
+#endif
     void Step(float deltaT)
     {
         currentT += deltaT;

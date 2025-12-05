@@ -57,7 +57,11 @@ uint2 Get2Random(inout uint x)
     return uint2(a, b);
 }
 
+#ifdef __SLANG__
+__generic <typename T>
+#else
 template <typename T>
+#endif
 void swap(T a, T b)
 {
     T temp = a;
@@ -71,18 +75,11 @@ float copysign(float a, float b)
     return asfloat((asuint(a) & ~signBit) | (asuint(b) & signBit));
 }
 
-template <int N>
-vector<float, N> flipsign(vector<float, N> mag, vector<float, N> sign)
-{
-    vector<float, N> result;
-    for (int i = 0; i < N; i++)
-    {
-        result[i] = asfloat(asuint(mag[i]) ^ (asuint(sign[i]) & 0x80000000));
-    }
-    return result;
-}
-
+#ifdef __SLANG__
+__generic <uint N>
+#else
 template <uint N>
+#endif
 float Dequantize(uint n)
 {
     return float(n) / ((1u << N) - 1);
@@ -215,7 +212,11 @@ float length2(float3 v)
     return dot(v, v);
 }
 
+#ifdef __SLANG__
+__generic <typename T>
+#else
 template <typename T>
+#endif
 T Sqr(T val)
 {
     return val * val;
@@ -255,17 +256,6 @@ float AngleBetween(float3 v1, float3 v2)
 {
     if (dot(v1, v2) < 0) return PI - 2 * asin(length(v1 + v2) / 2.f);
     return 2 * asin(length(v2 - v1) / 2.f);
-}
-
-float NextFloatUp(float v)
-{
-    if (isinf(v) && v > 0.f) return v;
-    if (v == -0.f) v = 0.f;
-
-    uint ui = asuint(v);
-    if (v >= 0) ++ui;
-    else --ui;
-    return asfloat(ui);
 }
 
 #endif

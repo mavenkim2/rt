@@ -1020,6 +1020,8 @@ struct Vulkan
     VkPhysicalDevicePartitionedAccelerationStructurePropertiesNV ptlasPropertiesNV;
     VkPhysicalDevicePartitionedAccelerationStructureFeaturesNV ptlasFeaturesNV;
 
+    VkPhysicalDeviceVariablePointerFeaturesKHR variablePointersFeaturesKHR;
+
     VkPhysicalDeviceMemoryProperties2 memProperties;
 
     //////////////////////////////

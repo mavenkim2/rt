@@ -204,8 +204,7 @@ static float GaussianEvaluate(Vec2f p, float sigma, float expX, float expY)
 
 void Render(RenderParams2 *params, int numScenes, Image *envMap)
 {
-    Arena *arena = params->arenas[GetThreadIndex()];
-    Volumes(arena);
+    Arena *arena             = params->arenas[GetThreadIndex()];
     ScenePrimitives **scenes = GetScenes();
 
     PerformanceCounter counter = OS_StartCounter();
@@ -554,6 +553,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         transferCmd->SubmitBuffer(filterValues.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                   sizeof(f32) * filterValues.Length());
 
+    // StaticArray<GPUOctreeNode> octreeNodes = Volumes(arena);
+    // TransferBuffer volumeOctreeBuffer =
+    //     transferCmd->SubmitBuffer(octreeNodes.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+    //                               sizeof(GPUOctreeNode) * octreeNodes.Length());
+
     submitSemaphore.signalValue = 1;
     transferCmd->SignalOutsideFrame(submitSemaphore);
     device->SubmitCommandBuffer(transferCmd);
@@ -589,6 +593,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     layout.AddBinding((u32)RTBindings::Feedback, DescriptorType::StorageBuffer, flags);
     layout.AddBinding(26, DescriptorType::StorageBuffer, flags);
     layout.AddBinding(27, DescriptorType::StorageBuffer, flags);
+    // layout.AddBinding(29, DescriptorType::StorageBuffer, flags);
 
     layout.AddImmutableSamplers();
 
@@ -1537,6 +1542,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                           .Bind(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer)
                           .Bind(&filterCDFBuffer.buffer)
                           .Bind(&filterValuesBuffer.buffer)
+                          // .Bind(&volumeOctreeBuffer.buffer)
                           .PushConstants(&pushConstant, &pc)
                           .End();
 

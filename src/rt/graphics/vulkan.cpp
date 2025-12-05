@@ -483,6 +483,11 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
 
             result = checkAndAddExtension(VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME);
             Assert(result);
+
+            // variablePointersFeaturesKHR = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VARIABLE_POINTER_FEATURES_KHR};
+            // result = checkAndAddExtension(VK_KHR_VARIABLE_POINTERS_EXTENSION_NAME, 
+            //                               0, &variablePointersFeaturesKHR);
+            // Assert(result);
         }
 
         *featuresChain   = 0;

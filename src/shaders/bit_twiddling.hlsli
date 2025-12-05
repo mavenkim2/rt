@@ -12,7 +12,11 @@ uint BitAlignU32(uint high, uint low, uint shift)
 	return result;
 }
 
+#ifdef __SLANG__
+__generic<uint pow2>
+#else
 template <uint pow2>
+#endif
 uint AlignDownPow2(uint val)
 {
     return val & ~(pow2 - 1);
@@ -30,6 +34,12 @@ uint2 GetAlignedAddressAndBitOffset(uint baseAddress, uint bitOffset)
 #define CAT(a, b) a##b
 #define CONCAT(a, b) CAT(a, b)
 
+#ifdef __SLANG__
+#define TEMPLATE_UINT(name) __generic<uint name>
+#else
+#define TEMPLATE_UINT(name) template<uint name>
+#endif
+
 #define DefineBitStreamReader(name, inputBuffer) \
 struct CONCAT(BitStreamReader_, name) \
 { \
@@ -43,7 +53,7 @@ struct CONCAT(BitStreamReader_, name) \
     uint compileTimeMinDwordBits; \
     uint compileTimeMaxRemainingBits; \
  \
-    template <uint compileTimeMaxBits> \
+    TEMPLATE_UINT(compileTimeMaxBits) \
     uint Read(uint numBits) \
     { \
         if (compileTimeMaxBits > compileTimeMinBufferBits) \

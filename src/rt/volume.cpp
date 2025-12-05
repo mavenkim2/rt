@@ -1,3 +1,4 @@
+#include "volume.h"
 #include "bxdf.h"
 #include "containers.h"
 #include "math/basemath.h"
@@ -20,14 +21,6 @@ struct OctreeNode
     float maxValue;
     OctreeNode *children;
     // int childIndex;
-};
-
-struct GPUOctreeNode
-{
-    float minValue;
-    float maxValue;
-    int childIndex;
-    int parentIndex;
 };
 
 static const float T = Abs(1.f / std::log(0.5f));
@@ -281,7 +274,7 @@ struct VolumeIterator
     }
 };
 
-void Volumes(Arena *arena)
+StaticArray<GPUOctreeNode> Volumes(Arena *arena)
 {
     // build the octree over all volumes...
     string filename = "../../data/wdas_cloud/wdas_cloud.nvdb";
@@ -360,28 +353,12 @@ void Volumes(Arena *arena)
 
     ReleaseArenaArray(arenas);
 
-    Vec3f rayDirection = Normalize(ToVec3f(rootBounds.Centroid()));
-    Vec3f rayOrigin(-rayDirection * 1000.f);
+    return newNodes;
 
-    VolumeIterator iterator(ToVec3f(rootBounds.minP), ToVec3f(rootBounds.maxP), rayOrigin,
-                            rayDirection, newNodes.data);
-
-    u32 times = 0;
-    for (;;)
-    {
-        bool more = iterator.Next();
-        times++;
-        if (!more) break;
-
-        for (;;)
-        {
-            // SampleExponential(u, iterator.f32 a);
-        }
-
-        iterator.currentT = iterator.tMax;
-    }
-    Print("times %u\n", times);
-
-    int stop = 5;
+    // Vec3f rayDirection = Normalize(ToVec3f(rootBounds.Centroid()));
+    // Vec3f rayOrigin(-rayDirection * 1000.f);
+    //
+    // VolumeIterator iterator(ToVec3f(rootBounds.minP), ToVec3f(rootBounds.maxP), rayOrigin,
+    //                         rayDirection, newNodes.data);
 }
 } // namespace rt
