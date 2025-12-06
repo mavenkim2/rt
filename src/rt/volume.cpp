@@ -4,6 +4,7 @@
 #include "math/basemath.h"
 #include "math/math_include.h"
 #include "math/bounds.h"
+#include "math/vec3.h"
 #include "memory.h"
 #include "parallel.h"
 #include "string.h"
@@ -11,6 +12,11 @@
 #include <nanovdb/tools/CreateNanoGrid.h>
 #include <nanovdb/io/IO.h>
 #include <nanovdb/GridHandle.h>
+#include "random.h"
+
+#define PNANOVDB_C
+#define PNANOVDB_HDDA
+#include <nanovdb/PNanoVDB.h>
 
 namespace rt
 {
@@ -53,9 +59,11 @@ static OctreeNode CreateOctree(Arena **arenas, const Bounds &bounds,
 
     ScratchArena scratch;
 
+    int groupSize = Max(1, count / 128);
+
     // TODO: verify that the extents of these are correct
     ParallelForOutput output = ParallelFor<Output>(
-        scratch.temp, 0, count, 1, [&](Output &output, u32 jobID, u32 start, u32 count) {
+        scratch.temp, 0, count, groupSize, [&](Output &output, u32 jobID, u32 start, u32 count) {
             int s          = indexMin[2] + start;
             float maxValue = 0.f;
             float minValue = 1.f;
@@ -137,7 +145,7 @@ static bool IntersectRayAABB(const Vec3f &boundsMin, const Vec3f &boundsMax, con
     Vec3f tMin = Min(tIntersectMin, tIntersectMax);
     Vec3f tMax = Max(tIntersectMin, tIntersectMax);
 
-    tEntry = Max(tMin.x, Max(tMin.y, tMin.z));
+    tEntry = Max(tMin.x, Max(tMin.y, Max(tMin.z, 0.f)));
     tLeave = Min(tMax.x, Min(tMax.y, tMax.z));
 
     return tEntry <= tLeave;
@@ -177,16 +185,35 @@ struct VolumeIterator
     //      - Next() terminates
     //      - return majorant and minorant
 
+    void Start(Vec3f mins, Vec3f maxs, Vec3f o, Vec3f d)
+    {
+        boundsMin = mins;
+        boundsMax = maxs;
+        rayO = o;
+        rayDir = d;
+
+        float tLeave;
+        bool intersects = IntersectRayAABB(boundsMin, boundsMax, o, d, currentT, tLeave);
+        current = intersects ? 0 : -1;
+    }
+
+    // internal node
+    //      - if current ray pos is outside bounds, go to parent
+    //      - find closest child that is in front of the ray
+    //      - go to that child
+    // leaf node
+    //      - Next() terminates
+    //      - return majorant and minorant
+
+#ifdef __SLANG__
+    [mutating]
+#endif
     bool Next()
     {
+        if (current == -1) return false;
         for (;;)
         {
-            // TODO floating point precision
             Vec3f currentPos = rayO + currentT * rayDir;
-            // Print("pos: %f %f %f min: %f %f %f max: %f %f %f\n", currentPos.x, currentPos.y,
-            //       currentPos.z, boundsMin.x, boundsMin.y, boundsMin.z, boundsMax.x,
-            //       boundsMax.y, boundsMax.z);
-
             Vec3f center = (boundsMin + boundsMax) / 2.f;
             currentPos -= center;
             Vec3f extent = (boundsMax - boundsMin) / 2.f;
@@ -202,57 +229,46 @@ struct VolumeIterator
                 if (current == 0)
                 {
                     current = -1;
-                    return false;
+                    break;
                 }
                 int axisMask = (current - 1) & 0x7;
                 next         = nodes[current].parentIndex;
 
-                boundsMin =
-                    Vec3f((axisMask & 0x1) ? boundsMin.x - 2.f * extent.x : boundsMin.x,
-                          (axisMask & 0x2) ? boundsMin.y - 2.f * extent.y : boundsMin.y,
-                          (axisMask & 0x4) ? boundsMin.z - 2.f * extent.z : boundsMin.z);
-                boundsMax =
-                    Vec3f((axisMask & 0x1) ? boundsMax.x : boundsMax.x + 2.f * extent.x,
-                          (axisMask & 0x2) ? boundsMax.y : boundsMax.y + 2.f * extent.y,
-                          (axisMask & 0x4) ? boundsMax.z : boundsMax.z + 2.f * extent.z);
-
-                // offset outside of
-                u32 times = 0;
-                for (;;)
-                {
-                    Vec3f currentPos = rayO + currentT * rayDir - center;
-                    // Print("help me: %f %f %f, %f %f %f\n\n", currentPos.x, currentPos.y,
-                    //       currentPos.z, extent.x, extent.y, extent.z);
-                    times++;
-                    currentT = NextFloatUp(currentT);
-                    if (currentPos.x > extent.x || currentPos.y > extent.y ||
-                        currentPos.z > extent.z || currentPos.x < -extent.x ||
-                        currentPos.y < -extent.y || currentPos.z < -extent.z)
-                    {
-                        break;
-                    }
-                }
-
-                // Print("curr: %u, next: %u, times %u\n", current, next, times);
+                boundsMin = Vec3f((axisMask & 0x1) ? boundsMin.x - 2.f * extent.x : boundsMin.x,
+                                   (axisMask & 0x2) ? boundsMin.y - 2.f * extent.y : boundsMin.y,
+                                   (axisMask & 0x4) ? boundsMin.z - 2.f * extent.z : boundsMin.z);
+                boundsMax = Vec3f((axisMask & 0x1) ? boundsMax.x : boundsMax.x + 2.f * extent.x,
+                                   (axisMask & 0x2) ? boundsMax.y : boundsMax.y + 2.f * extent.y,
+                                   (axisMask & 0x4) ? boundsMax.z : boundsMax.z + 2.f * extent.z);
+                currentT += 0.0001f;
+                // currentT += gamma(2) * Max(rayDir
+                // for (;;)
+                // {
+                //     Vec3f currentPos = rayO + currentT * rayDir - center;
+                //     currentT = NextFloatUp(currentT);
+                //     if (currentPos.x > extent.x || currentPos.y > extent.y ||
+                //         currentPos.z > extent.z || currentPos.x < -extent.x ||
+                //         currentPos.y < -extent.y || currentPos.z < -extent.z)
+                //     {
+                //         break;
+                //     }
+                // }
             }
             // go to child
-            else
+            else 
             {
-                u32 closestChild = (currentPos.x >= 0.f) | ((currentPos.y >= 0.f) << 1) |
-                                   ((currentPos.z >= 0.f) << 2);
+                u32 closestChild = (currentPos.x >= 0.f) | ((currentPos.y >= 0.f) << 1) | ((currentPos.z >= 0.f) << 2);
                 next = childIndex + closestChild;
 
-                // Print("curr: %u, next: %u, childIndex: %u\n", current, next, childIndex);
-
                 boundsMin = Vec3f((closestChild & 0x1) ? center.x : boundsMin.x,
-                                  (closestChild & 0x2) ? center.y : boundsMin.y,
-                                  (closestChild & 0x4) ? center.z : boundsMin.z);
+                                   (closestChild & 0x2) ? center.y : boundsMin.y,
+                                   (closestChild & 0x4) ? center.z : boundsMin.z);
                 boundsMax = Vec3f((closestChild & 0x1) ? boundsMax.x : center.x,
-                                  (closestChild & 0x2) ? boundsMax.y : center.y,
-                                  (closestChild & 0x4) ? boundsMax.z : center.z);
+                                   (closestChild & 0x2) ? boundsMax.y : center.y,
+                                   (closestChild & 0x4) ? boundsMax.z : center.z);
             }
 
-            prev    = current;
+            prev = current;
             current = next;
 
             if (nodes[current].childIndex == ~0u)
@@ -261,25 +277,42 @@ struct VolumeIterator
                 float tLeave;
                 bool intersects =
                     IntersectRayAABB(boundsMin, boundsMax, rayO, rayDir, newT, tLeave);
-                // Assert(newT >= currentT);
 
                 currentT = newT;
                 tMax     = tLeave;
-                Print("final t: %f %f, node data: %f %f\n", newT, tMax,
-                      nodes[current].minValue, nodes[current].maxValue);
 
                 return true;
             }
         }
+        return false;
+    }
+
+    float GetCurrentT() { return currentT; }
+    float GetTMax() { return tMax; }
+
+    void GetSegmentProperties(float& tMin, float& tFar, float& minor, float& major)
+    {
+        tMin = GetCurrentT();
+        tFar = GetTMax();
+        minor = nodes[current].minValue;
+        major = nodes[current].maxValue;
+    }
+
+    void Step(float deltaT)
+    {
+        currentT += deltaT;
     }
 };
 
-StaticArray<GPUOctreeNode> Volumes(Arena *arena)
+VolumeData Volumes(CommandBuffer *cmd, Arena *arena)
 {
     // build the octree over all volumes...
     string filename = "../../data/wdas_cloud/wdas_cloud.nvdb";
     auto handle     = nanovdb::io::readGrid(std::string((char *)filename.str, filename.size));
     auto grid       = handle.grid<float>();
+
+    TransferBuffer vdbDataBuffer = 
+        cmd->SubmitBuffer(handle.buffer().data(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, handle.buffer().size());
 
     nanovdb::Vec3dBBox bbox = grid->worldBBox();
     Bounds rootBounds(Vec3f(bbox.min()[0], bbox.min()[1], bbox.min()[2]),
@@ -353,12 +386,105 @@ StaticArray<GPUOctreeNode> Volumes(Arena *arena)
 
     ReleaseArenaArray(arenas);
 
-    return newNodes;
+#if 1
+    Vec3f pos(648.064, -82.473, -63.856);
+    Vec3f dir = Normalize(ToVec3f(rootBounds.Centroid()) - pos);
+    RNG rng;
+    int i = 0;
+    for (; i < 10000; i++)
+    {
+        VolumeIterator iterator(ToVec3f(rootBounds.minP), ToVec3f(rootBounds.maxP), pos, dir, 
+                                newNodes.data);
+        bool done = false;
 
-    // Vec3f rayDirection = Normalize(ToVec3f(rootBounds.Centroid()));
-    // Vec3f rayOrigin(-rayDirection * 1000.f);
-    //
-    // VolumeIterator iterator(ToVec3f(rootBounds.minP), ToVec3f(rootBounds.maxP), rayOrigin,
-    //                         rayDirection, newNodes.data);
+        while (!done && iterator.Next())
+        {
+            float tMin, tMax, minorant, majorant;
+            iterator.GetSegmentProperties(tMin, tMax, minorant, majorant);
+            float u = rng.Uniform<f32>();
+            float tStep = majorant == 0.f ? tMax - tMin : SampleExponential(u, majorant);
+            u = rng.Uniform<f32>();
+
+            for (;;)
+            {
+                float t = iterator.GetCurrentT();
+                // TODO: if majorant is 0, could this be false due to floating point precision?
+                if (t + tStep >= tMax)
+                {
+                    float deltaT = tMax - t;
+                    iterator.Step(deltaT);
+                    //throughput *= exp(-deltaT * majorant);
+                    break;
+                }
+                else 
+                {
+                    iterator.Step(tStep);
+
+                    pnanovdb_grid_handle_t gridHandle = {0};
+
+                    // TODO: hardcoded
+                    pnanovdb_buf_t buf = pnanovdb_make_buf((u32 *)handle.buffer().data(), handle.buffer().size());
+                    pnanovdb_tree_handle_t tree = pnanovdb_grid_get_tree(buf, gridHandle);
+                    pnanovdb_root_handle_t root = pnanovdb_tree_get_root(buf, tree);
+                    pnanovdb_uint32_t gridType = pnanovdb_grid_get_grid_type(buf, gridHandle);
+
+                    pnanovdb_readaccessor_t accessor;
+                    pnanovdb_readaccessor_init(&accessor, root);
+
+                    Vec3f gridP = pos + iterator.GetCurrentT() * dir;
+                    pnanovdb_vec3_t gridPos = {gridP.x, gridP.y, gridP.z};
+
+                    nanovdb::Vec3d i0 =
+                        grid->worldToIndexF(nanovdb::Vec3d(gridP.x, gridP.y, gridP.z));
+
+                    pnanovdb_vec3_t indexSpacePosition = pnanovdb_grid_world_to_indexf(buf, gridHandle, &gridPos);
+                    pnanovdb_coord_t coord = pnanovdb_hdda_pos_to_ijk(&indexSpacePosition);
+
+                    // Clamp to valid range, it can't get outside the bounding box
+                    //coord = clamp(coord, bboxMin, bboxMax);
+
+                    // Get the address of the value at the coordinate
+                    pnanovdb_address_t valueAddr = pnanovdb_readaccessor_get_value_address(gridType, buf, &accessor, &coord);
+                    float density = pnanovdb_read_float(buf, valueAddr);
+
+                    //throughput *= exp(-tStep * majorant);
+
+                    // scatter
+                    Assert(density < majorant);
+                    if (u < density / majorant)
+                    {
+                        done = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (iterator.current == -1)
+        {
+            int stop = 5;
+            break;
+        }
+
+        float t = iterator.GetCurrentT();
+        pos += t * dir;
+
+        Vec2f u(rng.Uniform<f32>(), rng.Uniform<f32>());
+        // TODO hardcoded
+        float g = .877;
+        dir = SampleHenyeyGreenstein(-dir, g, u);
+
+        //radiance += beta * float3(0.03, 0.07, 0.23);
+        //LightSource "distant"
+        //"point3 to" [-0.5826 -0.7660 -0.2717]
+        //"rgb L" [2.6 2.5 2.3]
+    }
+#endif
+
+    VolumeData data;
+    data.octree = newNodes;
+    data.vdbDataBuffer = vdbDataBuffer;
+
+    return data;
 }
 } // namespace rt

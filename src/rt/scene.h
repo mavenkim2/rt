@@ -66,37 +66,6 @@ struct NanoVDBBuffer
 };
 #endif
 
-inline f32 HenyeyGreenstein(f32 cosTheta, f32 g)
-{
-    g         = Clamp(g, -.99f, .99f);
-    f32 denom = 1 + Sqr(g) + 2 * g * cosTheta;
-    return Inv4Pi * (1 - Sqr(g)) / (denom * SafeSqrt(denom));
-}
-
-inline f32 HenyeyGreenstein(Vec3f wo, Vec3f wi, f32 g)
-{
-    return HenyeyGreenstein(Dot(wo, wi), g);
-}
-
-inline Vec3f SampleHenyeyGreenstein(const Vec3f &wo, f32 g, Vec2f u, f32 *pdf = 0)
-{
-    f32 cosTheta;
-    if (Abs(g) < 1e-3f) cosTheta = 1 - 2 * u[0];
-    else cosTheta = -1 / (2 * g) * (1 + Sqr(g) - Sqr((1 - Sqr(g)) / (1 + g - 2 * g * u[0])));
-
-    f32 sinTheta = SafeSqrt(1 - Sqr(cosTheta));
-    f32 phi      = TwoPi * u[1];
-
-    // TODO: implement FromZ
-    Vec3f wi;
-    // Frame wFrame = Frame::FromZ(wo);
-    // Vector3f wi  = wFrame.FromLocal(Vec3f(sinTheta * Cos(phi), sinTheta * Sin(phi),
-    // cosTheta));
-
-    if (pdf) *pdf = HenyeyGreenstein(cosTheta, g);
-    return wi;
-}
-
 struct PhaseFunctionSample
 {
     Vec3f wi;

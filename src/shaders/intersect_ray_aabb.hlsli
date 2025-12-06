@@ -10,7 +10,7 @@ bool IntersectRayAABB(float3 boundsMin, float3 boundsMax, float3 o, float3 d, ou
     float3 tMin = min(tIntersectMin, tIntersectMax);
     float3 tMax = max(tIntersectMin, tIntersectMax);
 
-    tEntry = max(tMin.x, max(tMin.y, tMin.z));
+    tEntry = max(tMin.x, max(tMin.y, max(tMin.z, 0.f)));
     tLeave = min(tMax.x, min(tMax.y, tMax.z));
 
     return tEntry <= tLeave;

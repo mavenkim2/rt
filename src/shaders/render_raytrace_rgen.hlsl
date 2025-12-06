@@ -155,26 +155,40 @@ void main()
     float bsdfPdf = 0.f;
     uint flags = 0;
 
-    float3 volumeMinP, volumeMaxP;
+    int nanovdbIndex = 0;
+    pnanovdb_grid_handle_t grid = {0};
+    pnanovdb_tree_handle_t tree = pnanovdb_grid_get_tree(nanovdbIndex, grid);
+    pnanovdb_root_handle_t root = pnanovdb_tree_get_root(nanovdbIndex, tree);
+    pnanovdb_coord_t volumeMinP = pnanovdb_root_get_bbox_min(nanovdbIndex, root);
+    pnanovdb_coord_t volumeMaxP = pnanovdb_root_get_bbox_max(nanovdbIndex, root);
 
-#if 0
     // temp volume rendering...
-    for (int i = 0; i < 10000; i++)
+#if 1
+    for (int i = 0; i < 128; i++)
     {
         VolumeIterator iterator;
         iterator.Start(volumeMinP, volumeMaxP, pos, dir);
+        bool done = false;
 
-        while (iterator.Next())
+        int count = 0;
+        while (!done && iterator.Next())// && count < 1005)
         {
+            count++;
             float tMin, tMax, minorant, majorant;
             iterator.GetSegmentProperties(tMin, tMax, minorant, majorant);
-            float u = rng.Uniform();
-            float tStep = majorant == 0.f ? tMax - tMin : SampleExponential(u, majorant);
-            u = rng.Uniform();
-
+            
             for (;;)
             {
+                float u = rng.Uniform();
+                float tStep = majorant == 0.f ? tMax - tMin : SampleExponential(u, majorant);
+                u = rng.Uniform();
+
                 float t = iterator.GetCurrentT();
+                if (0)//if (count > 1000)
+                {
+                    bool result = t + tStep >= tMax;
+                    printf("maj: %f, t: %f %f %f %u\n", majorant, t, tMax, tStep, result);
+                }
                 // TODO: if majorant is 0, could this be false due to floating point precision?
                 if (t + tStep >= tMax)
                 {
@@ -187,10 +201,10 @@ void main()
                 {
                     iterator.Step(tStep);
 
-                    // TODO: DXC compiler is bugging out when I pass buffers as function arguments
                     pnanovdb_grid_handle_t grid = {0};
 
-                    int nanovdbIndex = -1;
+                    // TODO: hardcoded
+                    int nanovdbIndex = 0;
                     pnanovdb_tree_handle_t tree = pnanovdb_grid_get_tree(nanovdbIndex, grid);
                     pnanovdb_root_handle_t root = pnanovdb_tree_get_root(nanovdbIndex, tree);
                     pnanovdb_uint32_t gridType = pnanovdb_grid_get_grid_type(nanovdbIndex, grid);
@@ -202,36 +216,43 @@ void main()
                     float3 indexSpacePosition = pnanovdb_grid_world_to_indexf(nanovdbIndex, grid, gridPos);
                     pnanovdb_coord_t coord = pnanovdb_hdda_pos_to_ijk(indexSpacePosition);
 
-                    // Clamp to valid range, it can't get outside the bounding box
-                    //coord = clamp(coord, bboxMin, bboxMax);
-
-                    // Get the address of the value at the coordinate
                     pnanovdb_address_t valueAddr = pnanovdb_readaccessor_get_value_address(gridType, nanovdbIndex, accessor, coord);
-
-                    float density;
+                    float density = pnanovdb_read_float(nanovdbIndex, valueAddr);
+                    
                     //throughput *= exp(-tStep * majorant);
 
                     // scatter
                     if (u < density / majorant)
                     {
+                        done = true;
                         break;
                     }
                 }
             }
         }
 
-        float t = iterator.GetCurrentT();
+        if (iterator.current == -1)
+        {
+            radiance += float3(0.03, 0.07, 0.23);
+            break;
+        }
 
-        radiance += throughput * float3(0.03, 0.07, 0.23);
+        float t = iterator.GetCurrentT();
+        pos += t * dir;
+
+        float2 u = rng.Uniform2D();
+        // TODO hardcoded
+        float g = .877;
+        dir = SampleHenyeyGreenstein(-dir, g, u);
+
         //radiance += beta * float3(0.03, 0.07, 0.23);
         //LightSource "distant"
         //"point3 to" [-0.5826 -0.7660 -0.2717]
         //"rgb L" [2.6 2.5 2.3]
-
-
     }
 #endif
 
+#if 0
     while (true)
     {
         RayDesc desc;
@@ -709,5 +730,6 @@ void main()
         if (russianRoulette) break;
         throughput /= groupContinuationProb;
     }
+#endif
     image[swizzledThreadID] = float4(radiance, 1);
 }

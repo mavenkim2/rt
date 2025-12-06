@@ -23,7 +23,6 @@ float NextFloatUp(float v)
 }
 
 StructuredBuffer<OctreeNode> nodes : register(t29);
-StructuredBuffer<uint> gridBuffer : register(t30);
 
 #define PNANOVDB_HLSL
 #include "PNanoVDB.h"
@@ -70,7 +69,9 @@ struct VolumeIterator
 #endif
     bool Next()
     {
+        prev = -1;
         if (current == -1) return false;
+        int start = current;
         for (;;)
         {
             float3 currentPos = rayO + currentT * rayDir;
@@ -100,6 +101,9 @@ struct VolumeIterator
                 boundsMax = float3((axisMask & 0x1) ? boundsMax.x : boundsMax.x + 2.f * extent.x,
                                    (axisMask & 0x2) ? boundsMax.y : boundsMax.y + 2.f * extent.y,
                                    (axisMask & 0x4) ? boundsMax.z : boundsMax.z + 2.f * extent.z);
+
+                currentT += 0.0001f;
+#if 0
                 for (;;)
                 {
                     float3 currentPos = rayO + currentT * rayDir - center;
@@ -111,6 +115,7 @@ struct VolumeIterator
                         break;
                     }
                 }
+#endif
             }
             // go to child
             else 
@@ -136,10 +141,18 @@ struct VolumeIterator
                 bool intersects =
                     IntersectRayAABB(boundsMin, boundsMax, rayO, rayDir, newT, tLeave);
 
-                currentT = newT;
-                tMax     = tLeave;
+                if (start == current)
+                {
+                    currentT = max(tLeave, currentT);
+                    currentT += 0.0001f;
+                }
+                else 
+                {
+                    currentT = newT;
+                    tMax     = tLeave;
 
-                return true;
+                    return true;
+                }
             }
         }
         return false;
@@ -148,10 +161,10 @@ struct VolumeIterator
     float GetCurrentT() { return currentT; }
     float GetTMax() { return tMax; }
 
-    void GetSegmentProperties(out float tMin, out float tMax, out float minor, out float major)
+    void GetSegmentProperties(out float tMin, out float tFar, out float minor, out float major)
     {
         tMin = GetCurrentT();
-        tMax = GetTMax();
+        tFar = GetTMax();
         minor = nodes[current].minValue;
         major = nodes[current].maxValue;
     }

@@ -4161,7 +4161,7 @@ int main(int argc, char **argv)
     device              = v;
 
     openvdb::initialize();
-    openvdb::io::File vdbFile(std::string("../../data/wdas_cloud/wdas_cloud.vdb"));
+    openvdb::io::File vdbFile(std::string("../../data/wdas_cloud/wdas_cloud_half.vdb"));
     vdbFile.open(false);
     auto grids = vdbFile.getGrids();
 

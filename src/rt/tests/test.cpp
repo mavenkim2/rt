@@ -216,9 +216,14 @@ void TestRender(Arena *arena, Options *options = 0)
     OS_Handle window = OS_WindowInit(width, height);
 
     // beach cam
-    Vec3f pCamera(-510.523907, 87.308744, 181.770197);
-    Vec3f look(152.465305, 30.939795, -72.727517);
-    Vec3f up(0.073871, 0.996865, -0.028356);
+    // Vec3f pCamera(-510.523907, 87.308744, 181.770197);
+    // Vec3f look(152.465305, 30.939795, -72.727517);
+    // Vec3f up(0.073871, 0.996865, -0.028356);
+
+    // cloud cam
+    Vec3f pCamera(648.064, -82.473, -63.856);
+    Vec3f look(6.021, 100.043, -43.679);
+    Vec3f up(0.273, 0.962, -0.009);
 
     f32 lensRadius    = .003125;
     f32 focalDistance = 712.391212;

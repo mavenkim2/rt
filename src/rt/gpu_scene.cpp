@@ -553,10 +553,12 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         transferCmd->SubmitBuffer(filterValues.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                   sizeof(f32) * filterValues.Length());
 
-    // StaticArray<GPUOctreeNode> octreeNodes = Volumes(arena);
-    // TransferBuffer volumeOctreeBuffer =
-    //     transferCmd->SubmitBuffer(octreeNodes.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-    //                               sizeof(GPUOctreeNode) * octreeNodes.Length());
+    VolumeData volumeData = Volumes(transferCmd, arena);
+    TransferBuffer volumeOctreeBuffer =
+        transferCmd->SubmitBuffer(volumeData.octree.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                  sizeof(GPUOctreeNode) * volumeData.octree.Length());
+    int bindlessVdbIndex = device->BindlessStorageIndex(&volumeData.vdbDataBuffer.buffer);
+    Assert(bindlessVdbIndex == 0);
 
     submitSemaphore.signalValue = 1;
     transferCmd->SignalOutsideFrame(submitSemaphore);
@@ -593,7 +595,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     layout.AddBinding((u32)RTBindings::Feedback, DescriptorType::StorageBuffer, flags);
     layout.AddBinding(26, DescriptorType::StorageBuffer, flags);
     layout.AddBinding(27, DescriptorType::StorageBuffer, flags);
-    // layout.AddBinding(29, DescriptorType::StorageBuffer, flags);
+    layout.AddBinding(29, DescriptorType::StorageBuffer, flags);
 
     layout.AddImmutableSamplers();
 
@@ -1497,7 +1499,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                    &faceDataBuffer, &virtualTextureManager, &virtualGeometryManager,
                    imageHandle = image, &depthBuffer, &readback, &normals, albedoHandle,
                    currentBuffer, &debugBuffer, &filterValuesBuffer,
-                   &filterCDFBuffer](CommandBuffer *cmd) {
+                   &filterCDFBuffer, &volumeOctreeBuffer](CommandBuffer *cmd) {
                       RenderGraph *rg  = GetRenderGraph();
                       GPUImage *image  = rg->GetImage(imageHandle);
                       GPUImage *albedo = rg->GetImage(albedoHandle);
@@ -1542,7 +1544,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                           .Bind(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer)
                           .Bind(&filterCDFBuffer.buffer)
                           .Bind(&filterValuesBuffer.buffer)
-                          // .Bind(&volumeOctreeBuffer.buffer)
+                          .Bind(&volumeOctreeBuffer.buffer)
                           .PushConstants(&pushConstant, &pc)
                           .End();
 

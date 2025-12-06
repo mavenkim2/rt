@@ -334,4 +334,33 @@ float CosineHemispherePDF(float cosTheta)
 }
 
 float SampleExponential(float u, float a) { return -log(1 - u) / a; }
+
+float3 SampleHenyeyGreenstein(float3 wo, float g, float2 u)
+{
+    g = clamp(g, -.99, .99);
+    wo = normalize(wo);
+
+    float cosTheta;
+    if (abs(g) < 1e-3f)
+    {
+        cosTheta = 1 - 2 * u[0];
+    }
+    else
+    {
+        cosTheta =
+            -1 / (2 * g) * (1 + Sqr(g) - Sqr((1 - Sqr(g)) / (1 + g - 2 * g * u[0])));
+    }
+
+    cosTheta = clamp(cosTheta, -1, 1);
+    float sinTheta = sqrt(1 - Sqr(cosTheta));
+    float phi = 2 * PI * u[1];
+
+    float2x3 frame = BuildOrthonormalBasis(wo);
+
+    float3 dir = float3(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta);
+    float3 wi = frame[0] * dir.x + frame[1] * dir.y + wo * dir.z;
+
+    return wi;
+}
+
 #endif
