@@ -553,6 +553,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         transferCmd->SubmitBuffer(filterValues.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                   sizeof(f32) * filterValues.Length());
 
+    // potential places for bugs
+    // octree build/traversal
+    // tracking
     VolumeData volumeData = Volumes(transferCmd, arena);
     TransferBuffer volumeOctreeBuffer =
         transferCmd->SubmitBuffer(volumeData.octree.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -573,7 +576,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     // VkShaderStageFlags flags   = VK_SHADER_STAGE_COMPUTE_BIT;
     DescriptorSetLayout layout = {};
     layout.pipelineLayout      = nullptr;
-    layout.AddBinding((u32)RTBindings::Accel, DescriptorType::AccelerationStructure, flags);
+    // layout.AddBinding((u32)RTBindings::Accel, DescriptorType::AccelerationStructure, flags);
     layout.AddBinding((u32)RTBindings::Image, DescriptorType::StorageImage, flags);
     layout.AddBinding((u32)RTBindings::Scene, DescriptorType::UniformBuffer, flags);
     layout.AddBinding((u32)RTBindings::GPUMaterial, DescriptorType::StorageBuffer, flags);
@@ -1523,7 +1526,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
                       cmd->StartBinding(bindPoint, rts.pipeline, &layout)
                           // .Bind(&tlas.as)
-                          .Bind(&ptlasAddress)
+                          // .Bind(&ptlasAddress)
                           .Bind(image)
                           .Bind(&scene)
                           .Bind(&materialBuffer)

@@ -33,7 +33,7 @@
 #include "nvidia/clas.hlsli"
 #endif
 
-RaytracingAccelerationStructure accel : register(t0);
+//RaytracingAccelerationStructure accel : register(t0);
 RWTexture2D<float4> image : register(u1);
 ConstantBuffer<GPUScene> scene : register(b2);
 StructuredBuffer<GPUMaterial> materials : register(t4);
@@ -157,10 +157,18 @@ void main()
 
     int nanovdbIndex = 0;
     pnanovdb_grid_handle_t grid = {0};
-    pnanovdb_tree_handle_t tree = pnanovdb_grid_get_tree(nanovdbIndex, grid);
-    pnanovdb_root_handle_t root = pnanovdb_tree_get_root(nanovdbIndex, tree);
-    pnanovdb_coord_t volumeMinP = pnanovdb_root_get_bbox_min(nanovdbIndex, root);
-    pnanovdb_coord_t volumeMaxP = pnanovdb_root_get_bbox_max(nanovdbIndex, root);
+
+    float minX = (float)pnanovdb_grid_get_world_bbox(nanovdbIndex, grid, 0);
+    float minY = (float)pnanovdb_grid_get_world_bbox(nanovdbIndex, grid, 1);
+    float minZ = (float)pnanovdb_grid_get_world_bbox(nanovdbIndex, grid, 2);
+    float maxX = (float)pnanovdb_grid_get_world_bbox(nanovdbIndex, grid, 3);
+    float maxY = (float)pnanovdb_grid_get_world_bbox(nanovdbIndex, grid, 4);
+    float maxZ = (float)pnanovdb_grid_get_world_bbox(nanovdbIndex, grid, 5);
+
+    float3 volumeMinP = float3(minX, minY, minZ);
+    float3 volumeMaxP = float3(maxX, maxY, maxZ);
+
+    pos += scene.cameraBase;
 
     // temp volume rendering...
 #if 1
@@ -184,10 +192,14 @@ void main()
                 u = rng.Uniform();
 
                 float t = iterator.GetCurrentT();
-                if (0)//if (count > 1000)
+                if (count > 1000)
                 {
                     bool result = t + tStep >= tMax;
-                    printf("maj: %f, t: %f %f %f %u\n", majorant, t, tMax, tStep, result);
+                    printf("maj: %f, t: %f %f %f %u %u\n bounds, %f %f %f %f %f %f pos: %f %f %f dir %f %f %f\n", 
+                            majorant, t, tMax, tStep, result, iterator.current, 
+                            iterator.boundsMin.x, iterator.boundsMin.y, iterator.boundsMin.z,
+                            iterator.boundsMax.x, iterator.boundsMax.y, iterator.boundsMax.z,
+                            pos.x, pos.y, pos.z, dir.x, dir.y, dir.z);
                 }
                 // TODO: if majorant is 0, could this be false due to floating point precision?
                 if (t + tStep >= tMax)

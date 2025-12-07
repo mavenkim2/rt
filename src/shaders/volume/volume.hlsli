@@ -141,14 +141,14 @@ struct VolumeIterator
                 bool intersects =
                     IntersectRayAABB(boundsMin, boundsMax, rayO, rayDir, newT, tLeave);
 
-                if (start == current)
+                if (!intersects || start == current)
                 {
                     currentT = max(tLeave, currentT);
                     currentT += 0.0001f;
                 }
                 else 
                 {
-                    currentT = newT;
+                    //currentT = newT;
                     tMax     = tLeave;
 
                     return true;
