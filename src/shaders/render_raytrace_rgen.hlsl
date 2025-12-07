@@ -179,11 +179,24 @@ void main()
         bool done = false;
 
         int count = 0;
-        while (!done && iterator.Next())// && count < 1005)
+        do
         {
             count++;
             float tMin, tMax, minorant, majorant;
             iterator.GetSegmentProperties(tMin, tMax, minorant, majorant);
+#if 1
+            {
+                //bool result = t + tStep >= tMax;
+                bool result = 0;
+                float t = iterator.GetCurrentT();
+                float tStep = 0;
+                printf("maj: %f, t: %f %f %f %u %u\n bounds, %f %f %f %f %f %f pos: %f %f %f dir %f %f %f\n", 
+                        majorant, t, tMax, tStep, result, iterator.current, 
+                        iterator.octreeBoundsMin.x, iterator.octreeBoundsMin.y, iterator.octreeBoundsMin.z,
+                        iterator.octreeBoundsMax.x, iterator.octreeBoundsMax.y, iterator.octreeBoundsMax.z,
+                        pos.x, pos.y, pos.z, dir.x, dir.y, dir.z);
+            }
+#endif
             
             for (;;)
             {
@@ -192,15 +205,6 @@ void main()
                 u = rng.Uniform();
 
                 float t = iterator.GetCurrentT();
-                if (count > 1000)
-                {
-                    bool result = t + tStep >= tMax;
-                    printf("maj: %f, t: %f %f %f %u %u\n bounds, %f %f %f %f %f %f pos: %f %f %f dir %f %f %f\n", 
-                            majorant, t, tMax, tStep, result, iterator.current, 
-                            iterator.boundsMin.x, iterator.boundsMin.y, iterator.boundsMin.z,
-                            iterator.boundsMax.x, iterator.boundsMax.y, iterator.boundsMax.z,
-                            pos.x, pos.y, pos.z, dir.x, dir.y, dir.z);
-                }
                 // TODO: if majorant is 0, could this be false due to floating point precision?
                 if (t + tStep >= tMax)
                 {
@@ -241,7 +245,7 @@ void main()
                     }
                 }
             }
-        }
+        } while (!done && iterator.Next());// && count < 1005);
 
         if (iterator.current == -1)
         {

@@ -27,6 +27,7 @@ StructuredBuffer<OctreeNode> nodes : register(t29);
 #define PNANOVDB_HLSL
 #include "PNanoVDB.h"
 
+
 struct VolumeIterator
 {
     float currentT;
@@ -34,128 +35,141 @@ struct VolumeIterator
 
     float3 rayO;
     float3 rayDir;
+    float3 invDir;
 
-    float3 boundsMin;
-    float3 boundsMax;
+    float3 octreeBoundsMin;
+    float3 octreeBoundsMax;
 
-    int prev;
+    uint raySignMask;
+    uint crossingAxis;
+
     int current;
 
-#ifdef __SLANG__
-    [mutating]
-#endif
     void Start(float3 mins, float3 maxs, float3 o, float3 d)
     {
-        boundsMin = mins;
-        boundsMax = maxs;
-        rayO = o;
-        rayDir = d;
+        octreeBoundsMin = float3(0, 0, 0);
+        octreeBoundsMax = float3(1, 1, 1);
 
-        float tLeave;
-        bool intersects = IntersectRayAABB(boundsMin, boundsMax, o, d, currentT, tLeave);
+        float3 diag = maxs - mins;
+        rayO = (o - mins) / diag;
+        rayDir = d / diag;
+
+        invDir        = 1.f / rayDir;
+
+        float3 tIntersectMin = (octreeBoundsMin - rayO) * invDir;
+        float3 tIntersectMax = (octreeBoundsMax - rayO) * invDir;
+
+        float3 tMin = min(tIntersectMin, tIntersectMax);
+        float3 tMax_ = max(tIntersectMin, tIntersectMax);
+
+        float tEntry = max(tMin.x, max(tMin.y, max(tMin.z, 0.f)));
+        float tLeave = min(tMax_.x, min(tMax_.y, tMax_.z));
+
+        bool intersects = tEntry < tLeave;
         current = intersects ? 0 : -1;
+        currentT = min(tEntry, tLeave);
+
+        // Traverse to child
+        raySignMask = (rayDir.x < 0.f ? 1 : 0) | 
+                      (rayDir.y < 0.f ? 2 : 0) | 
+                      (rayDir.z < 0.f ? 4 : 0);
+        TraverseToChild();
+
+        tIntersectMin = (octreeBoundsMin - rayO) * invDir;
+        tIntersectMax = (octreeBoundsMax - rayO) * invDir;
+
+        tMin = min(tIntersectMin, tIntersectMax);
+        tMax_ = max(tIntersectMin, tIntersectMax);
+
+        tEntry = max(tMin.x, max(tMin.y, max(tMin.z, 0.f)));
+        tLeave = min(tMax_.x, min(tMax_.y, tMax_.z));
+
+        crossingAxis = tMax_.x == tLeave ? 0 : (tMax_.y == tLeave ? 1 : 2);
+        tMax = tLeave;
+        currentT = min(currentT, min(tEntry, tLeave));
     }
 
-    // internal node
-    //      - if current ray pos is outside bounds, go to parent
-    //      - find closest child that is in front of the ray
-    //      - go to that child
-    // leaf node
-    //      - Next() terminates
-    //      - return majorant and minorant
+    uint CalculateAxisMask()
+    {
+        return (current - 1) & 0x7;
+    }
 
-#ifdef __SLANG__
-    [mutating]
-#endif
     bool Next()
     {
-        prev = -1;
-        if (current == -1) return false;
-        int start = current;
-        for (;;)
+        uint rayCode = (~raySignMask) & 0x7;
+        uint axisMask = CalculateAxisMask();
+
+        while (current != -1 && ((rayCode ^ axisMask) & (1u << crossingAxis)) == 0)
         {
-            float3 currentPos = rayO + currentT * rayDir;
-            float3 center = (boundsMin + boundsMax) / 2.f;
-            currentPos -= center;
-            float3 extent = (boundsMax - boundsMin) / 2.f;
-            int next;
+            BoundsToParent();
 
-            uint childIndex = nodes[current].childIndex;
-            // go to parent
-            if (childIndex == ~0u || currentPos.x > extent.x || currentPos.y > extent.y ||
-                currentPos.z > extent.z || currentPos.x < -extent.x ||
-                currentPos.y < -extent.y || currentPos.z < -extent.z)
-            {
-                // go to parent
-                if (current == 0)
-                {
-                    current = -1;
-                    break;
-                }
-                int axisMask = (current - 1) & 0x7;
-                next         = nodes[current].parentIndex;
-
-                boundsMin = float3((axisMask & 0x1) ? boundsMin.x - 2.f * extent.x : boundsMin.x,
-                                   (axisMask & 0x2) ? boundsMin.y - 2.f * extent.y : boundsMin.y,
-                                   (axisMask & 0x4) ? boundsMin.z - 2.f * extent.z : boundsMin.z);
-                boundsMax = float3((axisMask & 0x1) ? boundsMax.x : boundsMax.x + 2.f * extent.x,
-                                   (axisMask & 0x2) ? boundsMax.y : boundsMax.y + 2.f * extent.y,
-                                   (axisMask & 0x4) ? boundsMax.z : boundsMax.z + 2.f * extent.z);
-
-                currentT += 0.0001f;
-#if 0
-                for (;;)
-                {
-                    float3 currentPos = rayO + currentT * rayDir - center;
-                    currentT = NextFloatUp(currentT);
-                    if (currentPos.x > extent.x || currentPos.y > extent.y ||
-                        currentPos.z > extent.z || currentPos.x < -extent.x ||
-                        currentPos.y < -extent.y || currentPos.z < -extent.z)
-                    {
-                        break;
-                    }
-                }
-#endif
-            }
-            // go to child
-            else 
-            {
-                uint closestChild = (currentPos.x >= 0.f) | ((currentPos.y >= 0.f) << 1) | ((currentPos.z >= 0.f) << 2);
-                next = childIndex + closestChild;
-
-                boundsMin = float3((closestChild & 0x1) ? center.x : boundsMin.x,
-                                   (closestChild & 0x2) ? center.y : boundsMin.y,
-                                   (closestChild & 0x4) ? center.z : boundsMin.z);
-                boundsMax = float3((closestChild & 0x1) ? boundsMax.x : center.x,
-                                   (closestChild & 0x2) ? boundsMax.y : center.y,
-                                   (closestChild & 0x4) ? boundsMax.z : center.z);
-            }
-
-            prev = current;
-            current = next;
-
-            if (nodes[current].childIndex == ~0u)
-            {
-                float newT;
-                float tLeave;
-                bool intersects =
-                    IntersectRayAABB(boundsMin, boundsMax, rayO, rayDir, newT, tLeave);
-
-                if (!intersects || start == current)
-                {
-                    currentT = max(tLeave, currentT);
-                    currentT += 0.0001f;
-                }
-                else 
-                {
-                    //currentT = newT;
-                    tMax     = tLeave;
-
-                    return true;
-                }
-            }
+            current = current == 0 ? -1 : nodes[current].parentIndex;
+            axisMask = CalculateAxisMask();
         }
-        return false;
+
+        if (current == -1) return false;
+
+        // Traverse to the neighbor
+        BoundsToParent();
+        current -= axisMask;
+        axisMask ^= (1u << crossingAxis);
+        current += axisMask;
+        uint closestChild = BoundsToChild();
+
+        // Traverse to child
+        TraverseToChild();
+
+        float3 tIntersectMin = (octreeBoundsMin - rayO) * invDir;
+        float3 tIntersectMax = (octreeBoundsMax - rayO) * invDir;
+
+        float3 tMin = min(tIntersectMin, tIntersectMax);
+        float3 tMax_ = max(tIntersectMin, tIntersectMax);
+
+        float tEntry = max(tMin.x, max(tMin.y, max(tMin.z, 0.f)));
+        float tLeave = min(tMax_.x, min(tMax_.y, tMax_.z));
+
+        // Prepare next traversal
+        crossingAxis = tMax_.x == tLeave ? 0 : (tMax_.y == tLeave ? 1 : 2);
+
+        currentT += tEntry > tLeave ? .0001f : 0.f;
+        tMax = max(currentT, tLeave);
+        // currentT = Min(currentT, Min(tEntry, tLeave));
+        return true;
+    }
+
+    void BoundsToParent()
+    {
+        uint axisMask = CalculateAxisMask();
+        float3 extent = (octreeBoundsMax - octreeBoundsMin) / 2.f;
+        octreeBoundsMin = float3((axisMask & 0x1) ? octreeBoundsMin.x - 2.f * extent.x : octreeBoundsMin.x,
+                (axisMask & 0x2) ? octreeBoundsMin.y - 2.f * extent.y : octreeBoundsMin.y,
+                (axisMask & 0x4) ? octreeBoundsMin.z - 2.f * extent.z : octreeBoundsMin.z);
+        octreeBoundsMax = float3((axisMask & 0x1) ? octreeBoundsMax.x : octreeBoundsMax.x + 2.f * extent.x,
+                (axisMask & 0x2) ? octreeBoundsMax.y : octreeBoundsMax.y + 2.f * extent.y,
+                (axisMask & 0x4) ? octreeBoundsMax.z : octreeBoundsMax.z + 2.f * extent.z);
+    }
+
+    uint BoundsToChild()
+    {
+        float3 center = (octreeBoundsMax + octreeBoundsMin) / 2.f;
+        float3 tPlanes = (center - rayO) * invDir;
+        uint closestChild = (tPlanes.x <= currentT) | ((tPlanes.y <= currentT) << 1) | ((tPlanes.z <= currentT) << 2);
+        closestChild ^= raySignMask;
+        octreeBoundsMin = float3((closestChild & 0x1) ? center.x : octreeBoundsMin.x,
+                (closestChild & 0x2) ? center.y : octreeBoundsMin.y,
+                (closestChild & 0x4) ? center.z : octreeBoundsMin.z);
+        octreeBoundsMax = float3((closestChild & 0x1) ? octreeBoundsMax.x : center.x,
+                (closestChild & 0x2) ? octreeBoundsMax.y : center.y,
+                (closestChild & 0x4) ? octreeBoundsMax.z : center.z);
+        return closestChild;
+    }
+
+    void TraverseToChild()
+    {
+        while (nodes[current].childIndex != ~0u)
+        {
+            current = nodes[current].childIndex + BoundsToChild();
+        }
     }
 
     float GetCurrentT() { return currentT; }
@@ -169,13 +183,9 @@ struct VolumeIterator
         major = nodes[current].maxValue;
     }
 
-#ifdef __SLANG__
-    [mutating]
-#endif
     void Step(float deltaT)
     {
         currentT += deltaT;
     }
 };
-
 #endif

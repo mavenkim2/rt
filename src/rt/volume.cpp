@@ -159,6 +159,7 @@ struct VolumeIterator
 
     Vec3f rayO;
     Vec3f rayDir;
+    Vec3f invDir;
 
     Vec3f boundsMin;
     Vec3f boundsMax;
@@ -166,21 +167,22 @@ struct VolumeIterator
     Vec3f octreeBoundsMin;
     Vec3f octreeBoundsMax;
 
+    u32 raySignMask;
+    u32 crossingAxis;
+
     int prev;
     int current;
 
-    u32 crossingAxis;
-
     VolumeIterator(const Vec3f &mins, const Vec3f &maxs, const Vec3f &o, const Vec3f &d,
                    GPUOctreeNode *nodes)
-        : boundsMin(mins), boundsMax(maxs), rayDir(d), nodes(nodes), current(0),
+        : boundsMin(mins), boundsMax(maxs), nodes(nodes), current(0),
           prev(-1), octreeBoundsMin(0), octreeBoundsMax(1)
     {
         Vec3f diag = boundsMax - boundsMin;
         rayO = (o - boundsMin) / diag;
         rayDir = d / diag;
 
-        Vec3f invDir        = 1.f / rayDir;
+        invDir        = 1.f / rayDir;
 
         Vec3f tIntersectMin = (octreeBoundsMin - rayO) * invDir;
         Vec3f tIntersectMax = (octreeBoundsMax - rayO) * invDir;
@@ -193,85 +195,67 @@ struct VolumeIterator
 
         bool intersects = tEntry < tLeave;
         current = intersects ? 0 : -1;
-
-        // Prepare next traversal
-        crossingAxis = tMax_.x == tLeave ? 0 : (tMax_.y == tLeave ? 1 : 2);
-        tMax = tLeave;
-        currentT = Min(currentT, Min(tEntry, tMax));
+        currentT = Min(tEntry, tLeave);
 
         Print("t start: %f %f\n", currentT, tLeave);
         Assert(intersects);
 
         // Traverse to child
-        while (nodes[current].childIndex != ~0u)
-        {
-            Vec3f center = (octreeBoundsMax + octreeBoundsMin) / 2.f;
-            Vec3f tPlanes = (center - rayO) * invDir;
-            u32 closestChild = (tPlanes.x <= currentT) | ((tPlanes.y <= currentT) << 1) | ((tPlanes.z <= currentT) << 2);
-            current = nodes[current].childIndex + closestChild;
+        raySignMask = (rayDir.x < 0.f ? 1 : 0) | 
+                      (rayDir.y < 0.f ? 2 : 0) | 
+                      (rayDir.z < 0.f ? 4 : 0);
+        TraverseToChild();
 
-            octreeBoundsMin = Vec3f((closestChild & 0x1) ? center.x : octreeBoundsMin.x,
-                    (closestChild & 0x2) ? center.y : octreeBoundsMin.y,
-                    (closestChild & 0x4) ? center.z : octreeBoundsMin.z);
-            octreeBoundsMax = Vec3f((closestChild & 0x1) ? octreeBoundsMax.x : center.x,
-                    (closestChild & 0x2) ? octreeBoundsMax.y : center.y,
-                    (closestChild & 0x4) ? octreeBoundsMax.z : center.z);
-        }
+        tIntersectMin = (octreeBoundsMin - rayO) * invDir;
+        tIntersectMax = (octreeBoundsMax - rayO) * invDir;
 
+        tMin = Min(tIntersectMin, tIntersectMax);
+        tMax_ = Max(tIntersectMin, tIntersectMax);
+
+        tEntry = Max(tMin.x, Max(tMin.y, Max(tMin.z, 0.f)));
+        tLeave = Min(tMax_.x, Min(tMax_.y, tMax_.z));
+
+        intersects = tEntry < tLeave;
+        Assert(intersects);
+
+        crossingAxis = tMax_.x == tLeave ? 0 : (tMax_.y == tLeave ? 1 : 2);
+        tMax = tLeave;
+        currentT = Min(currentT, Min(tEntry, tLeave));
     }
 
 #ifdef __SLANG__
     [mutating]
 #endif
+
+    u32 CalculateAxisMask() const
+    {
+        return (current - 1) & 0x7;
+    }
     bool TestNext()
     {
-        u32 rayCode = (rayDir.x >= 0.f) | ((rayDir.y >= 0.f) << 1) | ((rayDir.z >= 0.f) << 2);
-        u32 axisMask = (current - 1) & 0x7;
+        u32 rayCode = (~raySignMask) & 0x7;
+        u32 axisMask = CalculateAxisMask();
 
-        int next = -1;
-
-        // basically, if the axis is 0, we're positive ray x(so 1), and the child x is 0, we go to neighbor
-        // otherwise, we go parent
-
-        // Traverse up tree until parent has a child in the requisite direction
-        while (current != -1 && ((rayCode ^ axisMask) & crossingAxis) == 0)
+        while (current != -1 && ((rayCode ^ axisMask) & (1 << crossingAxis)) == 0)
         {
-            Vec3f extent = (octreeBoundsMax - octreeBoundsMin) / 2.f;
-            octreeBoundsMin = Vec3f((axisMask & 0x1) ? octreeBoundsMin.x - 2.f * extent.x : octreeBoundsMin.x,
-                    (axisMask & 0x2) ? octreeBoundsMin.y - 2.f * extent.y : octreeBoundsMin.y,
-                    (axisMask & 0x4) ? octreeBoundsMin.z - 2.f * extent.z : octreeBoundsMin.z);
-            octreeBoundsMax = Vec3f((axisMask & 0x1) ? octreeBoundsMax.x : octreeBoundsMax.x + 2.f * extent.x,
-                    (axisMask & 0x2) ? octreeBoundsMax.y : octreeBoundsMax.y + 2.f * extent.y,
-                    (axisMask & 0x4) ? octreeBoundsMax.z : octreeBoundsMax.z + 2.f * extent.z);
+            BoundsToParent();
 
             current = current == 0 ? -1 : nodes[current].parentIndex;
-            axisMask = (current - 1) & 0x7;
-
+            axisMask = CalculateAxisMask();
         }
 
         if (current == -1) return false;
 
         // Traverse to the neighbor
+        BoundsToParent();
+        current -= axisMask;
         axisMask ^= (1 << crossingAxis);
-        current = current - 1 + axisMask;
-
-        Vec3f invDir        = 1.f / rayDir;
+        current += axisMask;
+        u32 closestChild = BoundsToChild();
+        Assert(closestChild == axisMask);
 
         // Traverse to child
-        while (nodes[current].childIndex != ~0u)
-        {
-            Vec3f center = (octreeBoundsMax + octreeBoundsMin) / 2.f;
-            Vec3f tPlanes = (center - rayO) * invDir;
-            u32 closestChild = (tPlanes.x <= currentT) | ((tPlanes.y <= currentT) << 1) | ((tPlanes.z <= currentT) << 2);
-            current = nodes[current].childIndex + closestChild;
-
-            octreeBoundsMin = Vec3f((closestChild & 0x1) ? center.x : octreeBoundsMin.x,
-                    (closestChild & 0x2) ? center.y : octreeBoundsMin.y,
-                    (closestChild & 0x4) ? center.z : octreeBoundsMin.z);
-            octreeBoundsMax = Vec3f((closestChild & 0x1) ? octreeBoundsMax.x : center.x,
-                    (closestChild & 0x2) ? octreeBoundsMax.y : center.y,
-                    (closestChild & 0x4) ? octreeBoundsMax.z : center.z);
-        }
+        TraverseToChild();
 
         Vec3f tIntersectMin = (octreeBoundsMin - rayO) * invDir;
         Vec3f tIntersectMax = (octreeBoundsMax - rayO) * invDir;
@@ -286,9 +270,46 @@ struct VolumeIterator
 
         // Prepare next traversal
         crossingAxis = tMax_.x == tLeave ? 0 : (tMax_.y == tLeave ? 1 : 2);
-        tMax = tLeave;
-        currentT = Min(currentT, Min(tEntry, tMax));
+        tMax = Max(currentT, Max(tEntry, tLeave));
+        // currentT = Min(currentT, Min(tEntry, tLeave));
+        return true;
     }
+
+    void BoundsToParent()
+    {
+        u32 axisMask = CalculateAxisMask();
+        Vec3f extent = (octreeBoundsMax - octreeBoundsMin) / 2.f;
+        octreeBoundsMin = Vec3f((axisMask & 0x1) ? octreeBoundsMin.x - 2.f * extent.x : octreeBoundsMin.x,
+                (axisMask & 0x2) ? octreeBoundsMin.y - 2.f * extent.y : octreeBoundsMin.y,
+                (axisMask & 0x4) ? octreeBoundsMin.z - 2.f * extent.z : octreeBoundsMin.z);
+        octreeBoundsMax = Vec3f((axisMask & 0x1) ? octreeBoundsMax.x : octreeBoundsMax.x + 2.f * extent.x,
+                (axisMask & 0x2) ? octreeBoundsMax.y : octreeBoundsMax.y + 2.f * extent.y,
+                (axisMask & 0x4) ? octreeBoundsMax.z : octreeBoundsMax.z + 2.f * extent.z);
+    }
+
+    u32 BoundsToChild()
+    {
+        Vec3f center = (octreeBoundsMax + octreeBoundsMin) / 2.f;
+        Vec3f tPlanes = (center - rayO) * invDir;
+        u32 closestChild = (tPlanes.x <= currentT) | ((tPlanes.y <= currentT) << 1) | ((tPlanes.z <= currentT) << 2);
+        closestChild ^= raySignMask;
+        octreeBoundsMin = Vec3f((closestChild & 0x1) ? center.x : octreeBoundsMin.x,
+                (closestChild & 0x2) ? center.y : octreeBoundsMin.y,
+                (closestChild & 0x4) ? center.z : octreeBoundsMin.z);
+        octreeBoundsMax = Vec3f((closestChild & 0x1) ? octreeBoundsMax.x : center.x,
+                (closestChild & 0x2) ? octreeBoundsMax.y : center.y,
+                (closestChild & 0x4) ? octreeBoundsMax.z : center.z);
+        return closestChild;
+    }
+
+    void TraverseToChild()
+    {
+        while (nodes[current].childIndex != ~0u)
+        {
+            current = nodes[current].childIndex + BoundsToChild();
+        }
+    }
+
     bool Next()
     {
         u32 code = (rayDir.x >= 0.f) | ((rayDir.y >= 0.f) << 1) | ((rayDir.z >= 0.f) << 2);
@@ -479,7 +500,7 @@ VolumeData Volumes(CommandBuffer *cmd, Arena *arena)
                                 newNodes.data);
         bool done = false;
 
-        while (!done && iterator.Next())
+        do 
         {
             float tMin, tMax, minorant, majorant;
             iterator.GetSegmentProperties(tMin, tMax, minorant, majorant);
@@ -541,7 +562,7 @@ VolumeData Volumes(CommandBuffer *cmd, Arena *arena)
                     }
                 }
             }
-        }
+        } while (!done && iterator.TestNext());
 
         if (iterator.current == -1)
         {
