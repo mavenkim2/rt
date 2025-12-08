@@ -73,20 +73,24 @@ struct VolumeIterator
         raySignMask = (rayDir.x < 0.f ? 1 : 0) | 
                       (rayDir.y < 0.f ? 2 : 0) | 
                       (rayDir.z < 0.f ? 4 : 0);
-        TraverseToChild();
 
-        tIntersectMin = (octreeBoundsMin - rayO) * invDir;
-        tIntersectMax = (octreeBoundsMax - rayO) * invDir;
+        if (current == 0)
+        {
+            TraverseToChild();
 
-        tMin = min(tIntersectMin, tIntersectMax);
-        tMax_ = max(tIntersectMin, tIntersectMax);
+            tIntersectMin = (octreeBoundsMin - rayO) * invDir;
+            tIntersectMax = (octreeBoundsMax - rayO) * invDir;
 
-        tEntry = max(tMin.x, max(tMin.y, max(tMin.z, 0.f)));
-        tLeave = min(tMax_.x, min(tMax_.y, tMax_.z));
+            tMin = min(tIntersectMin, tIntersectMax);
+            tMax_ = max(tIntersectMin, tIntersectMax);
 
-        crossingAxis = tMax_.x == tLeave ? 0 : (tMax_.y == tLeave ? 1 : 2);
-        tMax = tLeave;
-        currentT = min(currentT, min(tEntry, tLeave));
+            tEntry = max(tMin.x, max(tMin.y, max(tMin.z, 0.f)));
+            tLeave = min(tMax_.x, min(tMax_.y, tMax_.z));
+
+            crossingAxis = tMax_.x == tLeave ? 0 : (tMax_.y == tLeave ? 1 : 2);
+            tMax = tLeave;
+            currentT = min(currentT, min(tEntry, tLeave));
+        }
     }
 
     uint CalculateAxisMask()
@@ -94,27 +98,37 @@ struct VolumeIterator
         return (current - 1) & 0x7;
     }
 
+    bool Done()
+    {
+        return current == -1 || current == 0;
+    }
+
     bool Next()
     {
+        if (current == -1) return false;
+
+        int start = current;
+
         uint rayCode = (~raySignMask) & 0x7;
         uint axisMask = CalculateAxisMask();
 
-        while (current != -1 && ((rayCode ^ axisMask) & (1u << crossingAxis)) == 0)
+        while (current != 0 && ((rayCode ^ axisMask) & (1u << crossingAxis)) == 0)
         {
             BoundsToParent();
 
-            current = current == 0 ? -1 : nodes[current].parentIndex;
+            current = nodes[current].parentIndex;
             axisMask = CalculateAxisMask();
         }
 
-        if (current == -1) return false;
+        if (current == 0) return false;
 
         // Traverse to the neighbor
         BoundsToParent();
-        current -= axisMask;
-        axisMask ^= (1u << crossingAxis);
-        current += axisMask;
-        uint closestChild = BoundsToChild();
+        current = nodes[current].parentIndex;
+        //current -= axisMask;
+        //axisMask ^= (1u << crossingAxis);
+        //current += axisMask;
+        //uint closestChild = BoundsToChild();
 
         // Traverse to child
         TraverseToChild();
@@ -141,12 +155,25 @@ struct VolumeIterator
     {
         uint axisMask = CalculateAxisMask();
         float3 extent = (octreeBoundsMax - octreeBoundsMin) / 2.f;
+
+        float3 prevMin = octreeBoundsMin;
+        float3 prevMax = octreeBoundsMax;
+
         octreeBoundsMin = float3((axisMask & 0x1) ? octreeBoundsMin.x - 2.f * extent.x : octreeBoundsMin.x,
                 (axisMask & 0x2) ? octreeBoundsMin.y - 2.f * extent.y : octreeBoundsMin.y,
                 (axisMask & 0x4) ? octreeBoundsMin.z - 2.f * extent.z : octreeBoundsMin.z);
         octreeBoundsMax = float3((axisMask & 0x1) ? octreeBoundsMax.x : octreeBoundsMax.x + 2.f * extent.x,
                 (axisMask & 0x2) ? octreeBoundsMax.y : octreeBoundsMax.y + 2.f * extent.y,
                 (axisMask & 0x4) ? octreeBoundsMax.z : octreeBoundsMax.z + 2.f * extent.z);
+
+        if (any(octreeBoundsMin < 0.f) || any(octreeBoundsMax > 1.f))
+        {
+            printf("prev: %f %f %f %f %f %f\nnext: %f %f %f %f %f %f %u %u\n",
+            prevMin.x, prevMin.y, prevMin.z,
+            prevMax.x, prevMax.y, prevMax.z,
+            octreeBoundsMin.x, octreeBoundsMin.y, octreeBoundsMin.z, 
+                   octreeBoundsMax.x, octreeBoundsMax.y, octreeBoundsMax.z, current, axisMask);
+        }
     }
 
     uint BoundsToChild()

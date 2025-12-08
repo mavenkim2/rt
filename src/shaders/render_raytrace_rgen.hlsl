@@ -34,7 +34,7 @@
 #endif
 
 //RaytracingAccelerationStructure accel : register(t0);
-RWTexture2D<float4> image : register(u1);
+RWTexture2D<half4> image : register(u1);
 ConstantBuffer<GPUScene> scene : register(b2);
 StructuredBuffer<GPUMaterial> materials : register(t4);
 ConstantBuffer<ShaderDebugInfo> debugInfo: register(b7);
@@ -184,19 +184,18 @@ void main()
             count++;
             float tMin, tMax, minorant, majorant;
             iterator.GetSegmentProperties(tMin, tMax, minorant, majorant);
-#if 1
+
+            if (0)//iterator.octreeBoundsMin.x < -1 || iterator.octreeBoundsMin.x > 1)
             {
                 //bool result = t + tStep >= tMax;
-                bool result = 0;
                 float t = iterator.GetCurrentT();
                 float tStep = 0;
                 printf("maj: %f, t: %f %f %f %u %u\n bounds, %f %f %f %f %f %f pos: %f %f %f dir %f %f %f\n", 
-                        majorant, t, tMax, tStep, result, iterator.current, 
+                        majorant, t, tMax, tStep, count, iterator.current, 
                         iterator.octreeBoundsMin.x, iterator.octreeBoundsMin.y, iterator.octreeBoundsMin.z,
                         iterator.octreeBoundsMax.x, iterator.octreeBoundsMax.y, iterator.octreeBoundsMax.z,
                         pos.x, pos.y, pos.z, dir.x, dir.y, dir.z);
             }
-#endif
             
             for (;;)
             {
@@ -245,9 +244,9 @@ void main()
                     }
                 }
             }
-        } while (!done && iterator.Next());// && count < 1005);
+        } while (!done && iterator.Next());
 
-        if (iterator.current == -1)
+        if (iterator.Done())
         {
             radiance += float3(0.03, 0.07, 0.23);
             break;
@@ -747,5 +746,5 @@ void main()
         throughput /= groupContinuationProb;
     }
 #endif
-    image[swizzledThreadID] = float4(radiance, 1);
+    image[swizzledThreadID] = half4(radiance, 1);
 }

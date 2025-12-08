@@ -1397,6 +1397,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             .AddHandle(virtualGeometryManager.instanceBitVectorHandle,
                        ResourceUsageType::Write);
 
+#if 0
         if (device->frameCount > 0)
         {
             // TODO: support transient lifetimes that cross frame boundaries
@@ -1416,6 +1417,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                   cmd->FlushBarriers();
               }).AddHandle(virtualGeometryManager.depthPyramid, ResourceUsageType::Write);
         }
+#endif
 
         // Instance culling
         {
@@ -1501,8 +1503,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                    &debug = shaderDebugBuffers[currentBuffer].buffer, &materialBuffer,
                    &faceDataBuffer, &virtualTextureManager, &virtualGeometryManager,
                    imageHandle = image, &depthBuffer, &readback, &normals, albedoHandle,
-                   currentBuffer, &debugBuffer, &filterValuesBuffer,
-                   &filterCDFBuffer, &volumeOctreeBuffer](CommandBuffer *cmd) {
+                   currentBuffer, &debugBuffer, &filterValuesBuffer, &filterCDFBuffer,
+                   &volumeOctreeBuffer](CommandBuffer *cmd) {
                       RenderGraph *rg  = GetRenderGraph();
                       GPUImage *image  = rg->GetImage(imageHandle);
                       GPUImage *albedo = rg->GetImage(albedoHandle);
@@ -1600,6 +1602,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             rg->StartComputePass(
                   accumulatePipeline, accumulateLayout, 4,
                   [targetWidth, targetHeight, image, albedoHandle](CommandBuffer *cmd) {
+                      DebugBreak();
                       RenderGraph *rg      = GetRenderGraph();
                       GPUImage *frameImage = rg->GetImage(image);
                       GPUImage *albedo     = rg->GetImage(albedoHandle);
