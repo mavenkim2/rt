@@ -9,9 +9,8 @@ RWStructuredBuffer<uint> visiblePartitions : register(u2);
 RWStructuredBuffer<uint2> freedPartitions : register(u3);
 RWStructuredBuffer<uint> instanceFreeList : register(u4);
 ConstantBuffer<GPUScene> gpuScene : register(b5);
-Texture2D<float> depthPyramid : register(t6);
+//Texture2D<float> depthPyramid : register(t6);
 
-#define ENABLE_OCCLUSION
 #include "cull.hlsli"
 
 [[vk::push_constant]] MergedInstancesPushConstant pc;

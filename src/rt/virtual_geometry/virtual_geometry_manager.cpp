@@ -324,8 +324,8 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena, u32 targetWidth, u3
     }
     mergedInstancesTestLayout.AddBinding(5, DescriptorType::UniformBuffer,
                                          VK_SHADER_STAGE_COMPUTE_BIT);
-    mergedInstancesTestLayout.AddBinding(6, DescriptorType::SampledImage,
-                                         VK_SHADER_STAGE_COMPUTE_BIT);
+    // mergedInstancesTestLayout.AddBinding(6, DescriptorType::SampledImage,
+    //                                      VK_SHADER_STAGE_COMPUTE_BIT);
     mergedInstancesTestLayout.AddImmutableSamplers();
     mergedInstancesTestPipeline =
         device->CreateComputePipeline(&mergedInstancesShader, &mergedInstancesTestLayout,
@@ -1039,7 +1039,7 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, ResourceHandle
     if (1)
     {
         rg->StartComputePass(
-              mergedInstancesTestPipeline, mergedInstancesTestLayout, 7,
+              mergedInstancesTestPipeline, mergedInstancesTestLayout, 6,
               [maxPartitions = this->maxPartitions, &infos = this->partitionInfosBuffer,
                sceneBuffer, visiblePartitions              = this->visiblePartitionsBuffer,
                freePartitions           = this->evictedPartitionsBuffer,
@@ -1063,8 +1063,8 @@ void VirtualGeometryManager::PrepareInstances(CommandBuffer *cmd, ResourceHandle
             .AddHandle(visiblePartitionsBuffer, ResourceUsageType::Write)
             .AddHandle(evictedPartitionsBuffer, ResourceUsageType::Write)
             .AddHandle(instanceFreeList0, ResourceUsageType::RW)
-            .AddHandle(sceneBuffer, ResourceUsageType::Read)
-            .AddHandle(depthPyramid, ResourceUsageType::Read);
+            .AddHandle(sceneBuffer, ResourceUsageType::Read);
+            // .AddHandle(depthPyramid, ResourceUsageType::Read);
 
         NumPushConstant freeInstancesPc;
         freeInstancesPc.num = maxInstances;

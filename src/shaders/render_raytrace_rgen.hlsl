@@ -170,6 +170,9 @@ void main()
 
     pos += scene.cameraBase;
 
+    // TODO hardcoded
+    const float densityScale = 4.f;
+
     // temp volume rendering...
 #if 1
     for (int i = 0; i < 128; i++)
@@ -178,73 +181,80 @@ void main()
         iterator.Start(volumeMinP, volumeMaxP, pos, dir);
         bool done = false;
 
-        int count = 0;
-        do
+        if (!iterator.Done())
         {
-            count++;
-            float tMin, tMax, minorant, majorant;
-            iterator.GetSegmentProperties(tMin, tMax, minorant, majorant);
-
-            if (0)//iterator.octreeBoundsMin.x < -1 || iterator.octreeBoundsMin.x > 1)
+            int count = 0;
+            do
             {
-                //bool result = t + tStep >= tMax;
-                float t = iterator.GetCurrentT();
-                float tStep = 0;
-                printf("maj: %f, t: %f %f %f %u %u\n bounds, %f %f %f %f %f %f pos: %f %f %f dir %f %f %f\n", 
-                        majorant, t, tMax, tStep, count, iterator.current, 
-                        iterator.octreeBoundsMin.x, iterator.octreeBoundsMin.y, iterator.octreeBoundsMin.z,
-                        iterator.octreeBoundsMax.x, iterator.octreeBoundsMax.y, iterator.octreeBoundsMax.z,
-                        pos.x, pos.y, pos.z, dir.x, dir.y, dir.z);
-            }
-            
-            for (;;)
-            {
-                float u = rng.Uniform();
-                float tStep = majorant == 0.f ? tMax - tMin : SampleExponential(u, majorant);
-                u = rng.Uniform();
+                count++;
+                float tMin, tMax, minorant, majorant;
+                iterator.GetSegmentProperties(tMin, tMax, minorant, majorant);
+                majorant *= densityScale;
 
-                float t = iterator.GetCurrentT();
-                // TODO: if majorant is 0, could this be false due to floating point precision?
-                if (t + tStep >= tMax)
+                uint test = 0;
+
+                for (;;)
                 {
-                    float deltaT = tMax - t;
-                    iterator.Step(deltaT);
-                    //throughput *= exp(-deltaT * majorant);
-                    break;
-                }
-                else 
-                {
-                    iterator.Step(tStep);
-
-                    pnanovdb_grid_handle_t grid = {0};
-
-                    // TODO: hardcoded
-                    int nanovdbIndex = 0;
-                    pnanovdb_tree_handle_t tree = pnanovdb_grid_get_tree(nanovdbIndex, grid);
-                    pnanovdb_root_handle_t root = pnanovdb_tree_get_root(nanovdbIndex, tree);
-                    pnanovdb_uint32_t gridType = pnanovdb_grid_get_grid_type(nanovdbIndex, grid);
-
-                    pnanovdb_readaccessor_t accessor;
-                    pnanovdb_readaccessor_init(accessor, root);
-
-                    float3 gridPos = pos + iterator.GetCurrentT() * dir;
-                    float3 indexSpacePosition = pnanovdb_grid_world_to_indexf(nanovdbIndex, grid, gridPos);
-                    pnanovdb_coord_t coord = pnanovdb_hdda_pos_to_ijk(indexSpacePosition);
-
-                    pnanovdb_address_t valueAddr = pnanovdb_readaccessor_get_value_address(gridType, nanovdbIndex, accessor, coord);
-                    float density = pnanovdb_read_float(nanovdbIndex, valueAddr);
-                    
-                    //throughput *= exp(-tStep * majorant);
-
-                    // scatter
-                    if (u < density / majorant)
+                    if (test++ > 200)
                     {
-                        done = true;
+                        //bool result = t + tStep >= tMax;
+                        float t = iterator.GetCurrentT();
+                        float tStep = 0;
+                        printf("maj: %f, t: %f %f %f %u %u\n bounds, %f %f %f %f %f %f pos: %f %f %f dir %f %f %f\n", 
+                                majorant, t, tMax, tStep, count, iterator.current, 
+                                iterator.octreeBoundsMin.x, iterator.octreeBoundsMin.y, iterator.octreeBoundsMin.z,
+                                iterator.octreeBoundsMax.x, iterator.octreeBoundsMax.y, iterator.octreeBoundsMax.z,
+                                pos.x, pos.y, pos.z, dir.x, dir.y, dir.z);
+                    }
+                    float u = rng.Uniform();
+                    float tStep = majorant == 0.f ? tMax - tMin : SampleExponential(u, majorant);
+                    u = rng.Uniform();
+
+                    float t = iterator.GetCurrentT();
+                    // TODO: if majorant is 0, could this be false due to floating point precision?
+                    if (t + tStep >= tMax)
+                    {
+                        float deltaT = tMax - t;
+                        iterator.Step(deltaT);
+                        //throughput *= exp(-deltaT * majorant);
                         break;
                     }
+                    else 
+                    {
+                        iterator.Step(tStep);
+
+                        pnanovdb_grid_handle_t grid = {0};
+
+                        // TODO: hardcoded
+                        int nanovdbIndex = 0;
+                        pnanovdb_tree_handle_t tree = pnanovdb_grid_get_tree(nanovdbIndex, grid);
+                        pnanovdb_root_handle_t root = pnanovdb_tree_get_root(nanovdbIndex, tree);
+                        pnanovdb_uint32_t gridType = pnanovdb_grid_get_grid_type(nanovdbIndex, grid);
+
+                        pnanovdb_readaccessor_t accessor;
+                        pnanovdb_readaccessor_init(accessor, root);
+
+                        float3 gridPos = pos + iterator.GetCurrentT() * dir;
+                        float3 indexSpacePosition = pnanovdb_grid_world_to_indexf(nanovdbIndex, grid, gridPos);
+                        pnanovdb_coord_t coord = pnanovdb_hdda_pos_to_ijk(indexSpacePosition);
+
+                        pnanovdb_address_t valueAddr = pnanovdb_readaccessor_get_value_address(gridType, nanovdbIndex, accessor, coord);
+                        float density = pnanovdb_read_float(nanovdbIndex, valueAddr);
+                        // TODO hardcoded
+                        density *= densityScale;
+
+                        //throughput *= exp(-tStep * majorant);
+
+                        // scatter
+                        if (u < density / majorant)
+                        {
+                            done = true;
+                            break;
+                        }
+                    }
                 }
-            }
-        } while (!done && iterator.Next());
+            } while (!done && iterator.Next());
+        }
 
         if (iterator.Done())
         {

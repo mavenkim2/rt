@@ -1602,7 +1602,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             rg->StartComputePass(
                   accumulatePipeline, accumulateLayout, 4,
                   [targetWidth, targetHeight, image, albedoHandle](CommandBuffer *cmd) {
-                      DebugBreak();
                       RenderGraph *rg      = GetRenderGraph();
                       GPUImage *frameImage = rg->GetImage(image);
                       GPUImage *albedo     = rg->GetImage(albedoHandle);
