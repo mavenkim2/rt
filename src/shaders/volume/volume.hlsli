@@ -256,7 +256,7 @@ bool GetNextVolumeVertex(inout VolumeIterator iterator, inout RNG rng, out Volum
                     float deltaT = tMax - t;
                     iterator.Step(deltaT);
 
-                    //transmittance *= exp(-deltaT * majorant);
+                    transmittance *= exp(-deltaT * majorant);
                     break;
                 }
                 else 
@@ -283,7 +283,7 @@ bool GetNextVolumeVertex(inout VolumeIterator iterator, inout RNG rng, out Volum
                     // TODO hardcoded
                     density *= densityScale;
 
-                    //transmittance *= exp(-tStep * majorant);
+                    transmittance *= exp(-tStep * majorant);
 
                     data.transmittance = transmittance;
                     data.density = density;

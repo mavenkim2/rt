@@ -184,6 +184,9 @@ void main()
         iterator.Start(volumeMinP, volumeMaxP, pos, dir);
         bool done = false;
 
+        float3 oldDir;
+        const float g = .877;
+
         for (;;)
         {
             VolumeVertexData data;
@@ -204,7 +207,7 @@ void main()
 
                 float2 u = rng.Uniform2D();
                 // TODO hardcoded
-                float g = .877;
+                oldDir = dir;
                 dir = SampleHenyeyGreenstein(-dir, g, u);
                 break;
 
@@ -215,6 +218,73 @@ void main()
         }
 
         if (done) break;
+
+        // NEE
+#if 1
+        bool escaped = false;
+        float pNee = 1.f;
+        float pUni = 1.f;
+
+        float u = rng.Uniform();
+        float lightPdf = 0.5f;
+        float3 lightDir;
+
+        if (u < 0.5f)
+        {
+            continue;
+        }
+        else 
+        {
+            lightDir = -float3(-.5826, -.7660, -.2717);
+        }
+        pNee *= lightPdf;
+
+        float hg = HenyeyGreenstein(dot(lightDir, -oldDir), g);
+
+        // Ratio tracking for transmittance
+        float transmittance = 1.f;
+        float3 ratioTrackingPos = pos;
+
+        iterator.Start(volumeMinP, volumeMaxP, ratioTrackingPos, lightDir);
+        for (;;)
+        {
+            VolumeVertexData data;
+            escaped = GetNextVolumeVertex(iterator, rng, data, ratioTrackingPos, lightDir);
+
+            if (escaped)
+            {
+                pNee *= data.transmittance;
+                pUni *= data.transmittance;
+                transmittance *= data.transmittance;
+                break;
+            }
+
+            ratioTrackingPos += iterator.GetCurrentT() * lightDir;
+            float nullCoefficient = data.majorant - data.density;
+
+            //float pdf = data.transmittance * data.majorant;
+            transmittance *= data.transmittance * nullCoefficient;
+            pNee *= data.transmittance * data.majorant;
+            pUni *= data.transmittance * nullCoefficient;
+
+            if (transmittance < 0.05f)
+            {
+                const float q = .75f;
+                if (rng.Uniform() < .75f)
+                {
+                    transmittance = 0.f;
+                }
+                else 
+                {
+                    transmittance /= (1 - q);
+                }
+            }
+            if (transmittance == 0.f) break;
+        }
+
+        // TODO: non delta lights
+        radiance += pNee != 0.f ? throughput * hg * transmittance * float3(2.6, 2.5, 2.3) / pNee : 0.f;
+#endif
     }
 #endif
 

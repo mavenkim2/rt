@@ -335,6 +335,14 @@ float CosineHemispherePDF(float cosTheta)
 
 float SampleExponential(float u, float a) { return -log(1 - u) / a; }
 
+float HenyeyGreenstein(float cosTheta, float g)
+{
+    const float inv4pi = 1.f / (4 * PI);
+    g         = clamp(g, -.99f, .99f);
+    float denom = 1 + Sqr(g) + 2 * g * cosTheta;
+    return inv4pi * (1 - Sqr(g)) / (denom * sqrt(denom));
+}
+
 float3 SampleHenyeyGreenstein(float3 wo, float g, float2 u)
 {
     g = clamp(g, -.99, .99);
