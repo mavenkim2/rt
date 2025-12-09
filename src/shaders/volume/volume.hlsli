@@ -2,6 +2,7 @@
 #define VOLUME_HLSLI_
 
 #include "../intersect_ray_aabb.hlsli"
+#include "../sampling.hlsli"
 
 struct OctreeNode 
 {
@@ -215,4 +216,96 @@ struct VolumeIterator
         currentT += deltaT;
     }
 };
+
+struct VolumeVertexData
+{
+    float transmittance;
+    float density;
+    float majorant;
+};
+
+bool GetNextVolumeVertex(inout VolumeIterator iterator, inout RNG rng, out VolumeVertexData data, 
+                         float3 pos, float3 dir)
+{
+    bool done = false;
+    float transmittance = 1.f;
+    // TODO hardcoded
+    const float densityScale = 4.f;
+
+    if (!iterator.Done())
+    {
+        int count = 0;
+        do
+        {
+            count++;
+            float tMin, tMax, minorant, majorant;
+            iterator.GetSegmentProperties(tMin, tMax, minorant, majorant);
+            majorant *= densityScale;
+
+            uint test = 0;
+
+            for (;;)
+            {
+                float u = rng.Uniform();
+                float tStep = majorant == 0.f ? tMax - tMin : SampleExponential(u, majorant);
+
+                float t = iterator.GetCurrentT();
+                // TODO: if majorant is 0, could this be false due to floating point precision?
+                if (t + tStep >= tMax)
+                {
+                    float deltaT = tMax - t;
+                    iterator.Step(deltaT);
+
+                    //transmittance *= exp(-deltaT * majorant);
+                    break;
+                }
+                else 
+                {
+                    iterator.Step(tStep);
+
+                    pnanovdb_grid_handle_t grid = {0};
+
+                    // TODO: hardcoded
+                    int nanovdbIndex = 0;
+                    pnanovdb_tree_handle_t tree = pnanovdb_grid_get_tree(nanovdbIndex, grid);
+                    pnanovdb_root_handle_t root = pnanovdb_tree_get_root(nanovdbIndex, tree);
+                    pnanovdb_uint32_t gridType = pnanovdb_grid_get_grid_type(nanovdbIndex, grid);
+
+                    pnanovdb_readaccessor_t accessor;
+                    pnanovdb_readaccessor_init(accessor, root);
+
+                    float3 gridPos = pos + iterator.GetCurrentT() * dir;
+                    float3 indexSpacePosition = pnanovdb_grid_world_to_indexf(nanovdbIndex, grid, gridPos);
+                    pnanovdb_coord_t coord = pnanovdb_hdda_pos_to_ijk(indexSpacePosition);
+
+                    pnanovdb_address_t valueAddr = pnanovdb_readaccessor_get_value_address(gridType, nanovdbIndex, accessor, coord);
+                    float density = pnanovdb_read_float(nanovdbIndex, valueAddr);
+                    // TODO hardcoded
+                    density *= densityScale;
+
+                    //transmittance *= exp(-tStep * majorant);
+
+                    data.transmittance = transmittance;
+                    data.density = density;
+                    data.majorant = majorant;
+                    return false;
+#if 0
+                    float scatterProb = density / majorant;
+                    float nullCoefficient = 1.f - scatterProb;
+
+                    // scatter
+                    if (u < density / majorant)
+                    {
+                        done = true;
+                        transmittance *= density * ?;
+                        break;
+                    }
+#endif
+                }
+            }
+        } while (iterator.Next());
+    }
+    return true;
+}
+
 #endif
