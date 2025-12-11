@@ -247,10 +247,9 @@ bool GetNextVolumeVertex(inout VolumeIterator iterator, inout RNG rng, out Volum
             for (;;)
             {
                 float u = rng.Uniform();
-                float tStep = majorant == 0.f ? tMax - tMin : SampleExponential(u, majorant);
-
                 float t = iterator.GetCurrentT();
-                // TODO: if majorant is 0, could this be false due to floating point precision?
+                float tStep = majorant == 0.f ? tMax - t : SampleExponential(u, majorant);
+
                 if (t + tStep >= tMax)
                 {
                     float deltaT = tMax - t;
@@ -289,23 +288,84 @@ bool GetNextVolumeVertex(inout VolumeIterator iterator, inout RNG rng, out Volum
                     data.density = density;
                     data.majorant = majorant;
                     return false;
-#if 0
-                    float scatterProb = density / majorant;
-                    float nullCoefficient = 1.f - scatterProb;
-
-                    // scatter
-                    if (u < density / majorant)
-                    {
-                        done = true;
-                        transmittance *= density * ?;
-                        break;
-                    }
-#endif
                 }
             }
         } while (iterator.Next());
     }
     return true;
+}
+
+bool SpeculativelyDuplicateRays(inout uint N, bool terminated, inout uint laneToGo)
+{
+    uint laneCount = WaveGetLaneCount();
+    uint stride = laneCount >> N;
+
+    uint waveIndex = WaveGetLaneIndex();
+    uint numAlive = WaveActiveCountBits(!terminated && waveIndex < stride);
+    if (numAlive <= stride)
+    {
+        N++;
+        uint stride = (laneCount >> N);
+        if (stride == 0) return true;
+
+        waveIndex &= stride - 1;
+        // Compact state to N lowest threads
+        uint laneToGo = WavePrefixCountBits(!terminated);
+        for (uint i = waveIndex; i < laneCount; i++)
+        {
+            uint lanePrefix = WaveReadLaneAt(laneToGo, i);
+            if (lanePrefix == waveIndex)
+            {
+                laneToGo = i;
+                return false;
+            }
+        }
+        return true;
+    }
+    return terminated;
+}
+
+// Implements speculative path execution
+// section 4.6.3 https://graphics.pixar.com/library/RenderManXPU/paper.pdf
+
+bool GetNextVolumeVertexSpeculative(inout VolumeIterator iterator, inout RNG rng, out VolumeVertexData data, 
+                                    float3 pos, float3 dir, uint N)
+{
+    bool done = false;
+    float transmittance = 1.f;
+    // TODO hardcoded
+    const float densityScale = 4.f;
+
+    for (uint i = 0; i < N; i++)
+    {
+        float tMin, tMax, minorant, majorant;
+        iterator.GetSegmentProperties(tMin, tMax, minorant, majorant);
+        majorant *= densityScale;
+
+        float u = rng.Uniform();
+        float t = iterator.GetCurrentT();
+        float tStep = majorant == 0.f ? tMax - t : SampleExponential(u, majorant);
+
+        if (t + tStep >= tMax)
+        {
+            float deltaT = tMax - t;
+            iterator.Step(deltaT);
+
+            transmittance *= exp(-deltaT * majorant);
+            done = iterator.Next();
+        }
+        else 
+        {
+            // We don't know whether this is a null or real collision. Make sure RNG 
+            // advances in either case.
+            rng.Uniform();
+            rng.Uniform2D();
+            iterator.Step(tStep);
+            transmittance *= exp(-tStep * majorant);
+        }
+    }
+    data.transmittance = transmittance;
+    return done;
 }
 
 #endif

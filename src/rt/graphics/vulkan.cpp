@@ -11,6 +11,8 @@
 #define VMA_IMPLEMENTATION
 #include "../../third_party/vulkan/vk_mem_alloc.h"
 
+#define VK_LAYER_PRINTF_BUFFER_SIZE 4096
+
 #ifdef USE_DLSS
 PFun_slGetFeatureFunction *slGetFeatureFunction_p;
 PFun_slSetTagForFrame *slSetTagForFrame_p;

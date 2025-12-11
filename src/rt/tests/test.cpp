@@ -225,9 +225,9 @@ void TestRender(Arena *arena, Options *options = 0)
     Vec3f look(6.021, 100.043, -43.679);
     Vec3f up(0.273, 0.962, -0.009);
 
-    f32 lensRadius    = .003125;
+    f32 lensRadius    = 0.f; //.003125;
     f32 focalDistance = 712.391212;
-    f32 fov           = 31.07;//54.43222;
+    f32 fov           = 31.07; // 54.43222;
     f32 aspectRatio   = (f32)width / (f32)height;
 
     // Vec3f pCamera(-1139.0159, 23.286734, 1479.7947);

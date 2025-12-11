@@ -178,11 +178,44 @@ void main()
 
     // temp volume rendering...
 #if 1
-    for (int i = 0; i < 128; )
+    uint N = 0;
+    RNG dupeRng = rng;
+    float3 dupePos = pos;
+    float3 dupeDir = dir;
+    uint2 dupeThreadID = swizzledThreadID;
+    bool done = false;
+    const uint laneCount = WaveGetLaneCount();
+    // yeah this needs to be wavefronted.
+    for (int i = 0; i < 128; i++)
     {
+        uint laneToGo;
+        done = SpeculativelyDuplicateRays(N, done, laneToGo);
+        uint count = WaveActiveCountBits(done);
+
+        if (count == laneCount) break;
+        if (done) 
+        {
+            continue;
+        }
+
+        dupePos = WaveReadLaneAt(dupePos, laneToGo);
+        dupeDir = WaveReadLaneAt(dupeDir, laneToGo);
+        rng.State = WaveReadLaneAt(rng.State, laneToGo);
+        dupeThreadID = WaveReadLaneAt(dupeThreadID, laneToGo);
+        
         VolumeIterator iterator;
-        iterator.Start(volumeMinP, volumeMaxP, pos, dir);
-        bool done = false;
+        iterator.Start(volumeMinP, volumeMaxP, dupePos, dupeDir);
+
+        VolumeVertexData startData;
+        uint waveIndex = WaveGetLaneIndex();
+        uint stride = laneCount >> N;
+        uint numSteps = waveIndex / stride;
+        GetNextVolumeVertexSpeculative(iterator, dupeRng, startData, dupePos, dupeDir, numSteps);
+
+        if (0)
+        {
+            printf("t: %f, wave index: %u, numsteps: %u, active: %u\n", iterator.GetCurrentT(), waveIndex, numSteps, count);
+        }
 
         float3 oldDir;
         const float g = .877;
@@ -190,37 +223,91 @@ void main()
         for (;;)
         {
             VolumeVertexData data;
-            done = GetNextVolumeVertex(iterator, rng, data, pos, dir);
+            done = GetNextVolumeVertex(iterator, dupeRng, data, dupePos, dupeDir);
 
             if (done)
             {
                 radiance += float3(0.03, 0.07, 0.23);
-                break;
+                //image[dupeThreadID] = half4(col, 1);
             }
 
             float u = rng.Uniform();
-            if (u < data.density / data.majorant)
+            float2 phaseU = rng.Uniform2D();
+            bool scatter = u < data.density / data.majorant;
+            if (scatter)
             {
-                i++;
                 float t = iterator.GetCurrentT();
-                pos += t * dir;
+                dupePos += t * dupeDir;
 
-                float2 u = rng.Uniform2D();
-                // TODO hardcoded
-                oldDir = dir;
-                dir = SampleHenyeyGreenstein(-dir, g, u);
-                break;
+                oldDir = dupeDir;
+                dupeDir = SampleHenyeyGreenstein(-dupeDir, g, phaseU);
+            }
 
-                //LightSource "distant"
-                //"point3 to" [-0.5826 -0.7660 -0.2717]
-                //"rgb L" [2.6 2.5 2.3]
+            // i still have to actually duplicate, right now i'm only compacting
+            bool terminate = done || scatter;
+            uint startIndex = waveIndex & (stride - 1);
+
+            uint4 doneBallot = WaveActiveBallot(done);
+            uint4 scatterBallot = WaveActiveBallot(scatter);
+
+            for (uint dupeIndex = startIndex; dupeIndex < waveIndex; dupeIndex += stride)
+            {
+                bool laneDone = (done.x >> dupeIndex) & 1;
+                bool laneScatter = (scatterBallot.x >> dupeIndex) & 1;
+                if (laneScatter && waveIndex < stride)
+                {
+                    dupePos = WaveReadLaneAt(dupePos, dupeIndex);
+                    dupeDir = WaveReadLaneAt(dupeDir, dupeIndex);
+                    dupeRng.State = WaveReadLaneAt(dupeRng.State, dupeIndex);
+                }
+                if (laneDone || laneScatter)
+                {
+                    done |= laneDone;
+                    terminate = true;
+                    break;
+                }
+            }
+
+            if (terminate) break;
+            GetNextVolumeVertexSpeculative(iterator, dupeRng, data, dupePos, dupeDir, (1u << N) - 1);
+        }
+
+#if 0
+        // Virtual density segments
+        {
+            float3 reservoirPosition;
+            float totalWeight = 0.f;
+            float u = rng.Uniform();
+
+            float weight = 0.f;
+            // weight = transmittance * phaseFunction * density * 
+
+            totalWeight += weight;
+            float prob = weight / totalWeight;
+
+            if (u < prob)
+            {
+                u /= prob;
+                reservoirPosition = 0.f;
+            }
+            else 
+            {
+                u = (u - prob) / (1 - prob);
             }
         }
 
-        if (done) break;
+        // what else can we do in volumes???
+        // render other volumes ...
+        // better sampling/other light sources?
+        //      - the thing is this is just path guiding
+        //      - like the indirect illumination thing they mention in the VDS paper
+        //      - why not just path guide?
+        //      - the end goal is caustics in a homogeneous water volumetric medium
+        // atmosphere scattering...
+#endif
 
         // NEE
-#if 1
+#if 0
         bool escaped = false;
         float pNee = 1.f;
         float pUni = 1.f;
