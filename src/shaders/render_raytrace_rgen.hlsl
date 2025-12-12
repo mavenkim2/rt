@@ -178,7 +178,6 @@ void main()
 
     // temp volume rendering...
 #if 1
-    uint N = 0;
     RNG dupeRng = rng;
     float3 dupePos = pos;
     float3 dupeDir = dir;
@@ -186,40 +185,49 @@ void main()
     bool done = false;
     const uint waveIndex = WaveGetLaneIndex();
     const uint laneCount = WaveGetLaneCount();
+    uint numAlive = laneCount;
     for (int i = 0; i < 128; i++)
     {
-        uint laneToGo;
+        uint laneToGo = waveIndex;
 
-        if (done && waveIndex < (laneCount >> N))
+        if (done && waveIndex < numAlive)
         {
-            //printf("help: %u, %u, %u %u\n", waveIndex, N, dupeThreadID.x, dupeThreadID.y);
             image[dupeThreadID] = half4(radiance, 1.f);
         }
 
-        done = SpeculativelyDuplicateRays(N, done, laneToGo);
+        uint oldNumAlive = numAlive;
+        done = SpeculativelyDuplicateRays(numAlive, done, laneToGo);
         uint count = WaveActiveCountBits(done);
-
-        if (count == laneCount) break;
-        if (done) continue;
 
         dupePos = WaveReadLaneAt(dupePos, laneToGo);
         dupeDir = WaveReadLaneAt(dupeDir, laneToGo);
         dupeRng.State = WaveReadLaneAt(dupeRng.State, laneToGo);
+
+        uint2 test = dupeThreadID;
         dupeThreadID = WaveReadLaneAt(dupeThreadID, laneToGo);
         radiance = WaveReadLaneAt(radiance, laneToGo);
-        
+
+        if (0)//all(dupeThreadID == test) && laneToGo != waveIndex)
+        {
+            printf("help me: oldNumAlive: %u , %u %u %u %u %u\n",
+                    oldNumAlive, waveIndex, laneToGo, numAlive, dupeThreadID.x, dupeThreadID.y);
+        }
+
+        if (count == laneCount) break;
+        if (done) continue;
+
         VolumeIterator iterator;
         iterator.Start(volumeMinP, volumeMaxP, dupePos, dupeDir);
 
         VolumeVertexData startData;
-        uint stride = laneCount >> N;
-        uint numSteps = waveIndex / stride;
+        uint numSteps = waveIndex / numAlive;
         GetNextVolumeVertexSpeculative(iterator, dupeRng, startData, dupePos, dupeDir, numSteps);
 
         float3 oldDir;
         const float g = .877;
 
-        for (;;)
+        bool terminate = false;
+        for (;;)//while (WaveActiveCountBits(!terminate) > (laneCount >> (N + 1)))
         {
             VolumeVertexData data;
             done = GetNextVolumeVertex(iterator, dupeRng, data, dupePos, dupeDir);
@@ -227,14 +235,13 @@ void main()
             if (done)
             {
                 radiance += float3(0.03, 0.07, 0.23);
-                //image[dupeThreadID] = half4(col, 1);
             }
 
             float u = dupeRng.Uniform();
-            float2 phaseU = dupeRng.Uniform2D();
             bool scatter = u < data.density / data.majorant;
             if (scatter)
             {
+                float2 phaseU = dupeRng.Uniform2D();
                 float t = iterator.GetCurrentT();
                 dupePos += t * dupeDir;
 
@@ -243,34 +250,37 @@ void main()
             }
 
             // i still have to actually duplicate, right now i'm only compacting
-            bool terminate = done || scatter;
-            uint startIndex = waveIndex & (stride - 1);
+            terminate = done || scatter;
+            uint startIndex = waveIndex % numAlive;
 
             uint4 doneBallot = WaveActiveBallot(done);
             uint4 scatterBallot = WaveActiveBallot(scatter);
 
-            for (uint dupeIndex = startIndex; dupeIndex < waveIndex; dupeIndex += stride)
+            uint newLaneToGo = waveIndex;
+            for (uint dupeIndex = startIndex; dupeIndex < laneCount; dupeIndex += numAlive)
             {
-                bool laneDone = (done.x >> dupeIndex) & 1;
+                bool laneDone = (doneBallot.x >> dupeIndex) & 1;
                 bool laneScatter = (scatterBallot.x >> dupeIndex) & 1;
-                if ((laneDone || laneScatter) && waveIndex < stride)
-                {
-                    dupePos = WaveReadLaneAt(dupePos, dupeIndex);
-                    dupeDir = WaveReadLaneAt(dupeDir, dupeIndex);
-                    dupeRng.State = WaveReadLaneAt(dupeRng.State, dupeIndex);
-                    dupeThreadID = WaveReadLaneAt(dupeThreadID, dupeIndex);
-                    radiance = WaveReadLaneAt(radiance, dupeIndex);
-                }
                 if (laneDone || laneScatter)
                 {
-                    done |= laneDone;
+                    newLaneToGo = dupeIndex;
+                    done = laneDone;
                     terminate = true;
                     break;
                 }
             }
 
-            if (terminate) break;
-            GetNextVolumeVertexSpeculative(iterator, dupeRng, data, dupePos, dupeDir, (1u << N) - 1);
+            if (terminate)
+            {
+                dupePos = WaveReadLaneAt(dupePos, newLaneToGo);
+                dupeDir = WaveReadLaneAt(dupeDir, newLaneToGo);
+                dupeRng.State = WaveReadLaneAt(dupeRng.State, newLaneToGo);
+                dupeThreadID = WaveReadLaneAt(dupeThreadID, newLaneToGo);
+                radiance = WaveReadLaneAt(radiance, newLaneToGo);
+                break;
+            }
+            uint numSteps = (laneCount - startIndex + numAlive - 1) / numAlive;
+            GetNextVolumeVertexSpeculative(iterator, dupeRng, data, dupePos, dupeDir, numSteps);
         }
 
 #if 0
@@ -374,8 +384,9 @@ void main()
         radiance += pNee != 0.f ? throughput * hg * transmittance * float3(2.6, 2.5, 2.3) / pNee : 0.f;
 #endif
     }
-    if (waveIndex < (laneCount >> N))
+    if (waveIndex < numAlive)
     {
+        //printf("help: %u, %u, %u %u\n", waveIndex, numAlive, dupeThreadID.x, dupeThreadID.y);
         image[dupeThreadID] = half4(radiance, 1.f);
     }
 #endif
@@ -858,6 +869,6 @@ void main()
         if (russianRoulette) break;
         throughput /= groupContinuationProb;
     }
-#endif
     image[swizzledThreadID] = half4(radiance, 1);
+#endif
 }

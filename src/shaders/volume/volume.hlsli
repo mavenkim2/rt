@@ -295,36 +295,38 @@ bool GetNextVolumeVertex(inout VolumeIterator iterator, inout RNG rng, out Volum
     return true;
 }
 
-bool SpeculativelyDuplicateRays(inout uint N, bool terminated, inout uint laneToGo)
+bool SpeculativelyDuplicateRays(inout uint oldNumAlive, bool terminated, inout uint laneToGo)
 {
     uint laneCount = WaveGetLaneCount();
     uint log2LaneCount = firstbithigh(laneCount);
     uint waveIndex = WaveGetLaneIndex();
-    uint oldEnd = laneCount >> N;
-    bool isAlive = !terminated && waveIndex < oldEnd;
+    bool isAlive = !terminated && waveIndex < oldNumAlive;
     int numAlive = WaveActiveCountBits(isAlive);
     uint numAlivePrefix = WavePrefixCountBits(isAlive) + isAlive;
 
-    if (numAlive == 0) return true;
-
-    if (numAlive <= (laneCount >> (N + 1)))
+    if (numAlive == 0) 
     {
-        N = log2LaneCount - (firstbithigh(numAlive - 1) + 1);
-        uint stride = (laneCount >> N);
-        waveIndex &= stride - 1;
+        oldNumAlive = 0;
+        return true;
+    }
 
-        if (waveIndex >= numAlive) return true;
+    if (numAlive < oldNumAlive)
+    {
+        uint oldEnd = oldNumAlive;
+        oldNumAlive = numAlive;
+        waveIndex %= numAlive;
 
+        bool term = false;
         for (uint i = waveIndex; i < oldEnd; i++)
         {
             uint lanePrefix = WaveReadLaneAt(numAlivePrefix, i);
-            if (lanePrefix == waveIndex + 1)
+            if (!term && lanePrefix == waveIndex + 1)
             {
                 laneToGo = i;
-                return false;
+                term = true;
             }
         }
-        return true;
+        if (term) return false;
     }
     return terminated;
 }
@@ -359,10 +361,7 @@ bool GetNextVolumeVertexSpeculative(inout VolumeIterator iterator, inout RNG rng
         }
         else 
         {
-            // We don't know whether this is a null or real collision. Make sure RNG 
-            // advances in either case.
             rng.Uniform();
-            rng.Uniform2D();
             iterator.Step(tStep);
             transmittance *= exp(-tStep * majorant);
         }
