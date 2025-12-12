@@ -298,23 +298,27 @@ bool GetNextVolumeVertex(inout VolumeIterator iterator, inout RNG rng, out Volum
 bool SpeculativelyDuplicateRays(inout uint N, bool terminated, inout uint laneToGo)
 {
     uint laneCount = WaveGetLaneCount();
-    uint stride = laneCount >> N;
-
+    uint log2LaneCount = firstbithigh(laneCount);
     uint waveIndex = WaveGetLaneIndex();
-    uint numAlive = WaveActiveCountBits(!terminated && waveIndex < stride);
-    if (numAlive <= stride)
-    {
-        N++;
-        uint stride = (laneCount >> N);
-        if (stride == 0) return true;
+    uint oldEnd = laneCount >> N;
+    bool isAlive = !terminated && waveIndex < oldEnd;
+    int numAlive = WaveActiveCountBits(isAlive);
+    uint numAlivePrefix = WavePrefixCountBits(isAlive) + isAlive;
 
+    if (numAlive == 0) return true;
+
+    if (numAlive <= (laneCount >> (N + 1)))
+    {
+        N = log2LaneCount - (firstbithigh(numAlive - 1) + 1);
+        uint stride = (laneCount >> N);
         waveIndex &= stride - 1;
-        // Compact state to N lowest threads
-        uint laneToGo = WavePrefixCountBits(!terminated);
-        for (uint i = waveIndex; i < laneCount; i++)
+
+        if (waveIndex >= numAlive) return true;
+
+        for (uint i = waveIndex; i < oldEnd; i++)
         {
-            uint lanePrefix = WaveReadLaneAt(laneToGo, i);
-            if (lanePrefix == waveIndex)
+            uint lanePrefix = WaveReadLaneAt(numAlivePrefix, i);
+            if (lanePrefix == waveIndex + 1)
             {
                 laneToGo = i;
                 return false;
@@ -327,7 +331,6 @@ bool SpeculativelyDuplicateRays(inout uint N, bool terminated, inout uint laneTo
 
 // Implements speculative path execution
 // section 4.6.3 https://graphics.pixar.com/library/RenderManXPU/paper.pdf
-
 bool GetNextVolumeVertexSpeculative(inout VolumeIterator iterator, inout RNG rng, out VolumeVertexData data, 
                                     float3 pos, float3 dir, uint N)
 {
