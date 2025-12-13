@@ -136,6 +136,63 @@ static OctreeNode CreateOctree(Arena **arenas, const Bounds &bounds,
     return node;
 }
 
+struct TetrahedralCell
+{
+    int neighbors[4];
+    Vec3f points[4];
+};
+
+static void AdaptiveSplitTetrahedra(std::vector<TetrahedralCell> &tets, int index)
+{
+    TetrahedralCell &tet = tets[index];
+}
+
+static void BuildAdaptiveTetrahedralGrid(CommandBuffer *cmd, Arena *arena)
+{
+    // Base 24 tetrahedra
+    std::vector<TetrahedralCell> tets;
+
+    static const f32 next[4]     = {0.f, 0.f, 1.f, 1.f};
+    static const f32 nextNext[4] = {0.f, 1.f, 1.f, 0.f};
+
+    const Vec3f cubeCenter(0.5f);
+
+    // Four for each face
+    for (int face = 0; face < 6; face++)
+    {
+        Vec3f center;
+        int plane             = face / 2;
+        float planeValue      = (face & 1) ? 1.f : 0.f;
+        int planeNext         = (plane + 1) % 3;
+        int planeNextNext     = (plane + 2) % 3;
+        center[plane]         = planeValue;
+        center[planeNext]     = 0.5f;
+        center[planeNextNext] = 0.5f;
+
+        for (int i = 0; i < 4; i++)
+        {
+            TetrahedralCell tet;
+            int first                        = face & 1;
+            int second                       = !(face & 1);
+            tet.points[first][plane]         = planeValue;
+            tet.points[first][planeNext]     = next[i];
+            tet.points[first][planeNextNext] = nextNext[i];
+
+            tet.points[second][plane]         = planeValue;
+            tet.points[second][planeNext]     = next[(i + 1) & 3];
+            tet.points[second][planeNextNext] = nextNext[(i + 1) & 3];
+
+            tet.points[2] = center;
+            tet.points[3] = cubeCenter;
+            tets.push_back(tet);
+        }
+    }
+
+    for (int i = 0; i < 24; i++)
+    {
+    }
+}
+
 VolumeData Volumes(CommandBuffer *cmd, Arena *arena)
 {
     // build the octree over all volumes...
@@ -149,6 +206,8 @@ VolumeData Volumes(CommandBuffer *cmd, Arena *arena)
     nanovdb::Vec3dBBox bbox = grid->worldBBox();
     Bounds rootBounds(Vec3f(bbox.min()[0], bbox.min()[1], bbox.min()[2]),
                       Vec3f(bbox.max()[0], bbox.max()[1], bbox.max()[2]));
+
+    BuildAdaptiveTetrahedralGrid(cmd, arena);
 
     ScratchArena scratch;
     Arena **arenas = GetArenaArray(scratch.temp.arena);
