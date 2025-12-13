@@ -138,6 +138,10 @@ static OctreeNode CreateOctree(Arena **arenas, const Bounds &bounds,
 
 struct TetrahedralCell
 {
+    // neighbor 0 corresponds with the face represented by points 0, 3, 1
+    // neighbor 1 corresponds with the face represented by points 1, 3, 2
+    // neighbor 2 corresponds with the face represented by points 2, 3, 0
+    // neighbor 3 corresponds with the face represented by points 0, 1, 2
     int neighbors[4];
     Vec3f points[4];
 };
@@ -145,6 +149,50 @@ struct TetrahedralCell
 static void AdaptiveSplitTetrahedra(std::vector<TetrahedralCell> &tets, int index)
 {
     TetrahedralCell &tet = tets[index];
+
+    float maxLength = 0.f;
+    int maxEdge     = 0;
+    for (int edge = 0; edge < 3; edge++)
+    {
+        float length = Length(tet.points[(edge + 1) % 3] - tet.points[edge]);
+        if (length > maxLength)
+        {
+            maxEdge   = edge;
+            maxLength = length;
+        }
+
+        length = Length(tet.points[3] - tet.points[edge]);
+        if (length > maxLength)
+        {
+            maxEdge   = edge + 3;
+            maxLength = length;
+        }
+    }
+
+    int cur        = maxEdge % 3;
+    int next       = maxEdge >= 3 ? 3 : (maxEdge + 1) % 3;
+    Vec3f midPoint = (tet.points[cur] + tet.points[next]) / 2.f;
+
+    // if edge 0 is bisected, new tet changes neighbor 2, tet changes neighbor 1
+    // if edge 1 is bisected, new tet changes neighbor 0, tet changes neighbor 2
+    // if edge 2 is bisected, new tet changes neighbor 1, tet changes neighbor 0
+
+    // if edge 3 is bisected, new tet changes neighbor 3, tet changes neighbor 1
+    // if edge 4 is bisected, new tet changes neighbor 3, tet changes neighbor 2
+    // if edge 5 is bisected, new tet changes neighbor 3, tet changes neighbor 0
+    int newTetNeighborIndex = maxEdge >= 3 ? 3 : (maxEdge + 2) % 3;
+    int tetNeighborIndex    = (maxEdge + 1) % 3;
+
+    TetrahedralCell newTet                = tet;
+    newTet.points[cur]                    = midPoint;
+    newTet.neighbors[newTetNeighborIndex] = index;
+    tets.push_back(newTet);
+
+    tet.points[next]                = midPoint;
+    tet.neighbors[tetNeighborIndex] = int(test.size() - 1);
+
+    // if the edge is not with point 3, the faces bisected are face 3 and face cur
+    // if the edge is with point 3, the faces bisected are cur and (cur + 2) % 3
 }
 
 static void BuildAdaptiveTetrahedralGrid(CommandBuffer *cmd, Arena *arena)
