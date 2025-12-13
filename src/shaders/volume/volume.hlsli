@@ -232,6 +232,17 @@ bool GetNextVolumeVertex(inout VolumeIterator iterator, inout RNG rng, out Volum
     // TODO hardcoded
     const float densityScale = 4.f;
 
+    pnanovdb_grid_handle_t grid = {0};
+
+    // TODO: hardcoded
+    int nanovdbIndex = 0;
+    pnanovdb_tree_handle_t tree = pnanovdb_grid_get_tree(nanovdbIndex, grid);
+    pnanovdb_root_handle_t root = pnanovdb_tree_get_root(nanovdbIndex, tree);
+    pnanovdb_uint32_t gridType = pnanovdb_grid_get_grid_type(nanovdbIndex, grid);
+
+    pnanovdb_readaccessor_t accessor;
+    pnanovdb_readaccessor_init(accessor, root);
+
     if (!iterator.Done())
     {
         int count = 0;
@@ -261,17 +272,6 @@ bool GetNextVolumeVertex(inout VolumeIterator iterator, inout RNG rng, out Volum
                 else 
                 {
                     iterator.Step(tStep);
-
-                    pnanovdb_grid_handle_t grid = {0};
-
-                    // TODO: hardcoded
-                    int nanovdbIndex = 0;
-                    pnanovdb_tree_handle_t tree = pnanovdb_grid_get_tree(nanovdbIndex, grid);
-                    pnanovdb_root_handle_t root = pnanovdb_tree_get_root(nanovdbIndex, tree);
-                    pnanovdb_uint32_t gridType = pnanovdb_grid_get_grid_type(nanovdbIndex, grid);
-
-                    pnanovdb_readaccessor_t accessor;
-                    pnanovdb_readaccessor_init(accessor, root);
 
                     float3 gridPos = pos + iterator.GetCurrentT() * dir;
                     float3 indexSpacePosition = pnanovdb_grid_world_to_indexf(nanovdbIndex, grid, gridPos);
