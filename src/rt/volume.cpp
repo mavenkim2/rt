@@ -144,56 +144,65 @@ struct TetrahedralCell
     // neighbor 3 corresponds with the face represented by points 0, 1, 2
     int neighbors[4];
     Vec3f points[4];
-};
 
-static void AdaptiveSplitTetrahedra(std::vector<TetrahedralCell> &tets, int index)
-{
-    TetrahedralCell &tet = tets[index];
-
-    float maxLength = 0.f;
-    int maxEdge     = 0;
-    for (int edge = 0; edge < 3; edge++)
+    static int GetTetKey(int tetIndex, int edge)
     {
-        float length = Length(tet.points[(edge + 1) % 3] - tet.points[edge]);
-        if (length > maxLength)
-        {
-            maxEdge   = edge;
-            maxLength = length;
-        }
-
-        length = Length(tet.points[3] - tet.points[edge]);
-        if (length > maxLength)
-        {
-            maxEdge   = edge + 3;
-            maxLength = length;
-        }
+        Assert(edge < 6);
+        return (tetIndex << 3) | edge;
+    }
+    static void UnpackTetKey(int key, int &tetIndex, int &edge)
+    {
+        tetIndex = key >> 3;
+        edge     = key & 0x7;
+        Assert(edge < 6);
     }
 
-    int cur        = maxEdge % 3;
-    int next       = maxEdge >= 3 ? 3 : (maxEdge + 1) % 3;
-    Vec3f midPoint = (tet.points[cur] + tet.points[next]) / 2.f;
+    void GetEdgeVertices(int edge, Vec3f &p0, Vec3f &p1)
+    {
+        int next = edge >= 3 ? 3 : (edge + 1) & 3;
+        p0       = points[edge % 3];
+        p1       = points[next];
+    }
 
-    // if edge 0 is bisected, new tet changes neighbor 2, tet changes neighbor 1
-    // if edge 1 is bisected, new tet changes neighbor 0, tet changes neighbor 2
-    // if edge 2 is bisected, new tet changes neighbor 1, tet changes neighbor 0
+    int HashEdge(int edge)
+    {
+        Vec3f p0, p1;
+        GetEdgeVertices(edge, p0, p1);
+        int hash0 = Hash(p0);
+        int hash1 = Hash(p1);
 
-    // if edge 3 is bisected, new tet changes neighbor 3, tet changes neighbor 1
-    // if edge 4 is bisected, new tet changes neighbor 3, tet changes neighbor 2
-    // if edge 5 is bisected, new tet changes neighbor 3, tet changes neighbor 0
-    int newTetNeighborIndex = maxEdge >= 3 ? 3 : (maxEdge + 2) % 3;
-    int tetNeighborIndex    = (maxEdge + 1) % 3;
+        if (hash1 < hash0)
+        {
+            Swap(hash0, hash1);
+            Swap(p0, p1);
+        }
+        int hash = Hash(hash0, hash1);
+        return hash;
+    }
 
-    TetrahedralCell newTet                = tet;
-    newTet.points[cur]                    = midPoint;
-    newTet.neighbors[newTetNeighborIndex] = index;
-    tets.push_back(newTet);
+    int GetLongestEdge() const
+    {
+        float maxLength = 0.f;
+        int maxEdge     = 0;
+        for (int edge = 0; edge < 3; edge++)
+        {
+            float length = Length(points[(edge + 1) % 3] - points[edge]);
+            if (length > maxLength)
+            {
+                maxEdge   = edge;
+                maxLength = length;
+            }
 
-    tet.points[next]                = midPoint;
-    tet.neighbors[tetNeighborIndex] = int(test.size() - 1);
-
-    // if the edge is not with point 3, the faces bisected are face 3 and face cur
-    // if the edge is with point 3, the faces bisected are cur and (cur + 2) % 3
-}
+            length = Length(points[3] - points[edge]);
+            if (length > maxLength)
+            {
+                maxEdge   = edge + 3;
+                maxLength = length;
+            }
+        }
+        return maxEdge;
+    }
+};
 
 static void BuildAdaptiveTetrahedralGrid(CommandBuffer *cmd, Arena *arena)
 {
@@ -236,8 +245,87 @@ static void BuildAdaptiveTetrahedralGrid(CommandBuffer *cmd, Arena *arena)
         }
     }
 
-    for (int i = 0; i < 24; i++)
+    ScratchArena scratch;
+    HashIndex edgeHashMap(scratch.temp.arena, 1u << 20u, 1u << 20u);
+
+    auto AddTetToHash = [&](int tetIndex) {
+        TetrahedralCell &tet = tets[tetIndex];
+        for (int i = 0; i < 6; i++)
+        {
+            u32 hash     = tet.HashEdge(i);
+            int tetValue = TetrahedralCell::GetTetKey(tetIndex, i);
+            edgeHashMap.AddInHash(hash, tetIndex);
+        }
+    };
+
+    for (int tetIndex = 0; tetIndex < tets.size(); tetIndex++)
     {
+        AddTetToHash(tetIndex);
+    }
+
+    FixedArray<int, 128> stack(128);
+    stack.Push(0);
+
+    for (;;)
+    {
+        int tetIndex         = stack.Pop();
+        TetrahedralCell &tet = tets[tetIndex];
+        int maxEdge          = tet.GetLongestEdge();
+        Vec3f p0, p1;
+        tet.GetEdgeVertices(maxEdge, p0, p1);
+        int hash = tet.HashEdge(maxEdge);
+
+        // Get neighbors
+        Array<int> neighbors(scratch.temp.arena, 6);
+        for (int hashIndex = edgeHashMap.FirstInHash(hash); hashIndex != -1;
+             hashIndex     = edgeHashMap.NextInHash(hashIndex))
+        {
+            int otherTetIndex, otherEdge;
+            TetrahedralCell::UnpackTetKey(hashIndex, otherTetIndex, otherEdge);
+            TetrahedralCell &other = tets[otherTetIndex];
+            Vec3f otherP0, otherP1;
+            other.GetEdgeVertices(otherEdge, otherP0, otherP1);
+
+            if ((otherP0 == p0 && otherP1 == p1) || (otherP0 == p1 && otherP1 == p0))
+            {
+                if (other.GetLongestEdge() != otherEdge)
+                {
+                    stack.Push(tetIndex);
+                    stack.Push(otherTetIndex);
+                    neighbors.Clear();
+                    break;
+                }
+                else
+                {
+                    neighbors.Add(hashIndex);
+                }
+            }
+        }
+
+        if (neighbors.Length())
+        {
+            Vec3f midPoint = (p0 + p1) / 2.f;
+            neighbors.Push(TetrahedralCell::GetTetKey(tetIndex, maxEdge));
+            for (int neighbor : neighbors)
+            {
+                int otherTetIndex, otherEdge;
+                TetrahedralCell::UnpackTetKey(neighbor, otherTetIndex, otherEdge);
+
+                int cur  = maxEdge % 3;
+                int next = maxEdge >= 3 ? 3 : (maxEdge + 1) % 3;
+
+                TetrahedralCell &tet = tets[otherTetIndex];
+                bool result = edgeHashMap.RemoveFromHash(tet.HashEdge(otherEdge), neighbor);
+                Assert(result);
+
+                TetrahedralCell newTet = tet;
+                newTet.points[cur]     = midPoint;
+                tets.push_back(newTet);
+                AddTetToHash(tets.size() - 1);
+
+                tet.points[next] = midPoint;
+            }
+        }
     }
 }
 
