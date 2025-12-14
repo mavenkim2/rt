@@ -31,6 +31,56 @@ struct OctreeNode
 
 static const float T = Abs(1.f / std::log(0.5f));
 
+template <typename Func>
+static void CalculateDensityBounds(const nanovdb::FloatGrid *grid, Vec3i indexMin,
+                                   Vec3i indexMax, f32 &minValue, f32 &maxValue, Func &&func)
+{
+    struct Output
+    {
+        float min;
+        float max;
+    };
+
+    ScratchArena scratch;
+
+    int count     = indexMax[2] - indexMin[2] + 1;
+    int groupSize = Max(1, count / 128);
+    ParallelForOutput output =
+        ParallelFor<Output>(scratch.temp, 0, count, groupSize,
+                            [&](Output &output, u32 jobID, u32 start, u32 count) {
+                                int s          = indexMin[2] + start;
+                                float maxValue = 0.f;
+                                float minValue = 1.f;
+                                auto accessor  = grid->getAccessor();
+                                for (int z = s; z < s + count; z++)
+                                {
+                                    for (int y = indexMin[1]; y <= indexMax[1]; y++)
+                                    {
+                                        for (int x = indexMin[0]; x <= indexMax[0]; x++)
+                                        {
+                                            if (func(x, y, z))
+                                            {
+                                                float value = accessor.getValue({x, y, z});
+                                                maxValue    = Max(value, maxValue);
+                                                minValue    = Min(value, minValue);
+                                            }
+                                        }
+                                    }
+                                }
+                                output.min = minValue;
+                                output.max = maxValue;
+                            });
+
+    Output minMax;
+    Reduce(minMax, output, [&](Output &l, const Output &r) {
+        l.min = Min(l.min, r.min);
+        l.max = Max(l.max, r.max);
+    });
+
+    maxValue = minMax.max;
+    minValue = minMax.min;
+}
+
 static OctreeNode CreateOctree(Arena **arenas, const Bounds &bounds,
                                const nanovdb::FloatGrid *grid, std::atomic<u32> &nodeCount)
 {
@@ -51,53 +101,9 @@ static OctreeNode CreateOctree(Arena **arenas, const Bounds &bounds,
 
     int count = indexMax[2] - indexMin[2] + 1;
 
-    struct Output
-    {
-        float min;
-        float max;
-    };
-
-    ScratchArena scratch;
-
-    int groupSize = Max(1, count / 128);
-
-    // TODO: verify that the extents of these are correct
-    ParallelForOutput output = ParallelFor<Output>(
-        scratch.temp, 0, count, groupSize,
-        [&](Output &output, u32 jobID, u32 start, u32 count) {
-            int s          = indexMin[2] + start;
-            float maxValue = 0.f;
-            float minValue = 1.f;
-            auto accessor  = grid->getAccessor();
-            for (int z = s; z < s + count; z++)
-            {
-                for (int y = indexMin[1]; y <= indexMax[1]; y++)
-                {
-                    for (int x = indexMin[0]; x <= indexMax[0]; x++)
-                    {
-                        float value = accessor.getValue({x, y, z});
-                        if (value == 0.f && minValue != 0.f && minValue != 1.f)
-                        {
-                            int stop = 5;
-                        }
-                        maxValue = Max(value, maxValue);
-                        minValue = Min(value, minValue);
-                    }
-                }
-            }
-            output.min = minValue;
-            output.max = maxValue;
-        });
-
-    Output minMax;
-    Reduce(minMax, output, [&](Output &l, const Output &r) {
-        l.min = Min(l.min, r.min);
-        l.max = Max(l.max, r.max);
-    });
-
-    float maxValue = minMax.max;
-    float minValue = minMax.min;
-
+    float maxValue, minValue;
+    CalculateDensityBounds(grid, indexMin, indexMax, minValue, maxValue,
+                           [](int x, int y, int z) { return true; });
     f32 diag = Length(ToVec3f(bounds.Diagonal()));
 
     OctreeNode node = {};
@@ -204,7 +210,8 @@ struct TetrahedralCell
     }
 };
 
-static void BuildAdaptiveTetrahedralGrid(CommandBuffer *cmd, Arena *arena)
+static void BuildAdaptiveTetrahedralGrid(const nanovdb::FloatGrid *grid, CommandBuffer *cmd,
+                                         Arena *arena)
 {
     // Base 24 tetrahedra
     std::vector<TetrahedralCell> tets;
@@ -266,11 +273,61 @@ static void BuildAdaptiveTetrahedralGrid(CommandBuffer *cmd, Arena *arena)
     FixedArray<int, 128> stack(128);
     stack.Push(0);
 
+    TetrahedralCell &tet = tets[0];
+    Vec3f minP(pos_inf);
+    Vec3f maxP(neg_inf);
+    for (int i = 0; i < 4; i++)
+    {
+        minP = Min(tet.points[i], minP);
+        maxP = Max(tet.points[i], maxP);
+    }
+
+    nanovdb::Vec3d i0 = grid->worldToIndexF(nanovdb::Vec3d(minP[0], minP[1], minP[2]));
+    nanovdb::Vec3d i1 = grid->worldToIndexF(nanovdb::Vec3d(maxP[0], maxP[1], maxP[2]));
+    auto indexBBox    = grid->indexBBox();
+
+    Vec3i indexMin(Max((int)Floor(i0[0]), indexBBox.min()[0]),
+                   Max((int)Floor(i0[1]), indexBBox.min()[1]),
+                   Max((int)Floor(i0[2]), indexBBox.min()[2]));
+    Vec3i indexMax(Min((int)Ceil(i1[0]), indexBBox.max()[0]),
+                   Min((int)Ceil(i1[1]), indexBBox.max()[1]),
+                   Min((int)Ceil(i1[2]), indexBBox.max()[2]));
+
+    float minValue, maxValue;
+
+    CalculateDensityBounds(
+        grid, indexMin, indexMax, minValue, maxValue, [&](int x, int y, int z) {
+            nanovdb::Vec3d p0 = grid->indexToWorldF(nanovdb::Vec3d(x, y, z));
+            nanovdb::Vec3d p1 = grid->indexToWorldF(nanovdb::Vec3d(x + 1, y + 1, z + 1));
+
+            Vec3f center(p0[0] + p1[0], p0[1] + p1[1], p0[2] + p1[2]);
+            Vec3f extent(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]);
+            center /= 2.f;
+            extent /= 2.f;
+
+            for (int i = 0; i < 4; i++)
+            {
+                Vec3f &p0 = tet.points[i % 3];
+                Vec3f &p1 = tet.points[i == 3 ? 1 : 3];
+                Vec3f &p2 = tet.points[i == 3 ? 2 : (i + 1) % 3];
+                Vec3f n   = Normalize(Cross(p1 - p0, p2 - p0));
+                float d   = -Dot(p0, n);
+
+                float e = Dot(Abs(n), extent);
+                float s = Dot(center, n) + d;
+
+                if (s > e) return false;
+            }
+            return true;
+        });
+
     for (;;)
     {
         int tetIndex         = stack.Pop();
         TetrahedralCell &tet = tets[tetIndex];
-        int maxEdge          = tet.GetLongestEdge();
+        // Verify that tet should be adapted
+
+        int maxEdge = tet.GetLongestEdge();
         Vec3f p0, p1;
         tet.GetEdgeVertices(maxEdge, p0, p1);
         int hash = tet.HashEdge(maxEdge);
@@ -343,7 +400,7 @@ VolumeData Volumes(CommandBuffer *cmd, Arena *arena)
     Bounds rootBounds(Vec3f(bbox.min()[0], bbox.min()[1], bbox.min()[2]),
                       Vec3f(bbox.max()[0], bbox.max()[1], bbox.max()[2]));
 
-    BuildAdaptiveTetrahedralGrid(cmd, arena);
+    // BuildAdaptiveTetrahedralGrid(grid, cmd, arena);
 
     ScratchArena scratch;
     Arena **arenas = GetArenaArray(scratch.temp.arena);
