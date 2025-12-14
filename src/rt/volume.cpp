@@ -150,6 +150,7 @@ struct TetrahedralCell
     // neighbor 3 corresponds with the face represented by points 0, 1, 2
     int neighbors[4];
     Vec3f points[4];
+    int children[2];
 
     static int GetTetKey(int tetIndex, int edge)
     {
@@ -213,6 +214,11 @@ struct TetrahedralCell
 static void BuildAdaptiveTetrahedralGrid(const nanovdb::FloatGrid *grid, CommandBuffer *cmd,
                                          Arena *arena)
 {
+    nanovdb::Vec3dBBox bbox = grid->worldBBox();
+    Bounds rootBounds(Vec3f(bbox.min()[0], bbox.min()[1], bbox.min()[2]),
+                      Vec3f(bbox.max()[0], bbox.max()[1], bbox.max()[2]));
+    const Vec3f rootBoundsMinP = ToVec3f(rootBounds.minP);
+    const Vec3f rootDiagonal   = ToVec3f(rootBounds.Diagonal());
     // Base 24 tetrahedra
     std::vector<TetrahedralCell> tets;
 
@@ -236,6 +242,8 @@ static void BuildAdaptiveTetrahedralGrid(const nanovdb::FloatGrid *grid, Command
         for (int i = 0; i < 4; i++)
         {
             TetrahedralCell tet;
+            tet.children[0]                  = -1;
+            tet.children[1]                  = -1;
             int first                        = face & 1;
             int second                       = !(face & 1);
             tet.points[first][plane]         = planeValue;
@@ -261,7 +269,18 @@ static void BuildAdaptiveTetrahedralGrid(const nanovdb::FloatGrid *grid, Command
         {
             u32 hash     = tet.HashEdge(i);
             int tetValue = TetrahedralCell::GetTetKey(tetIndex, i);
-            edgeHashMap.AddInHash(hash, tetIndex);
+            edgeHashMap.AddInHash(hash, tetValue);
+        }
+    };
+
+    auto RemoveTetFromHash = [&](int tetIndex) {
+        TetrahedralCell &tet = tets[tetIndex];
+        for (int i = 0; i < 6; i++)
+        {
+            u32 hash     = tet.HashEdge(i);
+            int tetValue = TetrahedralCell::GetTetKey(tetIndex, i);
+            bool result  = edgeHashMap.RemoveFromHash(hash, tetValue);
+            Assert(result);
         }
     };
 
@@ -270,117 +289,132 @@ static void BuildAdaptiveTetrahedralGrid(const nanovdb::FloatGrid *grid, Command
         AddTetToHash(tetIndex);
     }
 
-    FixedArray<int, 128> stack(128);
-    stack.Push(0);
-
-    TetrahedralCell &tet = tets[0];
-    Vec3f minP(pos_inf);
-    Vec3f maxP(neg_inf);
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i < tets.size(); i++)
     {
-        minP = Min(tet.points[i], minP);
-        maxP = Max(tet.points[i], maxP);
-    }
-
-    nanovdb::Vec3d i0 = grid->worldToIndexF(nanovdb::Vec3d(minP[0], minP[1], minP[2]));
-    nanovdb::Vec3d i1 = grid->worldToIndexF(nanovdb::Vec3d(maxP[0], maxP[1], maxP[2]));
-    auto indexBBox    = grid->indexBBox();
-
-    Vec3i indexMin(Max((int)Floor(i0[0]), indexBBox.min()[0]),
-                   Max((int)Floor(i0[1]), indexBBox.min()[1]),
-                   Max((int)Floor(i0[2]), indexBBox.min()[2]));
-    Vec3i indexMax(Min((int)Ceil(i1[0]), indexBBox.max()[0]),
-                   Min((int)Ceil(i1[1]), indexBBox.max()[1]),
-                   Min((int)Ceil(i1[2]), indexBBox.max()[2]));
-
-    float minValue, maxValue;
-
-    CalculateDensityBounds(
-        grid, indexMin, indexMax, minValue, maxValue, [&](int x, int y, int z) {
-            nanovdb::Vec3d p0 = grid->indexToWorldF(nanovdb::Vec3d(x, y, z));
-            nanovdb::Vec3d p1 = grid->indexToWorldF(nanovdb::Vec3d(x + 1, y + 1, z + 1));
-
-            Vec3f center(p0[0] + p1[0], p0[1] + p1[1], p0[2] + p1[2]);
-            Vec3f extent(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]);
-            center /= 2.f;
-            extent /= 2.f;
-
-            for (int i = 0; i < 4; i++)
-            {
-                Vec3f &p0 = tet.points[i % 3];
-                Vec3f &p1 = tet.points[i == 3 ? 1 : 3];
-                Vec3f &p2 = tet.points[i == 3 ? 2 : (i + 1) % 3];
-                Vec3f n   = Normalize(Cross(p1 - p0, p2 - p0));
-                float d   = -Dot(p0, n);
-
-                float e = Dot(Abs(n), extent);
-                float s = Dot(center, n) + d;
-
-                if (s > e) return false;
-            }
-            return true;
-        });
-
-    for (;;)
-    {
-        int tetIndex         = stack.Pop();
-        TetrahedralCell &tet = tets[tetIndex];
-        // Verify that tet should be adapted
-
-        int maxEdge = tet.GetLongestEdge();
-        Vec3f p0, p1;
-        tet.GetEdgeVertices(maxEdge, p0, p1);
-        int hash = tet.HashEdge(maxEdge);
-
-        // Get neighbors
-        Array<int> neighbors(scratch.temp.arena, 6);
-        for (int hashIndex = edgeHashMap.FirstInHash(hash); hashIndex != -1;
-             hashIndex     = edgeHashMap.NextInHash(hashIndex))
+        TetrahedralCell &tet = tets[i];
+        Vec3f minP(pos_inf);
+        Vec3f maxP(neg_inf);
+        for (int i = 0; i < 4; i++)
         {
-            int otherTetIndex, otherEdge;
-            TetrahedralCell::UnpackTetKey(hashIndex, otherTetIndex, otherEdge);
-            TetrahedralCell &other = tets[otherTetIndex];
-            Vec3f otherP0, otherP1;
-            other.GetEdgeVertices(otherEdge, otherP0, otherP1);
-
-            if ((otherP0 == p0 && otherP1 == p1) || (otherP0 == p1 && otherP1 == p0))
-            {
-                if (other.GetLongestEdge() != otherEdge)
-                {
-                    stack.Push(tetIndex);
-                    stack.Push(otherTetIndex);
-                    neighbors.Clear();
-                    break;
-                }
-                else
-                {
-                    neighbors.Add(hashIndex);
-                }
-            }
+            minP = Min(tet.points[i], minP);
+            maxP = Max(tet.points[i], maxP);
         }
 
-        if (neighbors.Length())
+        minP = minP * rootDiagonal + rootBoundsMinP;
+        maxP = maxP * rootDiagonal + rootBoundsMinP;
+
+        nanovdb::Vec3d i0 = grid->worldToIndexF(nanovdb::Vec3d(minP[0], minP[1], minP[2]));
+        nanovdb::Vec3d i1 = grid->worldToIndexF(nanovdb::Vec3d(maxP[0], maxP[1], maxP[2]));
+        auto indexBBox    = grid->indexBBox();
+
+        Vec3i indexMin(Max((int)Floor(i0[0]), indexBBox.min()[0]),
+                       Max((int)Floor(i0[1]), indexBBox.min()[1]),
+                       Max((int)Floor(i0[2]), indexBBox.min()[2]));
+        Vec3i indexMax(Min((int)Ceil(i1[0]), indexBBox.max()[0]),
+                       Min((int)Ceil(i1[1]), indexBBox.max()[1]),
+                       Min((int)Ceil(i1[2]), indexBBox.max()[2]));
+
+        float minValue, maxValue;
+        CalculateDensityBounds(
+            grid, indexMin, indexMax, minValue, maxValue, [&](int x, int y, int z) {
+                nanovdb::Vec3d p0_ = grid->indexToWorldF(nanovdb::Vec3d(x, y, z));
+                nanovdb::Vec3d p1_ = grid->indexToWorldF(nanovdb::Vec3d(x + 1, y + 1, z + 1));
+
+                Vec3f p0(p0_[0], p0_[1], p0_[2]);
+                Vec3f p1(p1_[1], p1_[1], p1_[2]);
+
+                p0 = (p0 - rootBoundsMinP) / rootDiagonal;
+                p1 = (p1 - rootBoundsMinP) / rootDiagonal;
+
+                Vec3f center = (p0 + p1) / 2.f;
+                Vec3f extent = (p1 - p0) / 2.f;
+
+                for (int i = 0; i < 4; i++)
+                {
+                    Vec3f &p0 = tet.points[i % 3];
+                    Vec3f &p1 = tet.points[i == 3 ? 1 : 3];
+                    Vec3f &p2 = tet.points[i == 3 ? 2 : (i + 1) % 3];
+                    Vec3f n   = Normalize(Cross(p1 - p0, p2 - p0));
+                    float d   = -Dot(p0, n);
+
+                    float e = Dot(Abs(n), extent);
+                    float s = Dot(center, n) + d;
+
+                    if (s > e) return false;
+                }
+                return true;
+            });
+
+        if (maxValue - minValue < .1f) continue;
+
+        FixedArray<int, 128> stack;
+        stack.Push(i);
+
+        for (;;)
         {
-            Vec3f midPoint = (p0 + p1) / 2.f;
-            neighbors.Push(TetrahedralCell::GetTetKey(tetIndex, maxEdge));
-            for (int neighbor : neighbors)
+            int tetIndex         = stack.Pop();
+            TetrahedralCell &tet = tets[tetIndex];
+            // Verify that tet should be adapted
+
+            int maxEdge = tet.GetLongestEdge();
+            Vec3f p0, p1;
+            tet.GetEdgeVertices(maxEdge, p0, p1);
+            int hash = tet.HashEdge(maxEdge);
+
+            // Get neighbors
+            Array<int> neighbors(scratch.temp.arena, 6);
+            for (int hashIndex = edgeHashMap.FirstInHash(hash); hashIndex != -1;
+                 hashIndex     = edgeHashMap.NextInHash(hashIndex))
             {
                 int otherTetIndex, otherEdge;
-                TetrahedralCell::UnpackTetKey(neighbor, otherTetIndex, otherEdge);
+                TetrahedralCell::UnpackTetKey(hashIndex, otherTetIndex, otherEdge);
 
-                int cur  = maxEdge % 3;
-                int next = maxEdge >= 3 ? 3 : (maxEdge + 1) % 3;
+                if (otherTetIndex == tetIndex) continue;
+                TetrahedralCell &other = tets[otherTetIndex];
+                Vec3f otherP0, otherP1;
+                other.GetEdgeVertices(otherEdge, otherP0, otherP1);
 
-                TetrahedralCell &tet = tets[otherTetIndex];
-                bool result = edgeHashMap.RemoveFromHash(tet.HashEdge(otherEdge), neighbor);
-                Assert(result);
+                if ((otherP0 == p0 && otherP1 == p1) || (otherP0 == p1 && otherP1 == p0))
+                {
+                    if (other.GetLongestEdge() != otherEdge)
+                    {
+                        stack.Push(tetIndex);
+                        stack.Push(otherTetIndex);
+                        neighbors.Clear();
+                        break;
+                    }
+                    else
+                    {
+                        neighbors.Add(hashIndex);
+                    }
+                }
+            }
 
-                TetrahedralCell newTet = tet;
-                newTet.points[cur]     = midPoint;
-                tets.push_back(newTet);
-                AddTetToHash(tets.size() - 1);
+            if (neighbors.Length())
+            {
+                Vec3f midPoint = (p0 + p1) / 2.f;
+                neighbors.Push(TetrahedralCell::GetTetKey(tetIndex, maxEdge));
+                for (int neighbor : neighbors)
+                {
+                    int otherTetIndex, otherEdge;
+                    TetrahedralCell::UnpackTetKey(neighbor, otherTetIndex, otherEdge);
 
-                tet.points[next] = midPoint;
+                    int cur  = maxEdge % 3;
+                    int next = maxEdge >= 3 ? 3 : (maxEdge + 1) % 3;
+
+                    TetrahedralCell &tet = tets[otherTetIndex];
+                    tet.children[0]      = tets.size();
+                    tet.children[1]      = tets.size() + 1;
+                    RemoveTetFromHash(otherTetIndex);
+
+                    TetrahedralCell newTet = tet;
+                    newTet.points[next]    = midPoint;
+                    tets.push_back(newTet);
+                    newTet             = tet;
+                    newTet.points[cur] = midPoint;
+                    tets.push_back(newTet);
+                    AddTetToHash(tets.size() - 1);
+                }
             }
         }
     }
@@ -400,7 +434,7 @@ VolumeData Volumes(CommandBuffer *cmd, Arena *arena)
     Bounds rootBounds(Vec3f(bbox.min()[0], bbox.min()[1], bbox.min()[2]),
                       Vec3f(bbox.max()[0], bbox.max()[1], bbox.max()[2]));
 
-    // BuildAdaptiveTetrahedralGrid(grid, cmd, arena);
+    BuildAdaptiveTetrahedralGrid(grid, cmd, arena);
 
     ScratchArena scratch;
     Arena **arenas = GetArenaArray(scratch.temp.arena);
