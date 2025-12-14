@@ -495,16 +495,15 @@ struct HashIndex
         i32 slot = key & hashMask;
         if (index > indexChainSize)
         {
-            i32 *newIndexChain = PushArray(arena, i32, indexChainSize * 2);
+            i32 *newIndexChain = PushArray(arena, i32, index * 2);
             MemoryCopy(newIndexChain, indexChain, sizeof(i32) * indexChainSize);
-            indexChainSize *= 2;
-            indexChain = newIndexChain;
+            MemorySet(newIndexChain + indexChainSize, 0xff,
+                      sizeof(i32) * (index * 2 - indexChainSize));
+            indexChainSize = index * 2;
+            indexChain     = newIndexChain;
         }
-        else
-        {
-            indexChain[index] = hash[slot];
-            hash[slot]        = index;
-        }
+        indexChain[index] = hash[slot];
+        hash[slot]        = index;
     }
 
     void AddConcurrent(int key, int index)
