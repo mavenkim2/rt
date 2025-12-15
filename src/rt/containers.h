@@ -493,7 +493,7 @@ struct HashIndex
     void AddInHash(i32 key, i32 index)
     {
         i32 slot = key & hashMask;
-        if (index > indexChainSize)
+        if (index >= indexChainSize)
         {
             i32 *newIndexChain = PushArray(arena, i32, index * 2);
             MemoryCopy(newIndexChain, indexChain, sizeof(i32) * indexChainSize);

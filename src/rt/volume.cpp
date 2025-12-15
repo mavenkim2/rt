@@ -33,12 +33,15 @@ static const float T = Abs(1.f / std::log(0.5f));
 
 template <typename Func>
 static void CalculateDensityBounds(const nanovdb::FloatGrid *grid, Vec3i indexMin,
-                                   Vec3i indexMax, f32 &minValue, f32 &maxValue, Func &&func)
+                                   Vec3i indexMax, f32 &minValue, f32 &maxValue,
+                                   f32 &meanValue, Func &&func)
 {
     struct Output
     {
         float min;
         float max;
+        float sum;
+        int num;
     };
 
     ScratchArena scratch;
@@ -51,6 +54,8 @@ static void CalculateDensityBounds(const nanovdb::FloatGrid *grid, Vec3i indexMi
                                 int s          = indexMin[2] + start;
                                 float maxValue = 0.f;
                                 float minValue = 1.f;
+                                float sum      = 0.f;
+                                int num        = 0;
                                 auto accessor  = grid->getAccessor();
                                 for (int z = s; z < s + count; z++)
                                 {
@@ -63,22 +68,29 @@ static void CalculateDensityBounds(const nanovdb::FloatGrid *grid, Vec3i indexMi
                                                 float value = accessor.getValue({x, y, z});
                                                 maxValue    = Max(value, maxValue);
                                                 minValue    = Min(value, minValue);
+                                                sum += value;
+                                                num++;
                                             }
                                         }
                                     }
                                 }
                                 output.min = minValue;
                                 output.max = maxValue;
+                                output.sum = sum;
+                                output.num = num;
                             });
 
     Output minMax;
     Reduce(minMax, output, [&](Output &l, const Output &r) {
         l.min = Min(l.min, r.min);
         l.max = Max(l.max, r.max);
+        l.num += r.num;
+        l.sum += r.sum;
     });
 
-    maxValue = minMax.max;
-    minValue = minMax.min;
+    maxValue  = minMax.max;
+    minValue  = minMax.min;
+    meanValue = minMax.sum / minMax.num;
 }
 
 static OctreeNode CreateOctree(Arena **arenas, const Bounds &bounds,
@@ -101,8 +113,8 @@ static OctreeNode CreateOctree(Arena **arenas, const Bounds &bounds,
 
     int count = indexMax[2] - indexMin[2] + 1;
 
-    float maxValue, minValue;
-    CalculateDensityBounds(grid, indexMin, indexMax, minValue, maxValue,
+    float maxValue, minValue, mean;
+    CalculateDensityBounds(grid, indexMin, indexMax, minValue, maxValue, mean,
                            [](int x, int y, int z) { return true; });
     f32 diag = Length(ToVec3f(bounds.Diagonal()));
 
@@ -269,7 +281,7 @@ static void BuildAdaptiveTetrahedralGrid(const nanovdb::FloatGrid *grid, Command
     }
 
     ScratchArena scratch;
-    HashIndex edgeHashMap(scratch.temp.arena, 1u << 24u, 1u << 24u);
+    HashIndex edgeHashMap(scratch.temp.arena, 1u << 25u, 1u << 25u);
 
     auto AddTetToHash = [&](int tetIndex) {
         TetrahedralCell &tet = tets[tetIndex];
@@ -324,9 +336,9 @@ static void BuildAdaptiveTetrahedralGrid(const nanovdb::FloatGrid *grid, Command
                        Min((int)Ceil(i1[1]), indexBBox.max()[1]),
                        Min((int)Ceil(i1[2]), indexBBox.max()[2]));
 
-        float minValue, maxValue;
+        float minValue, maxValue, mean;
         CalculateDensityBounds(
-            grid, indexMin, indexMax, minValue, maxValue, [&](int x, int y, int z) {
+            grid, indexMin, indexMax, minValue, maxValue, mean, [&](int x, int y, int z) {
                 nanovdb::Vec3d p0_ = grid->indexToWorldF(nanovdb::Vec3d(x, y, z));
                 nanovdb::Vec3d p1_ = grid->indexToWorldF(nanovdb::Vec3d(x + 1, y + 1, z + 1));
 
@@ -355,7 +367,16 @@ static void BuildAdaptiveTetrahedralGrid(const nanovdb::FloatGrid *grid, Command
                 return true;
             });
 
-        if (maxValue - minValue < .1f) continue;
+        int longestEdge = tet.GetLongestEdge();
+        Vec3f otherP0, otherP1;
+        tet.GetEdgeVertices(longestEdge, otherP0, otherP1);
+        otherP0 = otherP0 * rootDiagonal + rootBoundsMinP;
+        otherP1 = otherP1 * rootDiagonal + rootBoundsMinP;
+        // if (i > 1000000)
+        {
+            Print("%f %f %f %f\n", maxValue, minValue, mean, Length(otherP0 - otherP1));
+        }
+        if ((maxValue - minValue) * Length(otherP0 - otherP1) <= T) continue;
 
         FixedArray<int, 128> stack;
         stack.Push(i);
