@@ -29,13 +29,16 @@
 #include "../handles.h"
 #include "../scene_load.h"
 #include "../mesh.h"
+
 #ifdef USE_GPU
 #include "../virtual_geometry/mesh_simplification.h"
+#if 0
 #include <openvdb/openvdb.h>
 #include <openvdb/io/File.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
 #include <nanovdb/io/IO.h>
 #include <nanovdb/GridHandle.h>
+#endif
 #endif
 
 namespace rt
@@ -118,6 +121,7 @@ struct ShapeType
 
     ScenePacket *areaLight;
     string materialName;
+    string mediumName;
     string groupName;
     int transformIndex;
 
@@ -576,6 +580,9 @@ struct SceneLoadState
     MaterialMap materialMap;
     MeshHashMap meshMap;
 
+    string cameraMediumName;
+    ChunkedLinkedList<NamedPacket, MemoryType_Other> media;
+
     void Init(Arena *arena)
     {
         u32 threadIndex = GetThreadIndex();
@@ -610,6 +617,8 @@ struct SceneLoadState
         meshMap.filenameMap = PushArray(arena, MeshHashNode *, meshMap.count);
 
         materialCounter = 1;
+
+        media = ChunkedLinkedList<NamedPacket, MemoryType_Other>(arena, 1024);
     }
 };
 
@@ -658,7 +667,9 @@ struct GraphicsState
     i32 transformIndex = -1;
     // i32 areaLightIndex = -1;
     ScenePacket *areaLightPacket;
-    i32 mediaIndex = -1;
+
+    string insideMedium  = {};
+    string outsideMedium = {};
 };
 
 int CheckForID(ScenePacket *packet, StringId id)
@@ -1749,10 +1760,41 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             }
             break;
             case "MakeNamedMedium"_sid:
+            {
+                string mediumName;
+                b32 result = GetBetweenPair(mediumName, &tokenizer, '"');
+                Assert(result);
+
+                NamedPacket packet;
+                packet.name        = PushStr8Copy(threadArena, mediumName);
+                packet.packet      = {};
+                packet.packet.type = "medium"_sid;
+                PBRTSkipToNextChar(&tokenizer);
+                ReadParameters(threadArena, &packet.packet, &tokenizer, MemoryType_Other);
+
+                sls->media.Push(packet);
+            }
+            break;
             case "MediumInterface"_sid:
             {
-                // not implemented yet
-                ErrorExit(0, "Not implemented %S\n", word);
+                string insideMedium, outsideMedium;
+                b32 result = GetBetweenPair(insideMedium, &tokenizer, '"');
+                Assert(result);
+                PBRTSkipToNextChar(&tokenizer);
+                result = GetBetweenPair(outsideMedium, &tokenizer, '"');
+                Assert(result);
+
+                if (!worldBegin)
+                {
+                    sls->cameraMediumName = PushStr8Copy(threadArena, outsideMedium);
+                }
+                else
+                {
+                    currentGraphicsState.insideMedium =
+                        PushStr8Copy(threadArena, insideMedium);
+                    currentGraphicsState.outsideMedium =
+                        PushStr8Copy(threadArena, outsideMedium);
+                }
             }
             break;
             case "NamedMaterial"_sid:
@@ -1945,6 +1987,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 shape->areaLight      = currentGraphicsState.areaLightPacket
                                             ? currentGraphicsState.areaLightPacket
                                             : 0;
+                shape->mediumName     = currentGraphicsState.insideMedium;
                 shape->transformIndex = currentGraphicsState.transformIndex;
 
                 AddTransform();
@@ -2339,6 +2382,54 @@ void WriteMesh(StringBuilder &builder, StringBuilderMapped &dataBuilder, ShapeTy
     ScratchEnd(temp);
 }
 
+void WriteMedium(StringBuilder *builder, SceneLoadState *sls, string name)
+{
+    for (auto *node = sls->media.first; node != 0; node = node->next)
+    {
+        for (int i = 0; i < node->count; i++)
+        {
+            NamedPacket *medium = &node->values[i];
+            if (medium->name == name)
+            {
+                Put(builder, "medium ");
+                //         "string type" "nanovdb"
+                //     "string filename" "volumes/cube_perlin_element0.1_offset5.3.nvdb"
+                // "rgb sigma_s" [1 1 1]
+                // "rgb sigma_a" [0.01 0.01 0.01]
+                // "float g" 0.4
+                // "float scale" 0.05
+
+                switch (medium->packet.type)
+                {
+                    case "nanovdb"_sid:
+                    {
+                        const string names[] = {
+                            "filename", "sigma_a", "sigma_s", "g", "scale",
+                        };
+
+                        const StringId ids[] = {
+                            "filename"_sid, "sigma_a "_sid, "sigma_s"_sid,
+                            "g"_sid,        "scale"_sid,
+                        };
+
+                        for (u32 i = 0; i < ArrayLength(names); i++)
+                        {
+                            ScenePacket *scenePacket = &medium->packet;
+                            int p                    = CheckForID(scenePacket, ids[i]);
+                            WriteNameTypeAndData(builder, scenePacket, names[i], p);
+                        }
+                    }
+                    break;
+                    default: Assert(0);
+                }
+
+                return;
+            }
+        }
+    }
+    Assert(0);
+}
+
 void WriteAreaLight(StringBuilder *builder, ScenePacket *light)
 {
     Put(builder, "a ");
@@ -2410,6 +2501,8 @@ void WriteShape(PBRTFileInfo *info, ShapeType *shapeType, StringBuilder &builder
     {
         Put(&builder, "transform %i ", shapeType->transformIndex);
     }
+
+    if (shapeType->mediumName.size) WriteMedium(&builder, shapeType->mediumName);
     if (shapeType->areaLight) WriteAreaLight(&builder, shapeType->areaLight);
 
     int alphaID = CheckForID(packet, "alpha"_sid);
@@ -4160,6 +4253,7 @@ int main(int argc, char **argv)
     Vulkan *v           = PushStructConstruct(arena, Vulkan)(mode);
     device              = v;
 
+#if 0
     openvdb::initialize();
     openvdb::io::File vdbFile(std::string("../../data/wdas_cloud/wdas_cloud_half.vdb"));
     vdbFile.open(false);
@@ -4176,8 +4270,9 @@ int main(int argc, char **argv)
     std::ofstream os(outputFile, std::ios::out | std::ios::binary);
     nanovdb::io::Codec codec = nanovdb::io::Codec::NONE;
     nanovdb::io::writeGrid(os, handle, codec);
+#endif
 
-#if 0
+#if 1
     LoadPBRT(arena, filename);
     // string directory = Str8PathChopPastLastSlash(filename);
     // string baseFile  = PathSkipLastSlash(filename);

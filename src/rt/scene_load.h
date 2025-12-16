@@ -153,6 +153,8 @@ static const string textureTypeNames[] = {
     "marble", "mix",          "ptex",     "scale",        "windy", "wrinkled",
 };
 
+// static const string
+
 struct FileOffsets
 {
     u64 metaOffset;

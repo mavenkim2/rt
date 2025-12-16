@@ -231,6 +231,11 @@ struct TetrahedralCell
     }
 };
 
+// - path guiding + volume path guiding
+// - supporting multiple scenes, with other types of textures/lights/materials and simpler
+// geometry
+// - caustics
+// -
 static void BuildAdaptiveTetrahedralGrid(const nanovdb::FloatGrid *grid, CommandBuffer *cmd,
                                          Arena *arena)
 {
@@ -481,7 +486,7 @@ VolumeData Volumes(CommandBuffer *cmd, Arena *arena)
     Bounds rootBounds(Vec3f(bbox.min()[0], bbox.min()[1], bbox.min()[2]),
                       Vec3f(bbox.max()[0], bbox.max()[1], bbox.max()[2]));
 
-    BuildAdaptiveTetrahedralGrid(grid, cmd, arena);
+    // BuildAdaptiveTetrahedralGrid(grid, cmd, arena);
 
     ScratchArena scratch;
     Arena **arenas = GetArenaArray(scratch.temp.arena);
