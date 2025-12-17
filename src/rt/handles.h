@@ -102,6 +102,7 @@ enum class MaterialTypes
     DiffuseTransmission,
     CoatedDiffuse,
     Dielectric,
+    Conductor,
     Disney,
     Max,
 };

@@ -664,7 +664,7 @@ struct GraphicsState
     string outsideMedium = {};
 };
 
-int CheckForID(ScenePacket *packet, StringId id)
+int CheckForID(const ScenePacket *packet, StringId id)
 {
     for (u32 p = 0; p < packet->parameterCount; p++)
     {
@@ -925,8 +925,9 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
                 b32 pairResult = GetBetweenPair(str, tokenizer, '"');
                 Assert(pairResult);
 
-                out  = str.str;
-                size = (u32)str.size;
+                string copy = PushStr8Copy(arena, str);
+                out         = copy.str;
+                size        = (u32)copy.size;
             }
             else
             {
@@ -2146,29 +2147,53 @@ void WriteTexture(StringBuilder *builder, const NamedPacket *packet)
     // Put(builder, "t name %S type %S ", packet->name, packet->type);
     Put(builder, "%S ", packet->type);
     TextureType type = ConvertStringToTextureType(packet->type);
+    //  string 	filename
+    // string 	wrap
+    // float 	maxanisotropy
+    // string 	filter
+    // string 	encoding
+    // float 	scale
+    // bool 	invert
+
+    const string *names;
+    const StringId *ids;
+
+    const string ptexNames[]     = {"filename", "scale"};
+    const StringId ptexIds[]     = {"filename"_sid, "scale"_sid};
+    const string imagemapNames[] = {
+        "filename", "wrap", "maxanisotropy", "filter", "encoding", "scale", "invert",
+    };
+    const StringId imagemapIds[] = {
+        "filename"_sid, "wrap"_sid,  "maxanisotropy"_sid, "filter"_sid,
+        "encoding"_sid, "scale"_sid, "invert"_sid,
+    };
+    u32 count = 0;
+
     switch (type)
     {
         case TextureType::ptex:
         {
-            const string parameterNames[] = {"filename", "scale"};
-            const StringId parameterIds[] = {"filename"_sid, "scale"_sid};
-            u32 count                     = 2;
-            Assert(parameterNames);
-            for (u32 i = 0; i < count; i++)
-            {
-                for (u32 j = 0; j < scenePacket->parameterCount; j++)
-                {
-                    if (scenePacket->parameterNames[j] == parameterIds[i])
-                    {
-                        Put(builder, "%S ", parameterNames[i]);
-                        PutData(builder, scenePacket->bytes[j], scenePacket->sizes[j]);
-                        Put(builder, " ");
-                    }
-                }
-            }
+            names = ptexNames;
+            ids   = ptexIds;
+            count = 2;
+        }
+        break;
+        case TextureType::imagemap:
+        {
+            names = imagemapNames;
+            ids   = imagemapIds;
+            count = ArrayLength(imagemapNames);
         }
         break;
         default: Assert(0);
+    }
+
+    for (u32 i = 0; i < ArrayLength(names); i++)
+    {
+        int p = CheckForID(scenePacket, ids[i]);
+        Put(builder, "%S ", names[i]);
+        PutData(builder, scenePacket->bytes[i], scenePacket->sizes[i]);
+        Put(builder, " ");
     }
 }
 
@@ -2203,6 +2228,25 @@ void WriteDataType(StringBuilder *builder, ScenePacket *scenePacket, int p,
             string textureName         = Str8(scenePacket->bytes[p], scenePacket->sizes[p]);
             const NamedPacket *nPacket = textureHashMap->Get(textureName);
             WriteTexture(builder, nPacket);
+        }
+        break;
+        case DataType::Bool:
+        {
+            Assert(scenePacket->sizes[p] == 1);
+            if (*scenePacket->bytes[p] == 0)
+            {
+                Put(builder, "false");
+            }
+            else
+            {
+                Put(builder, "true");
+            }
+        }
+        break;
+        case DataType::String:
+        {
+            PutData(builder, scenePacket->bytes[p], scenePacket->sizes[p]);
+            Put(builder, " ");
         }
         break;
         default: ErrorExit(0, "not supported yet\n");
@@ -2399,35 +2443,31 @@ void WriteMedium(StringBuilder *builder, SceneLoadState *sls, string name)
             if (medium->name == name)
             {
                 Put(builder, "medium ");
-                //         "string type" "nanovdb"
-                //     "string filename" "volumes/cube_perlin_element0.1_offset5.3.nvdb"
-                // "rgb sigma_s" [1 1 1]
-                // "rgb sigma_a" [0.01 0.01 0.01]
-                // "float g" 0.4
-                // "float scale" 0.05
 
-                switch (medium->packet.type)
+                int p = CheckForID(&medium->packet, "type"_sid);
+                Assert(p != -1);
+                string type = Str8C((char *)medium->packet.bytes[p], medium->packet.sizes[p]);
+
+                if (type == "nanovdb")
                 {
-                    case "nanovdb"_sid:
+                    const string names[] = {
+                        "filename", "sigma_a", "sigma_s", "g", "scale",
+                    };
+
+                    const StringId ids[] = {
+                        "filename"_sid, "sigma_a "_sid, "sigma_s"_sid, "g"_sid, "scale"_sid,
+                    };
+
+                    for (u32 i = 0; i < ArrayLength(names); i++)
                     {
-                        const string names[] = {
-                            "filename", "sigma_a", "sigma_s", "g", "scale",
-                        };
-
-                        const StringId ids[] = {
-                            "filename"_sid, "sigma_a "_sid, "sigma_s"_sid,
-                            "g"_sid,        "scale"_sid,
-                        };
-
-                        for (u32 i = 0; i < ArrayLength(names); i++)
-                        {
-                            ScenePacket *scenePacket = &medium->packet;
-                            int p                    = CheckForID(scenePacket, ids[i]);
-                            WriteNameTypeAndData(builder, scenePacket, names[i], p);
-                        }
+                        ScenePacket *scenePacket = &medium->packet;
+                        int p                    = CheckForID(scenePacket, ids[i]);
+                        WriteNameTypeAndData(builder, scenePacket, names[i], p);
                     }
-                    break;
-                    default: Assert(0);
+                }
+                else
+                {
+                    Assert(0);
                 }
 
                 return;

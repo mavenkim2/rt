@@ -46,6 +46,7 @@ inline MaterialTypes ConvertStringToMaterialType(string type)
     else if (type == "coateddiffuse") return MaterialTypes::CoatedDiffuse;
     else if (type == "dielectric") return MaterialTypes::Dielectric;
     else if (type == "interface") return MaterialTypes::Interface;
+    else if (type == "conductor") return MaterialTypes::Conductor;
     else
     {
         ErrorExit(0, "Material type not supported or valid.\n");
@@ -75,7 +76,7 @@ ENUM_CLASS_FLAGS(TextureType)
 inline TextureType ConvertStringToTextureType(string type)
 {
     if (type == "ptex") return TextureType::ptex;
-    // else if (type == "imagemap") return TextureType::imagemap;
+    else if (type == "imagemap") return TextureType::imagemap;
     else ErrorExit(0, "Texture type not supported or valid\n");
     return TextureType(0);
 }
@@ -133,8 +134,18 @@ static const string coatedDiffuseNames[] = {
     "albedo",    "g",          "maxdepth",   "nsamples",       "thickness", "displacement",
 };
 
+static const string conductorNames[] = {
+    "roughness", "uroughness", "vroughness", "remaproughness", "eta", "k", "reflectance",
+};
+
+static const StringId conductorIds[] = {
+    "roughness"_sid, "uroughness"_sid, "vroughness"_sid,  "remaproughness"_sid,
+    "eta"_sid,       "k"_sid,          "reflectance"_sid,
+};
+
 static const StringId *materialParameterIDs[] = {
-    0, diffuseParameterIds, diffuseTransmissionIds, coatedDiffuseIds, dielectricIds};
+    0,           diffuseParameterIds, diffuseTransmissionIds, coatedDiffuseIds, dielectricIds,
+    conductorIds};
 
 static const StringId materialParameterCounts[] = {
     0,
@@ -142,10 +153,16 @@ static const StringId materialParameterCounts[] = {
     ArrayLength(diffuseTransmissionIds),
     ArrayLength(coatedDiffuseIds),
     ArrayLength(dielectricIds),
+    ArrayLength(conductorIds),
 };
 
 static const string *materialParameterNames[] = {
-    0, diffuseParameterNames, diffuseTransmissionNames, coatedDiffuseNames, dielectricNames,
+    0,
+    diffuseParameterNames,
+    diffuseTransmissionNames,
+    coatedDiffuseNames,
+    dielectricNames,
+    conductorNames,
 };
 
 static const string textureTypeNames[] = {
