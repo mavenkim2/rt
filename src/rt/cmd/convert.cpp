@@ -761,7 +761,7 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
 
         PBRTSkipToNextChar(tokenizer);
 
-        u32 numValues = CountBetweenPair(tokenizer, '[');
+        u32 numValues = CountBetweenPair2(tokenizer, '[');
         numValues     = numValues ? numValues : 1;
         u8 *out       = 0;
         u32 size      = 0;
@@ -884,6 +884,9 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
             {
                 *out = 1;
             }
+            ReadWord(tokenizer);
+            SkipToNextChar(tokenizer);
+            Advance(tokenizer, "]");
             AdvanceToNextParameter(tokenizer);
         }
         else if (dataType == "string" || dataType == "texture")
@@ -924,6 +927,8 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
             if (numValues == 1)
             {
                 dt = DataType::String;
+                Advance(tokenizer, "[");
+                SkipToNextChar(tokenizer);
                 string str;
                 b32 pairResult = GetBetweenPair(str, tokenizer, '"');
                 Assert(pairResult);
@@ -945,8 +950,8 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
                     *((f32 *)out + 2 * i + 1) = ReadFloat(tokenizer);
                 }
                 size = sizeof(f32) * numValues;
-                AdvanceToNextParameter(tokenizer);
             }
+            AdvanceToNextParameter(tokenizer);
         }
         else
         {
@@ -2121,10 +2126,13 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 currentGraphicsState.transformIndex = -1;
             }
             break;
+            case "WorldEnd"_sid:
+            {
+            }
+            break;
             default:
             {
-                string line = ReadLine(&tokenizer);
-                ErrorExit(0, "ErrorExit while parsing scene. Buffer: %S", line);
+                ErrorExit(0, "ErrorExit while parsing scene. option: %S", word);
             }
         }
     }
@@ -2461,8 +2469,8 @@ void WriteAreaLight(StringBuilder *builder, ScenePacket *light)
 }
 
 void WriteShape(PBRTFileInfo *info, ShapeType *shapeType, StringBuilder &builder,
-                StringBuilderMapped &dataBuilder, string directory, u64 *builderOffset = 0,
-                u64 cap = 0)
+                StringBuilderMapped &dataBuilder, string directory, SceneLoadState *sls = 0,
+                u64 *builderOffset = 0, u64 cap = 0)
 {
     // if (shapeType->cancelled) return;
     ScenePacket *packet = &shapeType->packet;
@@ -2502,7 +2510,12 @@ void WriteShape(PBRTFileInfo *info, ShapeType *shapeType, StringBuilder &builder
         Put(&builder, "transform %i ", shapeType->transformIndex);
     }
 
-    if (shapeType->mediumName.size) WriteMedium(&builder, shapeType->mediumName);
+    if (shapeType->mediumName.size)
+    {
+        ErrorExit(
+            sls, "right now the parser only supports medium declarations in the base file.\n");
+        WriteMedium(&builder, sls, shapeType->mediumName);
+    }
     if (shapeType->areaLight) WriteAreaLight(&builder, shapeType->areaLight);
 
     int alphaID = CheckForID(packet, "alpha"_sid);
@@ -2743,7 +2756,7 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state,
                     for (int i = 0; i < node->count; i++)
                     {
                         ShapeType *shapeType = node->values + i;
-                        WriteShape(info, shapeType, builder, dataBuilder, directory);
+                        WriteShape(info, shapeType, builder, dataBuilder, directory, state);
                     }
                     continue;
                 }
@@ -2801,7 +2814,7 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state,
                         Assert(packetIndex < node->count);
                         ShapeType *shapeType = node->values + packetIndex;
 
-                        WriteShape(info, shapeType, builder, dataBuilder, directory,
+                        WriteShape(info, shapeType, builder, dataBuilder, directory, state,
                                    &builderOffset, cap);
                     }
                 });

@@ -179,6 +179,7 @@ u8 *GetPointer_(Tokenizer *tokenizer);
 b32 Compare(u8 *ptr, string str);
 bool GetBetweenPair(string &out, Tokenizer *tokenizer, const u8 ch);
 u32 CountBetweenPair(Tokenizer *tokenizer, const u8 ch);
+u32 CountBetweenPair2(Tokenizer *tokenizer, const u8 ch);
 b32 IsAlpha(Tokenizer *tokenizer);
 b32 IsDigit(Tokenizer *tokenizer);
 b32 IsAlphaNumeric(Tokenizer *tokenizer);

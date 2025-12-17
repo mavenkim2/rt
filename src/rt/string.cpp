@@ -504,9 +504,7 @@ string ReadWord(Tokenizer *tokenizer)
     result.size = 0;
 
     while (!EndOfBuffer(tokenizer) &&
-           (tokenizer->cursor++,
-            (*(tokenizer->cursor - 1) != ' ' && *(tokenizer->cursor - 1) != '\n' &&
-             (*(tokenizer->cursor - 1) != '\r'))))
+           (tokenizer->cursor++, (!CharIsBlank(*(tokenizer->cursor - 1)))))
     {
         result.size++;
     }
@@ -769,6 +767,32 @@ u32 CountBetweenPair(Tokenizer *tokenizer, const u8 ch)
         {
             cursor++;
         }
+    }
+
+    return count;
+}
+
+u32 CountBetweenPair2(Tokenizer *tokenizer, const u8 ch)
+{
+    u8 left  = ch;
+    u8 right = CharGetPair(ch);
+
+    if (*tokenizer->cursor != ch) return 0;
+
+    Tokenizer temp = *tokenizer;
+    temp.cursor++;
+
+    u32 count = 0;
+    for (;;)
+    {
+        SkipToNextChar(&temp);
+        if (*temp.cursor == right) break;
+
+        // TODO: this doesn't actually check if the number is valid.
+        while (!EndOfBuffer(&temp) && (!IsBlank(&temp) && *temp.cursor != right))
+            temp.cursor++;
+        count++;
+        if (EndOfBuffer(&temp)) break;
     }
 
     return count;
