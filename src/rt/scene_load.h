@@ -401,23 +401,28 @@ inline Mesh LoadPLY(Arena *arena, string filename, GeometryType type)
     for (u32 i = 0; i < numVertices; i++)
     {
         string bytes = ReadBytes(&tokenizer, totalVertexStride);
+        u32 offset   = 0;
         if (hasVertices)
         {
-            Assert(totalVertexStride >= 12);
             f32 *pos  = (f32 *)bytes.str;
             mesh.p[i] = Vec3f(pos[0], pos[1], pos[2]);
+            offset += 3;
         }
         if (hasNormals)
         {
-            Assert(totalVertexStride >= 24);
-            f32 *norm = (f32 *)bytes.str + 3;
+            f32 *norm = (f32 *)bytes.str + offset;
             mesh.n[i] = Vec3f(norm[0], norm[1], norm[2]);
+            offset += 3;
         }
         if (hasUv && !isQuad)
         {
-            Assert(totalVertexStride >= 32);
-            f32 *uv    = (f32 *)bytes.str + 6;
+            f32 *uv    = (f32 *)bytes.str + offset;
             mesh.uv[i] = Vec2f(uv[0], uv[1]);
+            if (mesh.uv[i][0] > 0.1f || mesh.uv[i][1] > 0.1f)
+            {
+                int stop = 5;
+            }
+            offset += 2;
         }
     }
 

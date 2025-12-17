@@ -1,17 +1,6 @@
 #include "../base.h"
 #include "../thread_statistics.h"
-#include "../macros.h"
-#include "../template.h"
-#include "../math/basemath.h"
-#include "../math/simd_include.h"
-#include "../math/vec2.h"
-#include "../math/vec3.h"
-#include "../math/vec4.h"
-#include "../math/bounds.h"
-#include "../math/matx.h"
-#include "../math/math.h"
-#include "../math/eigen.h"
-#include "../math/sphere.h"
+#include "../math/math_include.h"
 
 #include "../platform.h"
 #include "../memory.h"
@@ -19,8 +8,6 @@
 #include "../containers.h"
 #include "../thread_context.h"
 #include "../hash.h"
-#include <functional>
-#include <sstream>
 #include "../radix_sort.h"
 #include "../random.h"
 #include "../parallel.h"
@@ -43,6 +30,11 @@
 
 namespace rt
 {
+
+struct ConverterSettings
+{
+    bool clusterCompress = false;
+};
 
 struct DisneyMaterial
 {
@@ -4265,6 +4257,9 @@ int main(int argc, char **argv)
     ValidationMode mode = ValidationMode::Verbose;
     Vulkan *v           = PushStructConstruct(arena, Vulkan)(mode);
     device              = v;
+
+    ConverterSettings settings;
+    // settings.clusterCompress = ?;
 
 #if 0
     openvdb::initialize();
