@@ -1310,9 +1310,9 @@ static string WriteNanite(PBRTFileInfo *state, SceneLoadState *sls, string direc
     return {};
 }
 
-PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
-                       GraphicsState graphicsState = {}, bool originFile = true,
-                       bool inWorldBegin = false, bool write = true)
+PBRTFileInfo *LoadPBRT(ConverterSettings settings, SceneLoadState *sls, string directory,
+                       string filename, GraphicsState graphicsState = {},
+                       bool originFile = true, bool inWorldBegin = false, bool write = true)
 {
     enum class ScopeType
     {
@@ -1392,7 +1392,11 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                     geoFilename = PushStr8F(tempArena, "%S_rtshape_tri.rtscene",
                                             RemoveFileExtension(state->filename));
                 }
-                state->virtualGeoFilename = WriteNanite(state, sls, directory, geoFilename);
+                if (settings.clusterCompress)
+                {
+                    state->virtualGeoFilename =
+                        WriteNanite(state, sls, directory, geoFilename);
+                }
                 WriteFile(directory, state, originFile ? sls : 0);
 
                 // if (state->fileInstances.totalCount)
@@ -1650,16 +1654,16 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 {
                     scheduler.Schedule(&state->counter, [=](u32 jobID) {
                         PBRTFileInfo *newState =
-                            LoadPBRT(sls, directory, copiedFilename, importedState, false,
-                                     worldBegin, checkFileInstance);
+                            LoadPBRT(settings, sls, directory, copiedFilename, importedState,
+                                     false, worldBegin, checkFileInstance);
                         if (!checkFileInstance) state->imports[index] = newState;
                     });
                 }
                 else
                 {
                     PBRTFileInfo *newState =
-                        LoadPBRT(sls, directory, copiedFilename, importedState, false,
-                                 worldBegin, checkFileInstance);
+                        LoadPBRT(settings, sls, directory, copiedFilename, importedState,
+                                 false, worldBegin, checkFileInstance);
                     if (!checkFileInstance) state->imports[index] = newState;
                 }
             }
@@ -1842,8 +1846,11 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 {
                     state->Merge(state->imports[i]);
                 }
-                state->virtualGeoFilename =
-                    WriteNanite(state, sls, directory, state->filename);
+                if (settings.clusterCompress)
+                {
+                    state->virtualGeoFilename =
+                        WriteNanite(state, sls, directory, state->filename);
+                }
                 WriteFile(directory, state);
                 ArenaRelease(state->arena);
                 for (u32 i = 0; i < state->numImports; i++)
@@ -2686,7 +2693,7 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state,
         Put(&builder, "MATERIALS_END ");
     }
 
-    if (info->shapes.totalCount == 0 && info->fileInstances.totalCount == 0)
+    if (info->virtualGeoFilename.size)
     {
         Assert(info->virtualGeoFilename.size);
 
@@ -2694,7 +2701,7 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state,
         Put(&builder, info->virtualGeoFilename);
         Put(&builder, " ");
     }
-    if (info->shapes.totalCount && info->fileInstances.totalCount == 0)
+    else if (info->shapes.totalCount && info->fileInstances.totalCount == 0)
     {
         // First, loop to see if all the types are the same
         GeometryType type   = GeometryType::Max;
@@ -4198,7 +4205,7 @@ static void LoadMoanaJSON(Arena *arena, string directory)
     WriteFile(directory, &baseInfo, 0, &disneyMaterials);
 }
 
-void LoadPBRT(Arena *arena, string filename)
+void LoadPBRT(ConverterSettings settings, Arena *arena, string filename)
 {
     TempArena temp    = ScratchStart(0, 0);
     u32 numProcessors = OS_NumProcessors();
@@ -4212,7 +4219,7 @@ void LoadPBRT(Arena *arena, string filename)
     OS_CreateDirectory(StrConcat(temp.arena, directory, "objects"));
 
     PerformanceCounter counter = OS_StartCounter();
-    LoadPBRT(&sls, directory, baseFile);
+    LoadPBRT(settings, &sls, directory, baseFile);
 
     f32 time = OS_GetMilliseconds(counter);
     printf("convert time: %fms\n", time);
@@ -4241,13 +4248,22 @@ int main(int argc, char **argv)
 
     InitializePtex(1, gigabytes(1));
 
-    if (argc != 2)
+    string filename = {};
+    ConverterSettings settings;
+    for (int i = 1; i < argc;)
     {
-        printf("You must pass in a valid PBRT file to convert. Aborting... \n");
-        return 1;
+        string arg = Str8C(argv[i]);
+        if (Contains(arg, "-cluster"))
+        {
+            settings.clusterCompress = true;
+            i++;
+        }
+        else
+        {
+            filename = Str8C(argv[i]);
+            i++;
+        }
     }
-    Assert(argc == 2);
-    string filename = Str8C(argv[1]);
     if (!(GetFileExtension(filename) == "pbrt"))
     {
         printf("You must pass in a valid PBRT file to convert. Aborting... \n");
@@ -4257,9 +4273,6 @@ int main(int argc, char **argv)
     ValidationMode mode = ValidationMode::Verbose;
     Vulkan *v           = PushStructConstruct(arena, Vulkan)(mode);
     device              = v;
-
-    ConverterSettings settings;
-    // settings.clusterCompress = ?;
 
 #if 0
     openvdb::initialize();
@@ -4281,7 +4294,7 @@ int main(int argc, char **argv)
 #endif
 
 #if 1
-    LoadPBRT(arena, filename);
+    LoadPBRT(settings, arena, filename);
     // string directory = Str8PathChopPastLastSlash(filename);
     // string baseFile  = PathSkipLastSlash(filename);
     //
