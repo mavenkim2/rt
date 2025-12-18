@@ -8,6 +8,7 @@
 #include "math/math_include.h"
 #include "platform.h"
 #include "scene/scene.h"
+#include "shader_interop/hit_shaderinterop.h"
 #include "subdivision.h"
 #include <Ptexture.h>
 
@@ -242,6 +243,17 @@ struct NanoVDBVolume
     }
 };
 #endif
+
+struct Medium
+{
+    virtual GPUMediumType GetType();
+};
+
+struct NanovdbMedium : Medium
+{
+    string filename;
+    virtual GPUMediumType GetType() override;
+};
 
 ////////////////////////////////////////////////////////
 
@@ -608,14 +620,10 @@ struct Scene
 {
     ScenePrimitives scene;
 
-    // ArrayTuple<LightTypes> lights;
-
-    // StaticArray<Light *> lights;
-    // StaticArray<InfiniteLight *> infiniteLights;
-
     // TODO: use my own allocators?
     std::vector<Light *> lights;
     std::vector<InfiniteLight *> infiniteLights;
+    std::vector<Medium *> media;
 
     StaticArray<Material *> materials;
     StaticArray<PtexTexture> ptexTextures;
@@ -695,7 +703,6 @@ DiffuseAreaLight *ParseAreaLight(Arena *arena, Tokenizer *tokenizer, AffineSpace
 Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer, string directory, int *index = 0,
                       FilterType type        = FilterType::CatmullRom,
                       ColorEncoding encoding = ColorEncoding::None);
-
 
 } // namespace rt
 #endif

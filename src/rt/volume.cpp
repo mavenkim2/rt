@@ -472,12 +472,10 @@ static void BuildAdaptiveTetrahedralGrid(const nanovdb::FloatGrid *grid, Command
     int stop = 5;
 }
 
-VolumeData Volumes(CommandBuffer *cmd, Arena *arena)
+VolumeData Volumes(string filename, CommandBuffer *cmd, Arena *arena)
 {
-    // build the octree over all volumes...
-    string filename = "../../data/wdas_cloud/wdas_cloud.nvdb";
-    auto handle     = nanovdb::io::readGrid(std::string((char *)filename.str, filename.size));
-    auto grid       = handle.grid<float>();
+    auto handle = nanovdb::io::readGrid(std::string((char *)filename.str, filename.size));
+    auto grid   = handle.grid<float>();
 
     TransferBuffer vdbDataBuffer = cmd->SubmitBuffer(
         handle.buffer().data(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, handle.buffer().size());

@@ -17,13 +17,13 @@ struct GPUOctreeNode
     int parentIndex;
 };
 
-struct VolumeData 
+struct VolumeData
 {
     StaticArray<GPUOctreeNode> octree;
     TransferBuffer vdbDataBuffer;
 };
 
-VolumeData Volumes(CommandBuffer *cmd, Arena *arena);
+VolumeData Volumes(string filename, CommandBuffer *cmd, Arena *arena);
 } // namespace rt
 
 #endif

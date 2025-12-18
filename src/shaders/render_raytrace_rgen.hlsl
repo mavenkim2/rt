@@ -227,7 +227,7 @@ void main()
         const float g = .877;
 
         bool terminate = false;
-        for (;;)//while (WaveActiveCountBits(!terminate) > (laneCount >> (N + 1)))
+        for (;;)
         {
             VolumeVertexData data;
             done = GetNextVolumeVertex(iterator, dupeRng, data, dupePos, dupeDir);

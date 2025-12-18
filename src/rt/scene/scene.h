@@ -30,6 +30,12 @@ struct TessellationParams
     Mutex mutex;
 };
 
+// how am i going to do this?
+// how do they do it in ecs again? i mean the problem is i don't really think it matters
+// honestly. i feel like what i do want at the end of the day is just an array of everything.
+// like an array of all lights. an array of all mediums. an array of everything. it just
+// makes it so much easier to handle.
+
 struct PrimitiveIndices
 {
     LightHandle lightID;

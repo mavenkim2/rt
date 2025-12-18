@@ -2235,11 +2235,11 @@ void WriteDataType(StringBuilder *builder, ScenePacket *scenePacket, int p,
             Assert(scenePacket->sizes[p] == 1);
             if (*scenePacket->bytes[p] == 0)
             {
-                Put(builder, "false");
+                Put(builder, "false ");
             }
             else
             {
-                Put(builder, "true");
+                Put(builder, "true ");
             }
         }
         break;

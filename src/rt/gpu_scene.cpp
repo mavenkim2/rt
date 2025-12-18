@@ -110,6 +110,12 @@ void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, Geo
         light            = areaLight;
     }
 
+    // Check for medium
+    if (Advance(&tokenizer, "medium "))
+    {
+        Assert(0);
+    }
+
     // Check for alpha
     if (Advance(&tokenizer, "alpha "))
     {
@@ -553,15 +559,13 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         transferCmd->SubmitBuffer(filterValues.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                   sizeof(f32) * filterValues.Length());
 
-    // potential places for bugs
-    // octree build/traversal
-    // tracking
-    VolumeData volumeData = Volumes(transferCmd, arena);
-    TransferBuffer volumeOctreeBuffer =
-        transferCmd->SubmitBuffer(volumeData.octree.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                  sizeof(GPUOctreeNode) * volumeData.octree.Length());
-    int bindlessVdbIndex = device->BindlessStorageIndex(&volumeData.vdbDataBuffer.buffer);
-    Assert(bindlessVdbIndex == 0);
+    // VolumeData volumeData = Volumes(transferCmd, arena);
+    // TransferBuffer volumeOctreeBuffer =
+    //     transferCmd->SubmitBuffer(volumeData.octree.data,
+    //     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+    //                               sizeof(GPUOctreeNode) * volumeData.octree.Length());
+    // int bindlessVdbIndex = device->BindlessStorageIndex(&volumeData.vdbDataBuffer.buffer);
+    // Assert(bindlessVdbIndex == 0);
 
     submitSemaphore.signalValue = 1;
     transferCmd->SignalOutsideFrame(submitSemaphore);
@@ -781,9 +785,63 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         gpuMaterials.Push(material);
     }
 
-    CommandBuffer *newTileCmd          = device->BeginCommandBuffer(QueueType_Compute);
+    // Populate GPU media
+    StaticArray<GPUMedium> gpuMedia(sceneScratch.temp.arena, rootScene->media.size());
+    StaticArray<int> nanovdbIndices(sceneScratch.temp.arena, rootScene->media.size());
+
+    for (int i = 0; i < rootScene->media.size(); i++)
+    {
+        Medium *medium = rootScene->media[i];
+        switch (medium->GetType())
+        {
+            case GPUMediumType::Nanovdb:
+            {
+                nanovdbIndices.Push(i);
+            }
+            break;
+            case GPUMediumType::Homogeneous:
+            {
+                // TODO: not implemented yet
+                Assert(0);
+                GPUMedium medium;
+                medium.mediumType = medium.mediumType;
+                gpuMedia.Push(medium);
+            }
+            break;
+            default: Assert(0);
+        }
+    }
+
+    CommandBuffer *newTileCmd = device->BeginCommandBuffer(QueueType_Compute);
+    for (int index : nanovdbIndices)
+    {
+        NanovdbMedium *medium = (NanovdbMedium *)rootScene->media[index];
+        VolumeData volumeData = Volumes(medium->filename, newTileCmd, arena);
+
+        TransferBuffer volumeOctreeBuffer = newTileCmd->SubmitBuffer(
+            volumeData.octree.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            sizeof(GPUOctreeNode) * volumeData.octree.Length());
+
+        int bindlessOctreeIndex = device->BindlessStorageIndex(&volumeOctreeBuffer.buffer);
+        int bindlessVdbIndex = device->BindlessStorageIndex(&volumeData.vdbDataBuffer.buffer);
+
+        GPUMedium gpuMedium                  = {};
+        gpuMedium.mediumType                 = GPUMediumType::Nanovdb;
+        gpuMedium.bindlessOctreeIndex        = bindlessOctreeIndex;
+        gpuMedium.bindlessNanovdbBufferIndex = bindlessVdbIndex;
+        gpuMedia.Push(gpuMedium);
+    }
+
+    // Process nanovdb media properly
+
     Semaphore newTileSubmitSemaphore   = device->CreateSemaphore();
     newTileSubmitSemaphore.signalValue = 1;
+
+    GPUBuffer mediumBuffer =
+        newTileCmd
+            ->SubmitBuffer(gpuMedia.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                           sizeof(GPUMedium) * gpuMedia.Length())
+            .buffer;
     GPUBuffer materialBuffer =
         newTileCmd
             ->SubmitBuffer(gpuMaterials.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,

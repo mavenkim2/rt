@@ -85,6 +85,8 @@ GPUMaterial DisneyMaterial::ConvertToGPU()
     return result;
 }
 
+virtual GPUMediumType NanovdbMedium::GetType() { return GPUMediumType::Nanovdb; }
+
 void Texture::Start(ShadingThreadState *) {}
 
 PtexTexture::PtexTexture(string filename, FilterType filterType, ColorEncoding encoding,

@@ -51,6 +51,36 @@ struct GPUMaterial
     bool thin;
 };
 
+enum class GPULightType
+{
+    Area,
+    Directional,
+};
+
+// why this way?
+// 1. if i want to switch to per type arrays, i feel like this would be the least painful way
+// 2. it lets me just have every light/medium in one array
+
+struct GPULight
+{
+    GPULightType lightType;
+};
+
+enum class GPUMediumType
+{
+    Homogeneous,
+    Nanovdb,
+};
+
+struct GPUMedium
+{
+    GPUMediumType mediumType;
+
+    // Nanovdb parameters
+    int bindlessOctreeIndex;
+    int bindlessNanovdbBufferIndex;
+};
+
 #ifdef __cplusplus
 }
 #endif
