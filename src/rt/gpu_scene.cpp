@@ -57,80 +57,6 @@ using PFun_oidnReleaseBuffer     = void(OIDNBuffer buffer);
 using PFun_oidnRemoveFilterImage = void(OIDNFilter filter, const char *name);
 using PFun_oidnUpdateFilterData  = void(OIDNFilter filter, const char *name);
 
-void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, GeometryType type,
-                          string directory, AffineSpace &worldFromRender,
-                          AffineSpace &renderFromWorld, Tokenizer &tokenizer,
-                          MaterialHashMap *materialHashMap, Mesh &mesh,
-                          ChunkedLinkedList<Mesh, MemoryType_Shape> &shapes,
-                          ChunkedLinkedList<PrimitiveIndices, MemoryType_Shape> &indices,
-                          ChunkedLinkedList<Light *, MemoryType_Light> &lights)
-{
-    PrimitiveIndices &primIndices = indices.AddBack();
-
-    MaterialHandle materialHandle;
-    LightHandle lightHandle;
-    Texture *alphaTexture   = 0;
-    DiffuseAreaLight *light = 0;
-
-    // TODO: handle instanced mesh lights
-    AffineSpace *transform = 0;
-
-    // Check for material
-    if (Advance(&tokenizer, "m "))
-    {
-        Assert(materialHashMap);
-        string materialName      = ReadWord(&tokenizer);
-        const MaterialNode *node = materialHashMap->Get(materialName);
-        if (!node)
-        {
-            materialHandle = MaterialHandle(MaterialTypes::Diffuse, 1);
-        }
-        else
-        {
-            materialHandle = node->handle;
-        }
-    }
-
-    if (Advance(&tokenizer, "transform "))
-    {
-        u32 transformIndex = ReadInt(&tokenizer);
-        SkipToNextChar(&tokenizer);
-    }
-
-    // Check for area light
-    if (Advance(&tokenizer, "a "))
-    {
-        ErrorExit(type == GeometryType::QuadMesh, "Only quad area lights supported for now\n");
-        Assert(transform);
-
-        DiffuseAreaLight *areaLight =
-            ParseAreaLight(arena, &tokenizer, transform, sceneID, shapes.totalCount - 1);
-        lightHandle      = LightHandle(LightClass::DiffuseAreaLight, lights.totalCount);
-        lights.AddBack() = areaLight;
-        light            = areaLight;
-    }
-
-    // Check for medium
-    if (Advance(&tokenizer, "medium "))
-    {
-        Assert(0);
-    }
-
-    // Check for alpha
-    if (Advance(&tokenizer, "alpha "))
-    {
-        Texture *alphaTexture = ParseTexture(arena, &tokenizer, directory);
-
-        // TODO: this is also a hack: properly evaluate whether the alpha is
-        // always 0
-        if (lightHandle)
-        {
-            light->type = LightType::DeltaPosition;
-        }
-    }
-    primIndices = PrimitiveIndices(lightHandle, materialHandle, alphaTexture);
-}
-
 static void FlattenInstances(ScenePrimitives *currentScene, const AffineSpace &transform,
                              Array<Instance> &instances, Array<AffineSpace> &transforms)
 {
@@ -1561,8 +1487,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                    &debug = shaderDebugBuffers[currentBuffer].buffer, &materialBuffer,
                    &faceDataBuffer, &virtualTextureManager, &virtualGeometryManager,
                    imageHandle = image, &depthBuffer, &readback, &normals, albedoHandle,
-                   currentBuffer, &debugBuffer, &filterValuesBuffer, &filterCDFBuffer,
-                   &volumeOctreeBuffer](CommandBuffer *cmd) {
+                   currentBuffer, &debugBuffer, &filterValuesBuffer,
+                   &filterCDFBuffer](CommandBuffer *cmd) {
                       RenderGraph *rg  = GetRenderGraph();
                       GPUImage *image  = rg->GetImage(imageHandle);
                       GPUImage *albedo = rg->GetImage(albedoHandle);
@@ -1607,7 +1533,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                           .Bind(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer)
                           .Bind(&filterCDFBuffer.buffer)
                           .Bind(&filterValuesBuffer.buffer)
-                          .Bind(&volumeOctreeBuffer.buffer)
+                          // TODO IMPORTANT BINDLESS
+                          // .Bind(&volumeOctreeBuffer.buffer)
                           .PushConstants(&pushConstant, &pc)
                           .End();
 

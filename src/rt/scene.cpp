@@ -29,8 +29,6 @@ namespace rt
 //////////////////////////////
 // Scene
 //
-Scene *scene_;
-
 struct SceneLoadTable
 {
     struct Node
@@ -44,6 +42,22 @@ struct SceneLoadTable
     std::atomic<Node *> *nodes;
     u32 count;
 };
+
+struct RTSceneLoadState
+{
+    SceneLoadTable table;
+    HashIndex materialHashMap;
+    std::vector<string> materialNames;
+    std::vector<MaterialHandle> materialHandles;
+
+    Mutex mutex;
+    std::vector<ScenePrimitives *> scenes;
+
+    Mutex lightMutex;
+    std::vector<Light *> *lights;
+};
+
+Scene *scene_;
 
 GPUMaterial Material::ConvertToGPU() { return {}; }
 
@@ -85,7 +99,7 @@ GPUMaterial DisneyMaterial::ConvertToGPU()
     return result;
 }
 
-virtual GPUMediumType NanovdbMedium::GetType() { return GPUMediumType::Nanovdb; }
+GPUMediumType NanovdbMedium::GetType() { return GPUMediumType::Nanovdb; }
 
 void Texture::Start(ShadingThreadState *) {}
 
@@ -270,18 +284,6 @@ struct ConstantVectorTexture : Texture
     }
 };
 
-struct RTSceneLoadState
-{
-    SceneLoadTable table;
-    MaterialHashMap *map = 0;
-
-    Mutex mutex;
-    std::vector<ScenePrimitives *> scenes;
-
-    Mutex lightMutex;
-    std::vector<Light *> *lights;
-};
-
 i32 ReadIntBytes(Tokenizer *tokenizer)
 {
     i32 value = *(i32 *)(tokenizer->cursor);
@@ -452,20 +454,19 @@ void ReadDielectricMaterial(Arena *arena, Tokenizer *tokenizer, string directory
     new (mat) DielectricMaterial(uRoughness, vRoughness, eta);
 }
 
-MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *tokenizer,
-                                 string directory)
+void CreateMaterials(RTSceneLoadState *state, Arena *arena, Arena *tempArena,
+                     Tokenizer *tokenizer, string directory)
 {
     Scene *scene = GetScene();
 
-    // TODO: I have no idea why this errored out?
-    // ChunkedLinkedList<Material *, 1024> materialsList(tempArena);
+    std::vector<string> &materialNames           = state->materialNames;
+    std::vector<MaterialHandle> &materialHandles = state->materialHandles;
+
     std::vector<Material *> materialsList;
     scene->ptexTextures                = StaticArray<PtexTexture>(arena, 50000);
     NullMaterial *nullMaterial         = PushStructConstruct(arena, NullMaterial)();
     nullMaterial->ptexReflectanceIndex = -1;
     materialsList.push_back(nullMaterial);
-
-    MaterialHashMap *table = PushStructConstruct(tempArena, MaterialHashMap)(tempArena, 8192);
 
     while (!Advance(tokenizer, "MATERIALS_END "))
     {
@@ -490,12 +491,11 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
         SkipToNextChar(tokenizer);
         Assert(materialTypeIndex != MaterialTypes::Max);
 
-        // Add to hash table
-        table->Add(tempArena,
-                   MaterialNode{PushStr8Copy(tempArena, materialName),
-                                MaterialHandle(materialTypeIndex, materialsList.size())});
+        materialNames.push_back(PushStr8Copy(tempArena, materialName));
+        materialHandles.push_back(MaterialHandle(materialTypeIndex, materialsList.size()));
 
         materialsList.emplace_back();
+
         Material **material      = &materialsList.back();
         int ptexReflectanceIndex = -1;
         switch (materialTypeIndex)
@@ -648,8 +648,6 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
     MemoryCopy(scene->materials.data, materialsList.data(),
                sizeof(Material *) * materialsList.size());
     scene->materials.size_ = materialsList.size();
-
-    return table;
 }
 
 u8 *ReadDataPointer(Tokenizer *tokenizer, Tokenizer *dataTokenizer, string p)
@@ -710,6 +708,83 @@ Mesh ProcessMesh(Arena *arena, Mesh &mesh)
     return newMesh;
 }
 
+void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, GeometryType type,
+                          string directory, AffineSpace &worldFromRender,
+                          AffineSpace &renderFromWorld, Tokenizer &tokenizer,
+                          RTSceneLoadState *state, Mesh &mesh,
+                          ChunkedLinkedList<Mesh, MemoryType_Shape> &shapes,
+                          ChunkedLinkedList<PrimitiveIndices, MemoryType_Shape> &indices,
+                          ChunkedLinkedList<Light *, MemoryType_Light> &lights)
+{
+    PrimitiveIndices &primIndices = indices.AddBack();
+
+    MaterialHandle materialHandle;
+    LightHandle lightHandle;
+    Texture *alphaTexture   = 0;
+    DiffuseAreaLight *light = 0;
+
+    // TODO: handle instanced mesh lights
+    AffineSpace *transform = 0;
+
+    // Check for material
+    if (Advance(&tokenizer, "m "))
+    {
+        Assert(state->materialHandles.size() && state->materialNames.size());
+        string materialName = ReadWord(&tokenizer);
+
+        int hash       = Hash(materialName);
+        materialHandle = MaterialHandle(MaterialTypes::Diffuse, 1);
+        for (int hashIndex = state->materialHashMap.FirstInHash(hash); hashIndex != -1;
+             hashIndex     = state->materialHashMap.NextInHash(hashIndex))
+        {
+            if (state->materialNames[hashIndex] == materialName)
+            {
+                materialHandle = state->materialHandles[hashIndex];
+                break;
+            }
+        }
+    }
+
+    if (Advance(&tokenizer, "transform "))
+    {
+        u32 transformIndex = ReadInt(&tokenizer);
+        SkipToNextChar(&tokenizer);
+    }
+
+    // Check for area light
+    if (Advance(&tokenizer, "a "))
+    {
+        ErrorExit(type == GeometryType::QuadMesh, "Only quad area lights supported for now\n");
+        Assert(transform);
+
+        DiffuseAreaLight *areaLight =
+            ParseAreaLight(arena, &tokenizer, transform, sceneID, shapes.totalCount - 1);
+        lightHandle      = LightHandle(LightClass::DiffuseAreaLight, lights.totalCount);
+        lights.AddBack() = areaLight;
+        light            = areaLight;
+    }
+
+    // Check for medium
+    if (Advance(&tokenizer, "medium "))
+    {
+        Assert(0);
+    }
+
+    // Check for alpha
+    if (Advance(&tokenizer, "alpha "))
+    {
+        Texture *alphaTexture = ParseTexture(arena, &tokenizer, directory);
+
+        // TODO: this is also a hack: properly evaluate whether the alpha is
+        // always 0
+        if (lightHandle)
+        {
+            light->type = LightType::DeltaPosition;
+        }
+    }
+    primIndices = PrimitiveIndices(lightHandle, materialHandle, alphaTexture);
+}
+
 void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                  ScenePrimitives *scene, string directory, string filename,
                  Scheduler::Counter *counter, AffineSpace *renderFromWorld = 0,
@@ -731,8 +806,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
     Arena *arena     = arenas[threadIndex];
     Arena *tempArena = tempArenas[threadIndex];
 
-    auto *table           = &state->table;
-    auto *materialHashMap = state->map;
+    auto *table = &state->table;
 
     string fullFilePath = StrConcat(temp.arena, directory, filename);
     string dataPath =
@@ -930,9 +1004,8 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
 
                     shapes.AddBack() = ProcessMesh(arena, mesh);
                     AddMaterialAndLights(arena, scene, sceneID, type, directory,
-                                         worldFromRender, *renderFromWorld, tokenizer,
-                                         materialHashMap, shapes.Last(), shapes, indices,
-                                         lights);
+                                         worldFromRender, *renderFromWorld, tokenizer, state,
+                                         shapes.Last(), shapes, indices, lights);
 
                     threadMemoryStatistics[threadIndex].totalShapeMemory +=
                         mesh.numVertices * (sizeof(Vec3f) * 2 + sizeof(Vec2f)) +
@@ -947,9 +1020,8 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
 
                     shapes.AddBack() = ProcessMesh(arena, mesh);
                     AddMaterialAndLights(arena, scene, sceneID, type, directory,
-                                         worldFromRender, *renderFromWorld, tokenizer,
-                                         materialHashMap, shapes.Last(), shapes, indices,
-                                         lights);
+                                         worldFromRender, *renderFromWorld, tokenizer, state,
+                                         shapes.Last(), shapes, indices, lights);
 
                     threadMemoryStatistics[threadIndex].totalShapeMemory +=
                         mesh.numVertices * (sizeof(Vec3f) * 2 + sizeof(Vec2f)) +
@@ -964,9 +1036,8 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
 
                     shapes.AddBack() = ProcessMesh(tempArena, mesh);
                     AddMaterialAndLights(arena, scene, sceneID, type, directory,
-                                         worldFromRender, *renderFromWorld, tokenizer,
-                                         materialHashMap, shapes.Last(), shapes, indices,
-                                         lights);
+                                         worldFromRender, *renderFromWorld, tokenizer, state,
+                                         shapes.Last(), shapes, indices, lights);
                 }
                 else
                 {
@@ -1013,9 +1084,8 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
         }
         else if (Advance(&tokenizer, "MATERIALS_START "))
         {
-            hasMaterials    = true;
-            materialHashMap = CreateMaterials(arena, tempArena, &tokenizer, directory);
-            state->map      = materialHashMap;
+            hasMaterials = true;
+            CreateMaterials(state, arena, tempArena, &tokenizer, directory);
         }
         else
         {

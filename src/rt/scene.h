@@ -642,16 +642,6 @@ struct Scene
 extern Scene *scene_;
 inline Scene *GetScene() { return scene_; }
 
-struct MaterialNode
-{
-    string str;
-    MaterialHandle handle;
-
-    u32 Hash() const { return rt::Hash(str); }
-    bool operator==(const MaterialNode &m) const { return str == m.str; }
-    bool operator==(string s) const { return s == str; }
-};
-
 struct RenderParams2
 {
     string directory;
@@ -689,8 +679,6 @@ struct RenderParams2
     f32 lensRadius  = 0.f;
     f32 focalLength = 0.f;
 };
-
-typedef HashMap<MaterialNode> MaterialHashMap;
 
 template <GeometryType type>
 void ComputeTessellationParams(Mesh *meshes, TessellationParams *params, u32 start, u32 count);
