@@ -6,6 +6,7 @@
 namespace rt
 {
 
+typedef Vec2f float2;
 typedef Vec3f float3;
 typedef Vec4f float4;
 typedef Mat4 float4x4;

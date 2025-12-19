@@ -64,6 +64,12 @@ enum class GPULightType
 struct GPULight
 {
     GPULightType lightType;
+
+    float3x4 transform;
+    float3 color;
+
+    // Area light info
+    float2 dim;
 };
 
 enum class GPUMediumType

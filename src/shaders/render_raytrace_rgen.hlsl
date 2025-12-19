@@ -23,6 +23,7 @@
 #include "voxel.hlsli"
 #include "lights_temp.hlsli"
 #include "lights/envmap.hlsli"
+#include "lights/light.hlsli"
 #include "volume/volume.hlsli"
 
 #if 1
@@ -56,6 +57,7 @@ RWStructuredBuffer<float3> normals : register(u23);
 StructuredBuffer<float> filterCDF : register(t26);
 StructuredBuffer<float> filterValues : register(t27);
 
+//StructuredBuffer<uint> kdTreeDims : register(t28);
 //StructuredBuffer<uint> kdTreeDims : register(t28);
 
 [[vk::push_constant]] RayPushConstant push;
