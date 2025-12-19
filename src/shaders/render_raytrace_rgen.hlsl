@@ -5,7 +5,6 @@
 #include "hit.hlsli"
 #include "bsdf/bxdf.hlsli"
 #include "bsdf/bsdf.hlsli"
-#include "bsdf/disney_bsdf.hlsli"
 #include "rt.hlsli"
 #include "ray_triangle_intersection.hlsli"
 #include "sampling.hlsli"

@@ -10,7 +10,7 @@
 #include "../lights/envmap.hlsli"
 #include "../tex/ray_cones.hlsli"
 #include "../wave_intrinsics.hlsli"
-#include "../bsdf/disney_bsdf.hlsli"
+#include "../bsdf/bsdf.hlsli"
 #include "../rt.hlsli"
 
 RaytracingAccelerationStructure accel : register(t0);
@@ -323,7 +323,7 @@ void main(uint3 dtID: SV_DispatchThreadID)
 
     uint2 virtualPage = ~0u;
     float bsdfPdf;
-    dir = SampleDisney(material, sample3, reflectance.xyz, throughput, wo, bsdfPdf);
+    dir = SampleBSDF(material, sample3, reflectance.xyz, throughput, wo, bsdfPdf);
 
     if (dir.z == 0) return;
 
