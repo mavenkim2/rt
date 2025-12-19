@@ -55,6 +55,7 @@ enum class GPULightType
 {
     Area,
     Directional,
+    Envmap,
 };
 
 // why this way?
@@ -66,10 +67,16 @@ struct GPULight
     GPULightType lightType;
 
     float3x4 transform;
+
+    // Constant or Image
     float3 color;
+    int bindlessIndex;
 
     // Area light info
     float2 dim;
+
+    // Directional light info
+    float3 dir;
 };
 
 enum class GPUMediumType

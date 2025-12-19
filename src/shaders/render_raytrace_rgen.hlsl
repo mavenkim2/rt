@@ -34,7 +34,7 @@
 #include "nvidia/clas.hlsli"
 #endif
 
-//RaytracingAccelerationStructure accel : register(t0);
+RaytracingAccelerationStructure accel : register(t0);
 RWTexture2D<half4> image : register(u1);
 ConstantBuffer<GPUScene> scene : register(b2);
 StructuredBuffer<GPUMaterial> materials : register(t4);
@@ -57,7 +57,6 @@ RWStructuredBuffer<float3> normals : register(u23);
 StructuredBuffer<float> filterCDF : register(t26);
 StructuredBuffer<float> filterValues : register(t27);
 
-//StructuredBuffer<uint> kdTreeDims : register(t28);
 //StructuredBuffer<uint> kdTreeDims : register(t28);
 
 [[vk::push_constant]] RayPushConstant push;
@@ -285,40 +284,6 @@ void main()
             GetNextVolumeVertexSpeculative(iterator, dupeRng, data, dupePos, dupeDir, numSteps);
         }
 
-#if 0
-        // Virtual density segments
-        {
-            float3 reservoirPosition;
-            float totalWeight = 0.f;
-            float u = rng.Uniform();
-
-            float weight = 0.f;
-            // weight = transmittance * phaseFunction * density * 
-
-            totalWeight += weight;
-            float prob = weight / totalWeight;
-
-            if (u < prob)
-            {
-                u /= prob;
-                reservoirPosition = 0.f;
-            }
-            else 
-            {
-                u = (u - prob) / (1 - prob);
-            }
-        }
-
-        // what else can we do in volumes???
-        // render other volumes ...
-        // better sampling/other light sources?
-        //      - the thing is this is just path guiding
-        //      - like the indirect illumination thing they mention in the VDS paper
-        //      - why not just path guide?
-        //      - the end goal is caustics in a homogeneous water volumetric medium
-        // atmosphere scattering...
-#endif
-
         // NEE
 #if 0
         bool escaped = false;
@@ -393,7 +358,7 @@ void main()
     }
 #endif
 
-#if 0
+#if 1
     while (true)
     {
         RayDesc desc;
@@ -697,103 +662,20 @@ void main()
         // NEE
         if (!(material.roughness == 0.f && material.specTrans == 1.f))
         {
-            float lightSample = rng.Uniform();
-            float weightTotal = 0.f;
-            uint lightSampleIndex = 0;
-            float chosenImportance = 0.f;
-
-            // TODO hardcoded
-            for (int i = 0; i < 22; i++)
-            {
-                float4 color = areaLightColors[i];
-
-                float importance = .3 * color.x + .6 * color.y + .1 * color.z;
-                weightTotal += importance;
-                float prob = importance / weightTotal;
-
-                if (lightSample < prob)
-                {
-                    lightSample /= prob;
-                    lightSampleIndex = i;
-                    chosenImportance = importance;
-                }
-                else 
-                {
-                    lightSample = (lightSample - prob) / (1 - prob);
-                }
-            }
-            float lightPdf = chosenImportance / weightTotal;
-            float3 lightSampleDirection;
+            float lightPdf;
+            int lightSampleIndex = PowerSampleLight(rng.Uniform(), lightPdf);
 
             float2 lightDirSample = rng.Uniform2D();
-            float tMax = FLT_MAX;
-            bool deltaLight = false;
-
-            if (lightSample < .1)
-            {
-                lightSampleDirection = SampleUniformSphere(lightDirSample);
-                lightPdf = .1f / (4 * PI);
-                deltaLight = true;
-            }
-            else 
-            {
-                float2 areaLightDim = areaLightDims[lightSampleIndex];
-
-                float3 p[4] = 
-                {
-                    float3(areaLightDim.x, areaLightDim.y, 0.f) / 2,
-                    float3(-areaLightDim.x, areaLightDim.y, 0.f) / 2,
-                    float3(-areaLightDim.x, -areaLightDim.y, 0.f) / 2,
-                    float3(areaLightDim.x, -areaLightDim.y, 0.f) / 2,
-                };
-
-                float3x4 areaLightTransform = areaLightTransforms[lightSampleIndex];
-                Translate(areaLightTransform, -scene.cameraBase);
-
-                p[0] = mul(areaLightTransform, float4(p[0], 1));
-                p[1] = mul(areaLightTransform, float4(p[1], 1));
-                p[2] = mul(areaLightTransform, float4(p[2], 1));
-                p[3] = mul(areaLightTransform, float4(p[3], 1));
-
-                float3 v00 = normalize(p[0] - origin);
-                float3 v10 = normalize(p[1] - origin);
-                float3 v01 = normalize(p[3] - origin);
-                float3 v11 = normalize(p[2] - origin);
-
-                float3 p01        = p[1] - p[0];
-                float3 p02        = p[2] - p[0];
-                float3 p03        = p[3] - p[0];
-                float3 lightSamplePos;
-                float area0        = 0.5f * length(cross(p01, p02));
-                float area1        = 0.5f * length(cross(p02, p03));
-
-                float div  = 1.f / (area0 + area1);
-                float prob = area0 * div;
-                // Then sample the triangle by area
-                if (lightDirSample[0] < prob)
-                {
-                    lightDirSample[0]       = lightDirSample[0] / prob;
-                    float3 bary = SampleUniformTriangle(lightDirSample);
-                    lightSamplePos = bary[0] * p[0] + bary[1] * p[1] + bary[2] * p[2];
-                }
-                else
-                {
-                    lightDirSample[0]       = (lightDirSample[0] - prob) / (1 - prob);
-                    float3 bary = SampleUniformTriangle(lightDirSample);
-                    lightSamplePos = bary[0] * p[0] + bary[1] * p[2] + bary[2] * p[3];
-                }
-                lightSampleDirection = normalize(lightSamplePos - origin);
-                float samplePointPdf = div * length2(origin - lightSamplePos) / abs(dot(hitInfo.n, lightSampleDirection));
-                lightPdf *= .9f * samplePointPdf;
-                tMax = length(origin - lightSamplePos) * .99f;
-            }
+            LightSample lightSample = SampleLightDir(lights[lightSampleIndex], lightDirSample, origin, hitInfo.n);
 
             float lightBsdfPdf = 0.f;
-            float3 wi = normalize(float3(dot(hitInfo.ss, lightSampleDirection), 
-                                         dot(frameY, lightSampleDirection),
-                                         dot(hitInfo.n, lightSampleDirection)));
+            float3 wi = normalize(float3(dot(hitInfo.ss, lightSample.dir), 
+                                         dot(frameY, lightSample.dir),
+                                         dot(hitInfo.n, lightSample.dir)));
             float3 bsdfVal = EvaluateDisney(material, reflectance.xyz, wo, wi, lightBsdfPdf)
-                             * abs(dot(hitInfo.n, lightSampleDirection));
+                             * abs(dot(hitInfo.n, lightSample.dir));
+
+            // TODO: ?????
             lightBsdfPdf = 0;
 
             if (all(bsdfVal > 0.f))
@@ -801,9 +683,9 @@ void main()
                 RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> occludedQuery;
                 RayDesc occludedDesc;
                 occludedDesc.Origin = OffsetRayOrigin(origin, hitInfo.gn, printDebug);
-                occludedDesc.Direction = lightSampleDirection;
+                occludedDesc.Direction = lightSample.dir;
                 occludedDesc.TMin = 0.f;
-                occludedDesc.TMax = tMax;
+                occludedDesc.TMax = lightSample.tMax;
                 occludedQuery.TraceRayInline(accel, RAY_FLAG_NONE, 0xff, occludedDesc);
 
                 occludedQuery.Proceed();
@@ -811,9 +693,7 @@ void main()
                 if (occludedQuery.CommittedStatus() == COMMITTED_NOTHING)
                 {
                     float weight = Sqr(lightPdf) / (Sqr(lightBsdfPdf) + Sqr(lightPdf));
-                    float3 L = deltaLight ? 
-                                EnvMapLe(scene.lightFromRender, push.envMap, lightSampleDirection)
-                                : areaLightColors[lightSampleIndex].xyz;
+                    float3 L = lightSample.radiance;
                     
                     float3 r = throughput * bsdfVal * weight * L / lightPdf;
                     //float3 r = throughput * bsdfVal * L / lightPdf;
