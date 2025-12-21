@@ -66,7 +66,7 @@ struct GPULight
 {
     GPULightType lightType;
 
-    float3x4 transform;
+    float3x4 renderFromLight;
 
     // Constant or Image
     float3 color;

@@ -711,6 +711,15 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         gpuMaterials.Push(material);
     }
 
+    // Populate GPU lights
+    StaticArray<GPULight> gpuLights(sceneScratch.temp.arena, rootScene->lights.size());
+
+    for (int i = 0; i < rootScene->lights.size(); i++)
+    {
+        GPULight light = rootScene->lights[i]->ConvertToGPU();
+        gpuLights.Push(light);
+    }
+
     // Populate GPU media
     StaticArray<GPUMedium> gpuMedia(sceneScratch.temp.arena, rootScene->media.size());
     StaticArray<int> nanovdbIndices(sceneScratch.temp.arena, rootScene->media.size());
@@ -772,6 +781,12 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         newTileCmd
             ->SubmitBuffer(gpuMaterials.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                            sizeof(GPUMaterial) * gpuMaterials.Length())
+            .buffer;
+
+    GPUBuffer lightBuffer =
+        newTileCmd
+            ->SubmitBuffer(gpuLights.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                           sizeof(GPULight) * gpuLights.Length())
             .buffer;
 
     GPUBuffer faceDataBuffer =

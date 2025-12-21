@@ -8,6 +8,11 @@
 
 StructuredBuffer<GPULight> lights : register(t30);
 
+interface Light 
+{
+    float3 SampleLight();
+};
+
 struct LightSample 
 {
     float3 dir;
@@ -31,7 +36,8 @@ LightSample SampleEnvmapLight(GPULight light, float2 u, float3 hitPos, float3 hi
     float pdf = 1.f/ (4 * PI); 
     bool deltaLight = true;
 
-    float3 L = EnvMapLe(light.transform, light.bindlessIndex, lightSampleDirection);
+    float3x4 lightFromRender = Inverse(light.renderFromLight);
+    float3 L = EnvMapLe(lightFromRender, light.bindlessIndex, lightSampleDirection);
     LightSample sample;
     sample.Init(lightSampleDirection, FLT_MAX, L, pdf);
     return sample;
@@ -55,7 +61,7 @@ LightSample SampleAreaLight(GPULight light, float2 u, float3 hitPos, float3 hitN
         float3(areaLightDim.x, -areaLightDim.y, 0.f) / 2,
     };
     
-    float3x4 areaLightTransform = light.transform;
+    float3x4 areaLightTransform = light.renderFromLight;
 
     // TODO: the camera transform should just be baked into this
     float3 cameraBase;

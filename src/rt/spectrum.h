@@ -669,6 +669,7 @@ struct RGBIlluminantSpectrum : Spectrum
 
 f32 SpectrumToPhotometric(const RGBIlluminantSpectrum &s);
 f32 SpectrumToPhotometric(const DenselySampledSpectrum &s);
+Vec3f SpectrumToXYZ(const Spectrum *s);
 
 } // namespace rt
 

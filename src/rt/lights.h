@@ -5,6 +5,7 @@
 #include "math/spherical_harmonics.h"
 #include "image.h"
 #include "surface_interaction.h"
+#include "shader_interop/hit_shaderinterop.h"
 #include "spectrum.h"
 
 namespace rt
@@ -77,6 +78,7 @@ struct Light
     virtual SampledSpectrum Le(const Vec3f &n, const Vec3f &w,
                                const SampledWavelengths &lambda) = 0;
     virtual f32 Importance(const Vec3f &p, const Vec3f &n)       = 0;
+    virtual GPULight ConvertToGPU() { return {}; }
 };
 
 struct InfiniteLight : Light
@@ -97,6 +99,8 @@ struct InfiniteLight : Light
 struct DiffuseAreaLight : Light
 {
     const DenselySampledSpectrum *Lemit;
+    Vec3f rgbLemit;
+
     AffineSpace *renderFromLight;
 
     f32 scale = 1.f;
@@ -117,6 +121,7 @@ struct DiffuseAreaLight : Light
     virtual SampledSpectrum Le(const Vec3f &n, const Vec3f &w,
                                const SampledWavelengths &lambda) override;
     virtual f32 Importance(const Vec3f &p, const Vec3f &n) override;
+    virtual GPULight ConvertToGPU() override;
     // DiffuseAreaLight(Vec3f *p, f32 scale, Spectrum Lemit)
     //     : p(p), scale(scale), Lemit(LookupSpectrum(Lemit))
     // {

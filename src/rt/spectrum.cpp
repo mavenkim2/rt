@@ -25,7 +25,7 @@ f32 SpectrumToPhotometric(const DenselySampledSpectrum &s)
     return InnerProduct(&Spectra::Y(), &s);
 }
 
-Vec3f SpectrumToXYZ(Spectrum *s)
+Vec3f SpectrumToXYZ(const Spectrum *s)
 {
     return Vec3f(InnerProduct(&Spectra::X(), s), InnerProduct(&Spectra::Y(), s),
                  InnerProduct(&Spectra::Z(), s)) /

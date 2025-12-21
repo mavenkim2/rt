@@ -25,13 +25,11 @@
 #include "lights/light.hlsli"
 #include "volume/volume.hlsli"
 
-#if 1
 //[[vk::ext_capability(ShaderInvocationReorderNV)]]
 //[[vk::ext_extension("SPV_NV_shader_invocation_reorder")]]
 [[vk::ext_capability(RayTracingClusterAccelerationStructureNV)]]
 [[vk::ext_extension("SPV_NV_cluster_acceleration_structure")]]
 #include "nvidia/clas.hlsli"
-#endif
 
 RaytracingAccelerationStructure accel : register(t0);
 RWTexture2D<half4> image : register(u1);
@@ -177,7 +175,7 @@ void main()
     // p ratio (nee)
 
     // temp volume rendering...
-#if 1
+#if 0
     RNG dupeRng = rng;
     float3 dupePos = pos;
     float3 dupeDir = dir;

@@ -173,6 +173,37 @@ f32 DiffuseAreaLight::Importance(const Vec3f &point, const Vec3f &n)
     return irradiance;
 }
 
+GPULight DiffuseAreaLight::ConvertToGPU()
+{
+    GPULight light  = {};
+    light.lightType = GPULightType::Area;
+
+    // TODO: hardcoded colorspace SRGB
+    light.color           = rgbLemit.x == 0.f && rgbLemit.y == 0.f && rgbLemit.z == 0.f
+                                ? RGBColorSpace::sRGB->ToRGB(SpectrumToXYZ(Lemit))
+                                : rgbLemit;
+    light.renderFromLight = *renderFromLight;
+
+    // TODO: this is hardcoded for quad area lights atm
+    Vec3f p[4];
+    ScenePrimitives **scenes = GetScenes();
+    Mesh *mesh               = (Mesh *)scenes[sceneID]->primitives + geomID;
+    Assert(mesh->numVertices == 4 && !mesh->indices);
+    p[0] = mesh->p[0];
+    p[1] = mesh->p[1];
+    p[2] = mesh->p[2];
+    p[3] = mesh->p[3];
+
+    // implement sample bsdf
+    // implement evaluate bsdf
+    // implement emitter intersection
+    // implement volumetric integration w/ surface integration
+    // normal geometry, normal triangle bvhs
+
+    // light.dim = ;
+    return light;
+}
+
 //////////////////////////////
 // Distant Light
 //
