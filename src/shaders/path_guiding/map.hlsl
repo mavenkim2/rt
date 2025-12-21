@@ -25,4 +25,6 @@ void main(uint3 dtID : SV_DispatchThreadID)
         weight = (weightPrior + weight) / (weightPrior * vmm.numComponents + numSamples);
         vmm.weights[i] = weight;
     }
+
+    // update directions and concentrations
 }
