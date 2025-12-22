@@ -11,6 +11,15 @@ namespace rt
 #define PATH_GUIDING_GROUP_SIZE 32
 #define MAX_COMPONENTS          32
 
+struct VMM
+{
+    float kappas[MAX_COMPONENTS];
+    float3 directions[MAX_COMPONENTS];
+    float weights[MAX_COMPONENTS];
+
+    uint numComponents;
+};
+
 struct PathGuidingSample
 {
     float3 pos;

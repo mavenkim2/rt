@@ -29,7 +29,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
         {
             float phi = 2.0f * PI * ((float)n / gr);
             float z = 1.0f - ((2.0f * n + 1.0f) / float(l + 1));
-            float sinTheta = sqrt(1.f - max(z * z, 1.f));
+            float sinTheta = sqrt(1.f - min(z * z, 1.f));
 
             // cos(theta) = z
             // sin(theta) = sin(arccos(z)) = sqrt(1 - z^2)

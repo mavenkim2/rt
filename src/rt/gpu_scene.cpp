@@ -8,6 +8,7 @@
 #include "gpu_scene.h"
 #include "lights.h"
 #include "math/simd_base.h"
+#include "path_guiding.h"
 #include "radix_sort.h"
 #include "random.h"
 #include "shader_interop/hierarchy_traversal_shaderinterop.h"
@@ -721,9 +722,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     }
 
     // Populate GPU media
+    CommandBuffer *newTileCmd = device->BeginCommandBuffer(QueueType_Compute);
     StaticArray<GPUMedium> gpuMedia(sceneScratch.temp.arena, rootScene->media.size());
     StaticArray<int> nanovdbIndices(sceneScratch.temp.arena, rootScene->media.size());
 
+#if 0
     for (int i = 0; i < rootScene->media.size(); i++)
     {
         Medium *medium = rootScene->media[i];
@@ -747,7 +750,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         }
     }
 
-    CommandBuffer *newTileCmd = device->BeginCommandBuffer(QueueType_Compute);
     for (int index : nanovdbIndices)
     {
         NanovdbMedium *medium = (NanovdbMedium *)rootScene->media[index];
@@ -766,17 +768,23 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         gpuMedium.bindlessNanovdbBufferIndex = bindlessVdbIndex;
         gpuMedia.Push(gpuMedium);
     }
+#endif
 
     // Process nanovdb media properly
 
     Semaphore newTileSubmitSemaphore   = device->CreateSemaphore();
     newTileSubmitSemaphore.signalValue = 1;
 
-    GPUBuffer mediumBuffer =
-        newTileCmd
-            ->SubmitBuffer(gpuMedia.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                           sizeof(GPUMedium) * gpuMedia.Length())
-            .buffer;
+    GPUBuffer mediumBuffer;
+
+    if (gpuMedia.Length())
+    {
+        mediumBuffer = newTileCmd
+                           ->SubmitBuffer(gpuMedia.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                          sizeof(GPUMedium) * gpuMedia.Length())
+                           .buffer;
+    }
+
     GPUBuffer materialBuffer =
         newTileCmd
             ->SubmitBuffer(gpuMaterials.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -858,11 +866,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         }
         device->ResetDescriptorPool(0);
         CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Compute);
-
-        if (sceneIndex == 258)
-        {
-            int stop = 5;
-        }
 
         if (sceneIndex == 0)
         {
@@ -973,26 +976,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     // Photon mapping
     PhotonMapper photonMapper(sceneScratch.temp.arena);
 
-    //     def DistantLight "en_SUN_refract" (
-    //     active = false
-    // )
-    // {
-    //     uniform bool collection:lightLink:includeRoot = 0
-    //     prepend rel collection:lightLink:includes = </island/osOcean/geometry/ocean_geo>
-    //     color3f inputs:color = (1, 0.7681251, 0.56915444)
-    //     float inputs:exposure = 13.6
-    //     custom int primvars:ri:attributes:visibility:camera = 0
-    //     custom int ri:light:traceLightPaths = 1
-    //     float3 xformOp:rotateXYZ = (-40, 25, 0)
-    //     double3 xformOp:translate = (0, 74.417, 0)
-    //     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-    // }
-
-    // AffineSpace::Rotate(const Vec3f &axis, f32 theta);
-    AffineSpace lightTransform = AffineSpace::Rotate(Vec3f(0, 1, 0), Radians(25.f)) *
-                                 AffineSpace::Rotate(Vec3f(1, 0, 0), Radians(-40.f)) *
-                                 AffineSpace::Translate(Vec3f(0.f, 74.417, 0.f)) *
-                                 params->renderFromWorld;
+    // Path guiding
+    PathGuider pathGuider(sceneScratch.temp.arena);
 
     Semaphore sem   = device->CreateSemaphore();
     sem.signalValue = 1;
@@ -1368,6 +1353,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         virtualTextureManager.Update(cmd);
 
         // photonMapper.BuildKDTree();
+        pathGuider.PathGuiding();
 
         rg->StartPass(2,
                       [&clasGlobals      = virtualGeometryManager.clasGlobalsBuffer,

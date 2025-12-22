@@ -172,6 +172,7 @@ set (VULKAN_INCLUDE_DIR
 if (USE_GPU)
     list (APPEND RT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/gpu_scene.cpp)
     list (APPEND RT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/photon_mapping/photon_mapping.cpp)
+    list (APPEND RT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/path_guiding.cpp)
     list (APPEND RT_DEFINITIONS "USE_GPU")
 else()
     list (APPEND RT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/cpu_scene.cpp)

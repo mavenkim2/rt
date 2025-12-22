@@ -82,7 +82,8 @@ inline TextureType ConvertStringToTextureType(string type)
 }
 
 static const string materialTypeNames[] = {
-    "interface", "diffuse", "diffusetransmission", "coateddiffuse", "dielectric", "disney",
+    "interface",  "diffuse", "diffusetransmission", "coateddiffuse",
+    "dielectric", "disney",  "conductor",
 };
 
 static const StringId materialTypeIDs[] = {

@@ -4,15 +4,6 @@
 #include "../common.hlsli"
 #include "../../rt/shader_interop/path_guiding_shaderinterop.h"
 
-struct VMM
-{
-    float kappas[MAX_COMPONENTS];
-    float3 directions[MAX_COMPONENTS];
-    float weights[MAX_COMPONENTS];
-
-    uint numComponents;
-};
-
 struct Statistics 
 {
     float weightedLogLikelihood;
