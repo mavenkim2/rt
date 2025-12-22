@@ -11,6 +11,17 @@ namespace rt
 #define PATH_GUIDING_GROUP_SIZE 32
 #define MAX_COMPONENTS          32
 
+struct PathGuidingSample
+{
+    float3 pos;
+    float3 dir;
+    float3 radiance;
+    float pdf;
+    float weight;
+
+    uint vmmIndex;
+};
+
 #ifdef __cplusplus
 }
 #endif
