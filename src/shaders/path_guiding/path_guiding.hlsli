@@ -4,13 +4,6 @@
 #include "../common.hlsli"
 #include "../../rt/shader_interop/path_guiding_shaderinterop.h"
 
-struct Statistics 
-{
-    float weightedLogLikelihood;
-    float3 sumWeightedDirections[MAX_COMPONENTS];
-    float sumWeights[MAX_COMPONENTS];
-};
-
 float CalculateVMFNormalization(float kappa)
 {
     float eMinus2Kappa = exp(-2.f * kappa);

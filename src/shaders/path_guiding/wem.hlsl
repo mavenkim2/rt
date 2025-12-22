@@ -1,33 +1,40 @@
 #include "path_guiding.hlsli"
 
 StructuredBuffer<VMM> vmms : register(t0);
-StructuredBuffer<PathGuidingSample> samples : register(t1);
+StructuredBuffer<float3> sampleDirections : register(t1);
+StructuredBuffer<uint> sampleVMMIndices : register(t2);
 
-StructuredBuffer<uint> vmmOffsets : register(t2);
-RWStructuredBuffer<uint> vmmCounts : register(u3);
-RWStructuredBuffer<Statistics> vmmStatistics : register(u4);
+StructuredBuffer<uint> vmmOffsets : register(t3);
+RWStructuredBuffer<uint> vmmCounts : register(u4);
+RWStructuredBuffer<Statistics> vmmStatistics : register(u5);
+
+struct Num 
+{
+    uint num;
+};
+
+[[vk::push_constant]] Num num;
 
 [numthreads(PATH_GUIDING_GROUP_SIZE, 1, 1)]
 void main(uint3 groupID : SV_GroupID, uint3 dtID : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex)
 {
-    // Weighted Expectation: Calculate soft assignment weight
-    uint totalNumSamples = 0;
+    uint totalNumSamples = num.num;
     if (dtID.x >= totalNumSamples) return;
 
-    PathGuidingSample sample = samples[dtID.x];
-    VMM vmm = vmms[sample.vmmIndex];
+    float3 sampleDirection = sampleDirections[dtID.x];
+    uint vmmIndex = sampleVMMIndices[dtID.x];
+    VMM vmm = vmms[vmmIndex];
 
-    float assignments[MAX_COMPONENTS];
-    uint numAssignments = 0;
+    Statistics statistics;
     float V = 0.f;
 
     for (uint i = 0; i < vmm.numComponents; i++)
     {
-        float cosTheta = dot(sample.dir, vmm.directions[i]);
+        float cosTheta = dot(sampleDirection, vmm.directions[i]);
         float norm = CalculateVMFNormalization(vmm.kappas[i]);
         float v = norm * exp(vmm.kappas[i] * min(cosTheta - 1.f, 0.f));
-        assignments[i] = vmm.weights[i] * v;
-        V += assignments[i];
+        statistics.sumWeights[i] = vmm.weights[i] * v;
+        V += statistics.sumWeights[i];
     }
 
     // TODO: what do I do here?
@@ -37,22 +44,27 @@ void main(uint3 groupID : SV_GroupID, uint3 dtID : SV_DispatchThreadID, uint gro
     }
 
     float invV = 1.f / V;
-    for (uint i = 0; i < numAssignments; i++)
+    for (uint i = 0; i < vmm.numComponents; i++)
     {
-        assignments[i] *= invV;
+        statistics.sumWeights[i] *= invV;
     }
+    statistics.weightedLogLikelihood = log(V);
 
+#if 0
     float weightedLogLikelihood = sample.weight * log(V);
 
     float3 directions[MAX_COMPONENTS];
 
     for (uint i = 0; i < vmm.numComponents; i++)
     {
-        directions[i] = assignments[i] * sample.weight * sample.dir;
+        directions[i] = assignments[i] * sample.weight * sampleDirection;
         assignments[i] = assignments[i] * sample.weight;
     }
+#endif
 
     uint index;
-    InterlockedAdd(vmmCounts[sample.vmmIndex], 1, index);
-    index = vmmOffsets[sample.vmmIndex] + index;
+    InterlockedAdd(vmmCounts[vmmIndex], 1, index);
+    index = vmmOffsets[vmmIndex] + index;
+
+    vmmStatistics[index] = statistics;
 }

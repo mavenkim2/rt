@@ -31,6 +31,13 @@ struct PathGuidingSample
     uint vmmIndex;
 };
 
+struct Statistics
+{
+    float weightedLogLikelihood;
+    float sumWeights[MAX_COMPONENTS];
+    // float3 sumWeightedDirections[MAX_COMPONENTS];
+};
+
 #ifdef __cplusplus
 }
 #endif

@@ -12,9 +12,25 @@ struct PathGuider
     GPUBuffer vmmsBuffer;
     ResourceHandle vmmsBufferHandle;
 
+    GPUBuffer sampleVMMIndicesBuffer;
+    ResourceHandle sampleVMMIndicesBufferHandle;
+
+    GPUBuffer sampleDirectionsBuffer;
+    ResourceHandle sampleDirectionsBufferHandle;
+
+    ResourceHandle vmmOffsetsHandle;
+    ResourceHandle vmmCountsHandle;
+    ResourceHandle statisticsHandle;
+
     PushConstant push;
     DescriptorSetLayout initializeVMMLayout = {};
     VkPipeline initializeVMMPipeline;
+
+    DescriptorSetLayout prefixSumLayout = {};
+    VkPipeline prefixSumPipeline;
+
+    DescriptorSetLayout wemLayout = {};
+    VkPipeline wemPipeline;
 
     PathGuider(Arena *arena);
     void PathGuiding();
