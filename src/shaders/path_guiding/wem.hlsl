@@ -77,6 +77,19 @@ void main(uint3 groupID : SV_GroupID, uint3 dtID : SV_DispatchThreadID, uint gro
         }
     }
 
+    GroupMemoryBarrierWithGroupSync();
+
+    // Normalize
+    if (groupIndex < MAX_COMPONENTS)
+    {
+        float componentWeight = statistics_.sumWeights[groupIndex];
+        float normWeight = WaveActiveSum(componentWeight);
+        normWeight = normWeight > FLT_EPSILON ? float(sampleCount) / normWeight : 0.f;
+        statistics_.sumWeights[groupIndex] *= normWeight;
+    }
+ 
+    GroupMemoryBarrierWithGroupSync();
+
     if (groupIndex == 0)
     {
         vmmStatistics[vmmIndex] = statistics_;

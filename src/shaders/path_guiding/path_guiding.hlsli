@@ -12,4 +12,16 @@ float CalculateVMFNormalization(float kappa)
     return norm;
 }
 
+float KappaToMeanCosine(float kappa)
+{
+    float meanCosine = 1.f / tanh(kappa) - 1.f / kappa;
+    return kappa > 0.f ? meanCosine : 0.f;
+}
+
+float MeanCosineToKappa(float meanCosine)
+{
+    const float meanCosine2 = meanCosine * meanCosine;
+    return (meanCosine * 3.f - meanCosine * meanCosine2) / (1.f - meanCosine2);
+}
+
 #endif

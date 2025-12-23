@@ -265,6 +265,7 @@ if (USE_GPU)
         "${SHADER_SRC_DIR}/kd_tree/initialize_indices.hlsl"
         "${SHADER_SRC_DIR}/volume/volume_rgen.hlsl"
         "${SHADER_SRC_DIR}/path_guiding/wem.hlsl"
+        "${SHADER_SRC_DIR}/path_guiding/map.hlsl"
         "${SHADER_SRC_DIR}/path_guiding/initialize_vmms.hlsl"
         "${SHADER_SRC_DIR}/path_guiding/prefix_sum.hlsl"
     )
@@ -321,6 +322,7 @@ if (USE_GPU)
         "${SHADER_SRC_DIR}/clas/decode_clusters_no_clas.hlsl"
         "${SHADER_SRC_DIR}/kd_tree/initialize_indices.hlsl"
         "${SHADER_SRC_DIR}/path_guiding/wem.hlsl"
+        "${SHADER_SRC_DIR}/path_guiding/map.hlsl"
         "${SHADER_SRC_DIR}/path_guiding/initialize_vmms.hlsl"
         "${SHADER_SRC_DIR}/path_guiding/prefix_sum.hlsl"
         PROPERTY name "cs")

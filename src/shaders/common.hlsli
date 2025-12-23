@@ -5,6 +5,7 @@ static const float PI = 3.1415926535f;
 static const float FLT_MAX = asfloat(0x7F800000);
 static const float InvPi = 0.31830988618379067154f;
 static const float OneMinusEpsilon = 0x1.fffffep-1;
+static const float FLT_EPSILON = 1.192092896e-07f;
 
 #define texture2DSpace space1
 #define structuredBufferSpace space2
