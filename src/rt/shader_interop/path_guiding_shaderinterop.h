@@ -38,6 +38,10 @@ struct Statistics
     float3 sumWeightedDirections[MAX_COMPONENTS];
 };
 
+struct SplitStatistics
+{
+};
+
 #ifdef __cplusplus
 }
 #endif
