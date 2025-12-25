@@ -5,10 +5,21 @@ set (CMAKE_CXX_STANDARD 17)
 set (CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if (MSVC)
-    add_definitions(/D _CRT_SECURE_NO_WARNINGS /Dstrdup=_strdup
-        /wd4018 /wd4100 /wd4101 /wd4127 /wd4146 /wd4232 /wd4242 /wd4244 /wd4245 /wd4267 /wd4305 /wd4309 
-        /wd4310 /wd4334 /wd4456 /wd4464 /wd4668 /wd4701 /wd4703 /wd4711 /wd4756 /wd4820 /wd5045 /wd5250
-        /wd4130 /wd4389 /wd4275)
+    add_compile_definitions(
+        _CRT_SECURE_NO_WARNINGS 
+        "strdup=_strdup"
+    )
+    # add_compile_options($<$<COMPILE_LANGUAGE:CXX>:
+    #     /wd4018 /wd4100 /wd4101 /wd4127 /wd4146 /wd4232 /wd4242 /wd4244 /wd4245 /wd4267 /wd4305 /wd4309 
+    #     /wd4310 /wd4334 /wd4456 /wd4464 /wd4668 /wd4701 /wd4703 /wd4711 /wd4756 /wd4820 /wd5045 /wd5250
+    #     /wd4130 /wd4389 /wd4275>)
+    # add_compile_options(
+    #     $<$<COMPILE_LANGUAGE:CXX>:
+    #         /wd4018;/wd4100;/wd4101;/wd4127;/wd4146;/wd4232;/wd4242;/wd4244;/wd4245;/wd4267;/wd4305;/wd4309;
+    #         /wd4310;/wd4334;/wd4456;/wd4464;/wd4668;/wd4701;/wd4703;/wd4711;/wd4756;/wd4820;/wd5045;/wd5250;
+    #         /wd4130;/wd4389;/wd4275
+    #     >
+    # )
 endif ()
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -407,6 +418,21 @@ add_custom_command(TARGET convert POST_BUILD
 target_link_libraries(convert PRIVATE ${PTEX_LIBRARY} ${GK_LIBRARY} ${METIS_LIBRARY} ${OPENVDB_LIBRARY} ${NANOVDB_LIBRARY})
 target_compile_definitions(convert PRIVATE ${RT_DEFINITIONS})
 target_compile_options(convert PRIVATE ${RT_CXX_FLAGS})
+
+# CUDA support
+include(CheckLanguage)
+check_language(CUDA)
+
+if (CMAKE_CUDA_COMPILER)
+    enable_language (CUDA)
+    #message(STATUS "CUDA Compiler: ${CMAKE_CUDA_COMPILER}")
+    message(STATUS "CUDA Architecture: ${CMAKE_CUDA_ARCHITECTURES}")
+    add_executable(rt_cuda_exe
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/gpu/test.cu
+    )
+else()
+    message (STATUS "could not find cuda compiler")
+endif()
 
 # Main executable
 add_executable(rt_exe 

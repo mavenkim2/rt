@@ -41,6 +41,7 @@ set (BUILD_SHARED_LIBS OFF)
 
 set (PTEX_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/ptex/src/ptex)
 set (PTEX_LIBRARY Ptex_static PARENT_SCOPE)
+set (NO_CUDA ON)
 
 add_subdirectory(OpenSubdiv)
 set (OPENSUBDIV_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/OpenSubdiv

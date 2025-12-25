@@ -1,6 +1,10 @@
 #include "path_guiding.hlsl"
 
 StructuredBuffer<VMM> vmms : register(t0);
+StructuredBufer<uint> vmmCount : register(t1);
+
+StructuredBuffer<float> sampleWeights : register(t2);
+StructuredBuffer<float> samplePdfs : register(t3);
 
 float3 Map2DTo3D(float2 dir)
 {
@@ -22,8 +26,35 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
     uint vmmIndex = groupID.x;
     VMM vmm = vmms[vmmIndex];
 
-    // Principal component analysis
     uint componentIndex = groupIndex;
+
+    // Compute chi squared estimate
+    // (p - q)^2 / q
+    // p^2/q - 2p + q
+    // p = same as (eq. 21) in paper
+    // q = evaluated component of vmm
+
+    // NOTE: this differs from equation 22 in the paper, which evaluates only p^2/q
+    float v = 0.f; // evaluation of vmm component
+    float phi = 0.f; // mc estimate
+    float V = 0.f; // evaluation of vmm
+    float Li = 0.f; // sample weight
+    float samplePdf = 0.f; // sample pdf
+
+    uint sampleCount = vmmCount[vmmIndex];
+    for (uint sampleIndex = groupIndex; sampleIndex < sampleCount; sampleIndex += PATH_GUIDING_GROUP_SIZE)
+    {
+    }
+
+    float vLi = v * Li;
+    float Vphi = V * phi;
+
+    float chiSquared = vLi * Li / Sqr(Vphi);
+    chiSquared -= 2.f * vLi / Vphi;
+    chiSquared += v;
+    chiSquared /= samplePdf;
+
+    // Principal component analysis
     float covX, covY, covXY;
 
     // TODO: always zero??
