@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdio.h>
 #include "../base.h"
 #include "helper_math.h"
@@ -6,6 +7,15 @@
 #define PI             3.14159265358979323846f
 #define MAX_COMPONENTS 32
 #define WARP_SIZE      32
+
+static_assert(MAX_COMPONENTS <= WARP_SIZE, "too many max components");
+
+__device__ void atomicAdd(float3 *a, float3 b)
+{
+    atomicAdd(&a->x, b.x);
+    atomicAdd(&a->y, b.y);
+    atomicAdd(&a->z, b.z);
+}
 
 namespace rt
 {
@@ -179,6 +189,15 @@ __device__ T WarpReduceSum(T val)
     return val;
 }
 
+template <>
+__device__ float3 WarpReduceSum(float3 val)
+{
+    val.x = WarpReduceSum(val.x);
+    val.y = WarpReduceSum(val.y);
+    val.z = WarpReduceSum(val.z);
+    return val;
+}
+
 template <typename T>
 __device__ T WarpReadLaneAt(T val, uint32_t thread)
 {
@@ -207,6 +226,8 @@ struct Statistics
     float weightedLogLikelihood;
     float sumWeights[MAX_COMPONENTS];
     float3 sumWeightedDirections[MAX_COMPONENTS];
+
+    uint32_t numSamples;
 };
 
 __device__ float CalculateVMFNormalization(float kappa)
@@ -217,19 +238,17 @@ __device__ float CalculateVMFNormalization(float kappa)
     return norm;
 }
 
-float KappaToMeanCosine(float kappa)
+__device__ float KappaToMeanCosine(float kappa)
 {
     float meanCosine = 1.f / tanh(kappa) - 1.f / kappa;
     return kappa > 0.f ? meanCosine : 0.f;
 }
 
-float MeanCosineToKappa(float meanCosine)
+__device__ float MeanCosineToKappa(float meanCosine)
 {
     const float meanCosine2 = meanCosine * meanCosine;
     return (meanCosine * 3.f - meanCosine * meanCosine2) / (1.f - meanCosine2);
 }
-
-__global__ void helloWorld() { printf("hello world\n"); }
 
 __global__ void InitializeVMMS(VMM *vmms, uint32_t numVMMs)
 {
@@ -280,7 +299,6 @@ __global__ void InitializeVMMS(VMM *vmms, uint32_t numVMMs)
     }
 
     vmms[vmmIndex] = vmm;
-    printf("%f %f %f\n", vmm.directions[0].x, vmm.directions[0].y, vmm.directions[0].z);
 }
 
 __global__ void InitializeSamples(float3 *__restrict__ sampleDirections, uint32_t numSamples)
@@ -292,169 +310,227 @@ __global__ void InitializeSamples(float3 *__restrict__ sampleDirections, uint32_
         float2 u                      = rng.Uniform2D();
         float3 dir                    = SampleUniformSphere(u);
         sampleDirections[sampleIndex] = dir;
-        printf("sampleindex: %u, dir: %f %f %f\n", sampleIndex, u.x, u.y, dir.z);
     }
 }
 
-__global__ void WeightedExpectation(const VMM *__restrict__ vmms,
-                                    const float3 *__restrict__ sampleDirections,
-                                    const uint32_t *__restrict__ vmmOffsets,
-                                    const uint32_t *__restrict__ vmmCounts,
-                                    uint32_t totalNumSamples)
+__global__ void AssignSamples(uint32_t *vmmOffsets, uint32_t *vmmCounts, uint32_t numVMMs,
+                              uint32_t numSamples)
 {
-    __shared__ Statistics statistics_;
+    assert(numSamples >= numVMMs);
+    uint32_t samplesPerVMM = numSamples / numVMMs;
+    uint32_t count         = 0;
+    for (uint i = 0; i < numVMMs; i++)
+    {
+        vmmOffsets[i] = count;
+        vmmCounts[i]  = samplesPerVMM;
+        count += samplesPerVMM;
+    }
+}
+
+__global__ void UpdateMixture(const VMM *__restrict__ vmms,
+                              Statistics *__restrict__ previousStatisticsArray,
+                              const float3 *__restrict__ sampleDirections,
+                              const uint32_t *__restrict__ vmmOffsets,
+                              const uint32_t *__restrict__ vmmCounts)
+{
+    __shared__ Statistics sharedStatistics;
+    __shared__ Statistics previousStatistics;
+    __shared__ VMM sharedVMM;
 
     uint32_t threadIndex = threadIdx.x;
     uint32_t vmmIndex    = blockIdx.x;
     uint32_t sampleCount = vmmCounts[vmmIndex];
     uint32_t offset      = vmmOffsets[vmmIndex];
 
-    __shared__ VMM vmm;
-
     if (threadIndex == 0)
     {
-        vmm = vmms[vmmIndex];
-        for (uint32_t i = 0; i < vmm.numComponents; i++)
+        sharedVMM = vmms[vmmIndex];
+        for (uint32_t i = 0; i < sharedVMM.numComponents; i++)
         {
-            statistics_.sumWeights[i] = 0.f;
+            sharedStatistics.sumWeights[i]              = 0.f;
+            sharedStatistics.sumWeightedDirections[i]   = make_float3(0.f);
+            previousStatistics.sumWeights[i]            = 0.f;
+            previousStatistics.sumWeightedDirections[i] = make_float3(0.f);
         }
-        statistics_.weightedLogLikelihood = 0.f;
+        sharedStatistics.weightedLogLikelihood   = 0.f;
+        previousStatistics.weightedLogLikelihood = 0.f;
+        previousStatistics.numSamples            = 0;
     }
 
     __syncthreads();
 
-    Statistics statistics;
-    const uint32_t numIters = (sampleCount + blockDim.x - 1) / blockDim.x;
+    const uint32_t maxNumIterations     = 100;
+    const float weightPrior             = 0.01f;
+    const float meanCosinePrior         = 0.f;
+    const float meanCosinePriorStrength = 0.2f;
+    const float maxKappa                = 32000.f;
+    const float maxMeanCosine           = KappaToMeanCosine(maxKappa);
+    const float convergenceThreshold    = 0.005f;
 
-    for (uint32_t sampleIndex = threadIndex; sampleIndex < sampleCount;
-         sampleIndex += blockDim.x)
+    const uint32_t numSampleBatches = (sampleCount + blockDim.x - 1) / blockDim.x;
+
+    float previousLogLikelihood = 0.f;
+
+    for (uint32_t iteration = 0; iteration < maxNumIterations; iteration++)
     {
-        float3 sampleDirection = sampleDirections[sampleIndex + offset];
-        float V                = 0.f;
-
-        for (uint32_t componentIndex = 0; componentIndex < vmm.numComponents; componentIndex++)
+        if (threadIndex < sharedVMM.numComponents)
         {
-            float cosTheta = dot(sampleDirection, vmm.directions[componentIndex]);
-            float norm     = CalculateVMFNormalization(vmm.kappas[componentIndex]);
-            float v = norm * __expf(vmm.kappas[componentIndex] * min(cosTheta - 1.f, 0.f));
-            statistics.sumWeights[componentIndex] = vmm.weights[componentIndex] * v;
-
-            V += statistics.sumWeights[componentIndex];
+            sharedStatistics.sumWeights[threadIndex]            = 0.f;
+            sharedStatistics.sumWeightedDirections[threadIndex] = make_float3(0.f);
         }
-        // TODO: what do I do here?
-        if (V <= 1e-16f) continue;
+        if (threadIndex == 0) sharedStatistics.weightedLogLikelihood = 0.f;
 
-        float invV = 1.f / V;
-        for (uint32_t i = 0; i < vmm.numComponents; i++)
+        __syncthreads();
+
+        // Weighted Expectation
+        for (uint32_t batch = 0; batch < numSampleBatches; batch++)
         {
-            statistics.sumWeights[i] *= invV;
+            Statistics statistics;
+            uint32_t sampleIndex   = threadIndex + blockDim.x * batch;
+            bool hasData           = sampleIndex < sampleCount;
+            float V                = 0.f;
+            float3 sampleDirection = make_float3(0.f);
+
+            if (hasData)
+            {
+                sampleDirection = sampleDirections[sampleIndex + offset];
+
+                for (uint32_t componentIndex = 0; componentIndex < sharedVMM.numComponents;
+                     componentIndex++)
+                {
+                    float cosTheta =
+                        dot(sampleDirection, sharedVMM.directions[componentIndex]);
+                    // TODO: precompute in shared memory
+                    float norm = CalculateVMFNormalization(sharedVMM.kappas[componentIndex]);
+                    float v    = norm * __expf(sharedVMM.kappas[componentIndex] *
+                                               min(cosTheta - 1.f, 0.f));
+                    statistics.sumWeights[componentIndex] =
+                        sharedVMM.weights[componentIndex] * v;
+
+                    V += statistics.sumWeights[componentIndex];
+                }
+                // TODO: what do I do here?
+                if (V <= 1e-16f)
+                {
+                    hasData = false;
+                    V       = 1.f;
+                }
+            }
+
+            float invV         = hasData ? 1.f / V : 0.f;
+            float sampleWeight = 1.f;
+
+            statistics.weightedLogLikelihood = hasData ? sampleWeight * log(V) : 0.f;
+
+            for (uint32_t i = 0; i < sharedVMM.numComponents; i++)
+            {
+                statistics.sumWeights[i] = hasData ? statistics.sumWeights[i] * invV : 0.f;
+
+                float softAssignmentWeight = sampleWeight * statistics.sumWeights[i];
+                float3 sumWeightedDirection =
+                    sampleDirection * sampleWeight * statistics.sumWeights[i];
+
+                float sumWeights             = WarpReduceSum(softAssignmentWeight);
+                float3 sumWeightedDirections = WarpReduceSum(sumWeightedDirection);
+
+                if ((threadIndex & (WARP_SIZE - 1)) == 0)
+                {
+                    printf("warp sum: %f\n", sumWeights);
+                    atomicAdd(&sharedStatistics.sumWeights[i], sumWeights);
+                    atomicAdd(&sharedStatistics.sumWeightedDirections[i],
+                              sumWeightedDirections);
+                }
+            }
+
+            float weightedLogLikelihood = WarpReduceSum(statistics.weightedLogLikelihood);
+            if ((threadIndex & (WARP_SIZE - 1)) == 0)
+            {
+                printf("log like: %f\n", weightedLogLikelihood);
+                atomicAdd(&sharedStatistics.weightedLogLikelihood, weightedLogLikelihood);
+            }
         }
-        statistics.weightedLogLikelihood = log(V); // * sampleWeight
-    }
 
-    // __shared__
-    for (uint32_t componentIndex = 0; componentIndex < vmm.numComponents; componentIndex++)
-    {
-        float softAssignmentWeight  = statistics.sumWeights[componentIndex];
-        float sumWeights            = WarpReduceSum(softAssignmentWeight);
-        float weightedLogLikelihood = WarpReduceSum(statistics.weightedLogLikelihood);
+        __syncthreads();
 
-        if ((threadIndex & (WARP_SIZE - 1)) == 0)
+        // Weighted MAP Update
+        if (threadIndex < MAX_COMPONENTS)
         {
-            atomicAdd(&statistics_.sumWeights[componentIndex], sumWeights);
-            // statistics_.sumWeights[componentIndex] += sumWeights;
-            // statistics_.weightedLogLikelihood += weightedLogLikelihood;
+            // NOTE: if MAX_COMPONENTS > 32, this no longer works
+            // Normalize
+            float componentWeight = sharedStatistics.sumWeights[threadIndex];
+            float normWeight      = WarpReduceSum(componentWeight);
+            normWeight            = WarpReadLaneFirst(normWeight);
+            normWeight = normWeight > FLT_EPSILON ? float(sampleCount) / normWeight : 0.f;
+            sharedStatistics.sumWeights[threadIndex] *= normWeight;
+
+            // Update weights
+            const uint32_t totalNumSamples = sampleCount + previousStatistics.numSamples;
+            float weight                   = sharedStatistics.sumWeights[threadIndex] +
+                           previousStatistics.sumWeights[threadIndex];
+            weight = threadIndex >= sharedVMM.numComponents
+                         ? 0.f
+                         : (weightPrior + weight) /
+                               (weightPrior * sharedVMM.numComponents + sampleCount);
+
+            sharedVMM.weights[threadIndex] = weight;
+
+            // Update kappas and directions
+            const float currentEstimationWeight  = float(sampleCount) / totalNumSamples;
+            const float previousEstimationWeight = 1.f - currentEstimationWeight;
+
+            float3 currentMeanDirection =
+                sharedStatistics.sumWeights[threadIndex] > 0.f
+                    ? sharedStatistics.sumWeightedDirections[threadIndex] /
+                          sharedStatistics.sumWeights[threadIndex]
+                    : make_float3(0.f);
+            float3 previousMeanDirection =
+                previousStatistics.sumWeights[threadIndex] > 0.f
+                    ? previousStatistics.sumWeightedDirections[threadIndex] /
+                          previousStatistics.sumWeights[threadIndex]
+                    : make_float3(0.f);
+
+            float3 meanDirection = currentMeanDirection * currentEstimationWeight +
+                                   previousMeanDirection * previousEstimationWeight;
+
+            float meanCosine = length(meanDirection);
+
+            // TODO: make sure uninitialized components have correct default state?
+            sharedVMM.directions[threadIndex] = meanCosine > 0.f
+                                                    ? meanDirection / meanCosine
+                                                    : sharedVMM.directions[threadIndex];
+
+            if (vmmIndex == 0)
+            {
+                printf("component: %u, dir: %f %f %f\n", threadIndex,
+                       sharedVMM.directions[threadIndex].x,
+                       sharedVMM.directions[threadIndex].y,
+                       sharedVMM.directions[threadIndex].z);
+            }
+            float partialNumSamples = totalNumSamples * sharedVMM.weights[threadIndex];
+
+            meanCosine =
+                (meanCosinePrior * meanCosinePriorStrength + meanCosine * partialNumSamples) /
+                (meanCosinePriorStrength + partialNumSamples);
+            meanCosine = min(meanCosine, maxMeanCosine);
+            float kappa =
+                threadIndex < sharedVMM.numComponents ? MeanCosineToKappa(meanCosine) : 0.f;
+            sharedVMM.kappas[threadIndex] = kappa;
         }
-    }
 
-    __syncthreads();
+        __syncthreads();
 
-    // Normalize
-    if (threadIndex < WARP_SIZE)
-    {
-        float componentWeight = statistics_.sumWeights[threadIndex];
-        float normWeight      = WarpReduceSum(componentWeight);
-        normWeight            = WarpReadLaneFirst(normWeight);
-        normWeight = normWeight > FLT_EPSILON ? float(sampleCount) / normWeight : 0.f;
-        statistics_.sumWeights[threadIndex] *= normWeight;
-    }
+        // Convergence check
+        if (iteration > 0)
+        {
+            float logLikelihood = sharedStatistics.weightedLogLikelihood;
+            float relLogLikelihoodDifference =
+                fabs(logLikelihood - previousLogLikelihood) / fabs(previousLogLikelihood);
 
-    __syncthreads();
-
-    if (threadIndex == 0)
-    {
-        // vmmStatistics[vmmIndex] = statistics_;
+            if (relLogLikelihoodDifference < convergenceThreshold) break;
+            previousLogLikelihood = logLikelihood;
+        }
     }
 }
-
-// __global void WeightedMAP()
-// {
-//     // uint totalNumVMMs = num.num;
-//     // if (dtID.x >= totalNumVMMs) return;
-//
-//     const float weightPrior = 0.01f;
-//
-//     uint vmmIndex         = groupID.x;
-//     VMM vmm               = vmms[vmmIndex];
-//     Statistics statistics = vmmStatistics[groupID.x];
-//     uint numSamples       = vmmCounts[vmmIndex];
-//
-//     // TODO: should it be one thread per VMM instead?
-//     // Update weights
-//     if (groupIndex < vmm.numComponents)
-//     {
-//         // TODO IMPORTANT: handle previous stats
-//         float weight = statistics.sumWeights[groupIndex];
-//         weight       = (weightPrior + weight) / (weightPrior * vmm.numComponents +
-//         numSamples);
-//
-//         vmms[vmmIndex].weights[groupIndex] = weight;
-//     }
-//     else if (groupIndex < MAX_COMPONENTS)
-//     {
-//         vmms[vmmIndex].weights[groupIndex] = 0.f;
-//     }
-//
-//     // Update kappas and directions
-//     uint totalNumSamples = numSamples;
-//
-//     const float currentEstimationWeight  = numSamples / totalNumSamples;
-//     const float previousEstimationWeight = 1.f - currentEstimationWeight;
-//
-//     const float meanCosinePrior         = 0.f;
-//     const float meanCosinePriorStrength = 0.2f;
-//     const float maxKappa                = 32000.f;
-//     const float maxMeanCosine           = KappaToMeanCosine(maxKappa);
-//
-//     if (groupIndex < vmm.numComponents)
-//     {
-//         float3 currentMeanDirection  = statistics.sumWeights[groupIndex] > 0.f
-//                                            ? statistics.sumWeightedDirections[groupIndex] /
-//                                                 statistics.sumWeights[groupIndex]
-//                                            : 0.f;
-//         float3 previousMeanDirection = 0.f;
-//
-//         float3 meanDirection = currentMeanDirection * currentEstimationWeight +
-//                                previousMeanDirection * previousEstimationWeight;
-//         float meanCosine = length(meanDirection);
-//
-//         if (meanCosine > 0.f)
-//         {
-//             vmms[vmmIndex].directions[groupIndex] = meanDirection / meanCosine;
-//         }
-//         float partialNumSamples = totalNumSamples * vmms[vmmIndex].weights[groupIndex];
-//         meanCosine =
-//             (meanCosinePrior * meanCosinePriorStrength + meanCosine * partialNumSamples) /
-//             (meanCosinePriorStrength + partialNumSamples);
-//         meanCosine                        = min(meanCosine, maxMeanCosine);
-//         vmms[vmmIndex].kappas[groupIndex] = MeanCosineToKappa(meanCosine);
-//     }
-//     else if (groupIndex < MAX_COMPONENTS)
-//     {
-//         vmms[vmmIndex].directions[groupIndex] = 0.f;
-//         vmms[vmmIndex].kappas[groupIndex]     = 0.f;
-//     }
-// }
 
 struct CUDAArena
 {
@@ -494,24 +570,26 @@ struct CUDAArena
 
 void test()
 {
-    uint32_t numVMMs    = 32;
-    uint32_t numSamples = 64;
+    uint32_t numVMMs    = 4;
+    uint32_t numSamples = numVMMs * WARP_SIZE;
 
     CUDAArena allocator;
     allocator.Init(megabytes(1));
 
     printf("hello world\n");
-    VMM *vmms                = allocator.Alloc<VMM>(numVMMs, 4);
-    float3 *sampleDirections = allocator.Alloc<float3>(numSamples, 4);
-    uint32_t *vmmOffsets     = allocator.Alloc<uint32_t>(numVMMs, 4);
-    uint32_t *vmmCounts      = allocator.Alloc<uint32_t>(numSamples, 4);
+    VMM *vmms                 = allocator.Alloc<VMM>(numVMMs, 4);
+    float3 *sampleDirections  = allocator.Alloc<float3>(numSamples, 4);
+    uint32_t *vmmOffsets      = allocator.Alloc<uint32_t>(numVMMs, 4);
+    uint32_t *vmmCounts       = allocator.Alloc<uint32_t>(numSamples, 4);
+    Statistics *vmmStatistics = allocator.Alloc<Statistics>(numVMMs, 4);
 
+    // Initialization
     InitializeVMMS<<<1, numVMMs>>>(vmms, numVMMs);
     InitializeSamples<<<1, numSamples>>>(sampleDirections, numSamples);
+    AssignSamples<<<1, 1>>>(vmmOffsets, vmmCounts, numVMMs, numSamples);
 
-    // WeightedExpectation<<<1, 1>>>(vmms, const int *__restrict sampleDirections,
-    //                               const int *__restrict vmmOffsets,
-    //                               const int *__restrict vmmCounts, int totalNumSamples);
+    UpdateMixture<<<numVMMs, WARP_SIZE>>>(vmms, vmmStatistics, sampleDirections, vmmOffsets,
+                                          vmmCounts);
 
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess)
