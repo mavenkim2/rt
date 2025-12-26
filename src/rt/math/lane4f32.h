@@ -462,7 +462,8 @@ __forceinline Lane4F32 Permute(const Lane4F32 &a, const Lane4U32 &b)
         _mm_unpacklo_epi64(_mm_unpacklo_epi32(i0, i1), _mm_unpacklo_epi32(i2, i3));
     return _mm_castsi128_ps(_mm_shuffle_epi8(_mm_castps_si128(a), permutation));
 #else
-#error TODO
+    Assert(0);
+    return Lane4F32(0);
 #endif
 }
 
@@ -543,10 +544,7 @@ __forceinline Lane4F32 Round(const Lane4F32 &lane)
 }
 #endif
 
-__forceinline Lane4U32 AsUInt(const Lane4F32 &l)
-{
-     return _mm_castps_si128(l);
-}
+__forceinline Lane4U32 AsUInt(const Lane4F32 &l) { return _mm_castps_si128(l); }
 
 __forceinline Lane4U32 Flooru(Lane4F32 lane) { return _mm_cvtps_epi32(Floor(lane)); }
 
@@ -657,7 +655,8 @@ __forceinline Lane4F32 Compact(const u32 mask, const Lane4F32 &l)
     return _mm_permutevar_ps(l, _mm_srlv_epi32(_mm_set1_epi32((permute01 | (permute23 << 4))),
                                                _mm_setr_epi32(0, 2, 4, 6)));
 #elif defined(__SSSE3__)
-#error TODO
+    Assert(0);
+    return Lane4F32(0);
 #endif
 }
 

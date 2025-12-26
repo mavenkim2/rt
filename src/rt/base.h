@@ -158,14 +158,14 @@ constexpr bool EnumHasAnyFlags(Enum Flags, Enum Contains)
 template <typename Enum>
 void EnumAddFlags(Enum &Flags, Enum FlagsToAdd)
 {
-    using UnderlyingType = std::underlying_type<Enum>::type;
+    using UnderlyingType = typename std::underlying_type<Enum>::type;
     Flags                = (Enum)((UnderlyingType)Flags | (UnderlyingType)FlagsToAdd);
 }
 
 template <typename Enum>
 void EnumRemoveFlags(Enum &Flags, Enum FlagsToRemove)
 {
-    using UnderlyingType = std::underlying_type<Enum>::type;
+    using UnderlyingType = typename std::underlying_type<Enum>::type;
     Flags                = (Enum)((UnderlyingType)Flags & ~(UnderlyingType)FlagsToRemove);
 }
 

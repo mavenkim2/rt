@@ -598,66 +598,6 @@ struct HashExt
     }
 };
 
-template <typename T, i32 numSlots, i32 chunkSize, i32 numStripes, i32 tag>
-struct HashSet
-{
-    StaticAssert(IsPow2(numSlots), CachePow2N);
-    struct ChunkNode
-    {
-        T values[chunkSize];
-        u32 count;
-        ChunkNode *next;
-    };
-    ChunkNode *nodes;
-    Mutex *mutexes;
-
-    HashSet() {}
-    HashSet(Arena *arena)
-    {
-        nodes   = PushArrayTagged(arena, ChunkNode, numSlots, tag);
-        mutexes = PushArrayTagged(arena, Mutex, numStripes, tag);
-    }
-    const T *GetOrCreate(Arena *arena, T value);
-};
-
-template <typename T, i32 numSlots, i32 chunkSize, i32 numStripes, i32 tag>
-const T *HashSet<T, numSlots, chunkSize, numStripes, tag>::GetOrCreate(Arena *arena, T value)
-{
-    u64 hash        = Hash<T>(value);
-    ChunkNode *node = &nodes[hash & (numSlots - 1)];
-    ChunkNode *prev = 0;
-
-    u32 stripe = hash & (numStripes - 1);
-    BeginRMutex(&mutexes[stripe]);
-    while (node)
-    {
-        for (u32 i = 0; i < node->count; i++)
-        {
-            if (node->values[i] == value)
-            {
-                EndRMutex(&mutexes[stripe]);
-                return &node->values[i];
-            }
-        }
-        prev = node;
-        node = node->next;
-    }
-    EndRMutex(&mutexes[stripe]);
-
-    T *out = 0;
-    BeginWMutex(&mutexes[stripe]);
-    if (prev->count == ArrayLength(prev->values))
-    {
-        node       = PushStructTagged(arena, ChunkNode, tag);
-        prev->next = node;
-        prev       = node;
-    }
-    prev->values[prev->count] = value;
-    out                       = &prev->values[prev->count++];
-    EndWMutex(&mutexes[stripe]);
-    return out;
-}
-
 template <typename T>
 struct SimpleHashSet
 {
@@ -676,11 +616,11 @@ struct SimpleHashSet
         Assert(IsPow2(numSlots));
         nodes = PushArray(arena, Node, numSlots);
     }
-    const bool AddUnique(Arena *arena, u32 hash, T value);
+    bool AddUnique(Arena *arena, u32 hash, T value);
 };
 
 template <typename T>
-const bool SimpleHashSet<T>::AddUnique(Arena *arena, u32 hash, T value)
+bool SimpleHashSet<T>::AddUnique(Arena *arena, u32 hash, T value)
 {
     Node *node = &nodes[hash & (numSlots - 1)];
     Node *prev = 0;
@@ -997,121 +937,6 @@ struct HashMap
         }
     }
 };
-
-struct AtomicHashIndex
-{
-    static const u32 invalidIndex = 0xffffffff;
-    std::atomic<u8> *locks;
-    int *hash;
-    int *nextIndex;
-    int hashCount;
-    int indexCount;
-
-    AtomicHashIndex(Arena *arena, int hashSize);
-
-    void Clear();
-    void BeginLock(int lockIndex);
-    void EndLock(int lockIndex);
-
-    int First(int key) const;
-    int Next(int index) const;
-
-    void Add(int key, int index);
-    void AddConcurrent(int key, int index);
-
-    template <typename Predicate>
-    inline int Find(int inHash, Predicate &predicate) const;
-
-    template <typename Predicate>
-    inline int FindConcurrent(int hash, Predicate &predicate) const;
-};
-
-inline AtomicHashIndex::AtomicHashIndex(Arena *arena, int hashSize)
-{
-    hashCount  = NextPowerOfTwo(hashSize);
-    indexCount = hashCount;
-
-    hash      = PushArrayNoZero(arena, int, hashCount);
-    nextIndex = PushArrayNoZero(arena, int, indexCount);
-    locks     = PushArray(arena, std::atomic<u8>, hashCount);
-    Clear();
-}
-
-inline void AtomicHashIndex::Clear() { MemorySet(hash, 0xff, sizeof(int) * hashCount); }
-
-inline void AtomicHashIndex::BeginLock(int lockIndex)
-{
-    u8 val = 0;
-    while (!locks[lockIndex].compare_exchange_weak(val, 1, std::memory_order_acquire))
-    {
-        val = 0;
-        _mm_pause();
-    }
-}
-
-inline void AtomicHashIndex::EndLock(int lockIndex)
-{
-    locks[lockIndex].store(0, std::memory_order_release);
-}
-
-inline int AtomicHashIndex::First(int key) const
-{
-    key &= (hashCount - 1);
-    return hash[key];
-}
-
-inline int AtomicHashIndex::Next(int index) const { return nextIndex[index]; }
-
-inline void AtomicHashIndex::AddConcurrent(int key, int index)
-{
-    Assert(index < indexCount);
-    key &= (hashCount - 1);
-    BeginLock(key);
-    nextIndex[index] = hash[key];
-    hash[key]        = index;
-    EndLock(key);
-}
-
-inline void AtomicHashIndex::Add(int key, int index)
-{
-    Assert(index < indexCount);
-    key &= (hashCount - 1);
-    nextIndex[index] = hash[key];
-    hash[key]        = index;
-}
-
-template <typename Predicate>
-inline int AtomicHashIndex::Find(int inHash, Predicate &predicate) const
-{
-    int key = inHash & (hashSize - 1);
-    for (int i = First(key); i != invalidIndex; i = Next(i))
-    {
-        if (predicate(i))
-        {
-            return i;
-        }
-    }
-    return invalidIndex;
-}
-
-template <typename Predicate>
-inline int AtomicHashIndex::FindConcurrent(int inHash, Predicate &predicate) const
-{
-    int key   = inHash & (hashSize - 1);
-    int index = invalidIndex;
-
-    BeginLock(key);
-    for (int i = First(key); i != invalidIndex; i = Next(i))
-    {
-        if (predicate(i))
-        {
-            index = i;
-            break;
-        }
-    }
-    EndLock(key);
-    return index;
-}
 
 template <typename T>
 struct Graph

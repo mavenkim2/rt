@@ -1,11 +1,172 @@
 #include <stdio.h>
+#include "../base.h"
 #include "helper_math.h"
+#include "../thread_context.h"
 
-#define PI 3.14159265358979323846f
-static const float FLT_EPSILON = 1.192092896e-07f;
-
+#define PI             3.14159265358979323846f
 #define MAX_COMPONENTS 32
 #define WARP_SIZE      32
+
+namespace rt
+{
+
+struct RNG
+{
+    __device__ static uint PCG(uint x)
+    {
+        uint state = x * 747796405u + 2891336453u;
+        uint word  = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+        return (word >> 22u) ^ word;
+    }
+
+    // Ref: M. Jarzynski and M. Olano, "Hash Functions for GPU Rendering," Journal of Computer
+    // Graphics Techniques, 2020.
+    static uint3 PCG3d(uint3 v)
+    {
+        v = v * 1664525u + 1013904223u;
+        v.x += v.y * v.z;
+        v.y += v.z * v.x;
+        v.z += v.x * v.y;
+        v ^= v >> 16u;
+        v.x += v.y * v.z;
+        v.y += v.z * v.x;
+        v.z += v.x * v.y;
+        return v;
+    }
+
+    // Ref: M. Jarzynski and M. Olano, "Hash Functions for GPU Rendering," Journal of Computer
+    // Graphics Techniques, 2020.
+    static uint4 PCG4d(uint4 v)
+    {
+        v = v * 1664525u + 1013904223u;
+        v.x += v.y * v.w;
+        v.y += v.z * v.x;
+        v.z += v.x * v.y;
+        v.w += v.y * v.z;
+        v ^= v >> 16u;
+        v.x += v.y * v.w;
+        v.y += v.z * v.x;
+        v.z += v.x * v.y;
+        v.w += v.y * v.z;
+        return v;
+    }
+
+    static RNG Init(uint2 pixel, uint frame)
+    {
+        RNG rng;
+#if 0
+        rng.State = RNG::PCG(pixel.x + RNG::PCG(pixel.y + RNG::PCG(frame)));
+#else
+        rng.State = RNG::PCG3d(make_uint3(pixel, frame)).x;
+#endif
+
+        return rng;
+    }
+
+    static RNG Init(uint2 pixel, uint frame, uint idx)
+    {
+        RNG rng;
+        rng.State = RNG::PCG4d(make_uint4(pixel, frame, idx)).x;
+
+        return rng;
+    }
+
+    __device__ static RNG Init(uint idx, uint frame)
+    {
+        RNG rng;
+        rng.State = rng.PCG(idx + PCG(frame));
+
+        return rng;
+    }
+
+    static RNG Init(uint seed)
+    {
+        RNG rng;
+        rng.State = seed;
+
+        return rng;
+    }
+
+    __device__ uint UniformUint()
+    {
+        this->State = this->State * 747796405u + 2891336453u;
+        uint word = ((this->State >> ((this->State >> 28u) + 4u)) ^ this->State) * 277803737u;
+
+        return (word >> 22u) ^ word;
+    }
+
+    __device__ float Uniform()
+    {
+#if 0
+    	return asfloat(0x3f800000 | (UniformUint() >> 9)) - 1.0f;
+#else
+        // For 32-bit floats, any integer in [0, 2^24] can be represented exactly and
+        // there may be rounding errors for anything larger, e.g. 2^24 + 1 is rounded
+        // down to 2^24.
+        // Given random integers, we can right shift by 8 bits to get integers in
+        // [0, 2^24 - 1]. After division by 2^-24, we have uniform numbers in [0, 1).
+        // Ref: https://prng.di.unimi.it/
+        return float(UniformUint() >> 8) * 0x1p-24f;
+#endif
+    }
+
+    // Returns samples in [0, bound)
+    __device__ uint UniformUintBounded(uint bound)
+    {
+        uint32_t threshold = (~bound + 1u) % bound;
+
+        for (;;)
+        {
+            uint32_t r = UniformUint();
+
+            if (r >= threshold) return r % bound;
+        }
+    }
+
+    // Returns samples in [0, bound). Biased but faster than #UniformUintBounded():
+    // https://en.wikipedia.org/wiki/Fisher%E2%80%93Yates_shuffle
+    __device__ uint UniformUintBounded_Faster(uint bound)
+    {
+        return (uint)(Uniform() * float(bound));
+    }
+
+    __device__ float2 Uniform2D()
+    {
+        float u0 = Uniform();
+        float u1 = Uniform();
+
+        return make_float2(u0, u1);
+    }
+
+    __device__ float3 Uniform3D()
+    {
+        float u0 = Uniform();
+        float u1 = Uniform();
+        float u2 = Uniform();
+
+        return make_float3(u0, u1, u2);
+    }
+
+    __device__ float4 Uniform4D()
+    {
+        float u0 = Uniform();
+        float u1 = Uniform();
+        float u2 = Uniform();
+        float u3 = Uniform();
+
+        return make_float4(u0, u1, u2, u3);
+    }
+
+    uint State;
+};
+
+__device__ float3 SampleUniformSphere(float2 u)
+{
+    float z   = 1 - 2 * u.x;
+    float r   = sqrt(1 - z * z);
+    float phi = 2 * PI * u.y;
+    return make_float3(r * cos(phi), r * sin(phi), z);
+}
 
 template <typename T>
 __device__ T WarpReduceSum(T val)
@@ -48,7 +209,7 @@ struct Statistics
     float3 sumWeightedDirections[MAX_COMPONENTS];
 };
 
-float CalculateVMFNormalization(float kappa)
+__device__ float CalculateVMFNormalization(float kappa)
 {
     float eMinus2Kappa = exp(-2.f * kappa);
     float norm         = kappa / (2.f * PI * (1.f - eMinus2Kappa));
@@ -122,6 +283,19 @@ __global__ void InitializeVMMS(VMM *vmms, uint32_t numVMMs)
     printf("%f %f %f\n", vmm.directions[0].x, vmm.directions[0].y, vmm.directions[0].z);
 }
 
+__global__ void InitializeSamples(float3 *__restrict__ sampleDirections, uint32_t numSamples)
+{
+    uint32_t sampleIndex = threadIdx.x + blockIdx.x * blockDim.x;
+    if (sampleIndex < numSamples)
+    {
+        RNG rng                       = RNG::Init(sampleIndex, numSamples);
+        float2 u                      = rng.Uniform2D();
+        float3 dir                    = SampleUniformSphere(u);
+        sampleDirections[sampleIndex] = dir;
+        printf("sampleindex: %u, dir: %f %f %f\n", sampleIndex, u.x, u.y, dir.z);
+    }
+}
+
 __global__ void WeightedExpectation(const VMM *__restrict__ vmms,
                                     const float3 *__restrict__ sampleDirections,
                                     const uint32_t *__restrict__ vmmOffsets,
@@ -162,7 +336,7 @@ __global__ void WeightedExpectation(const VMM *__restrict__ vmms,
         {
             float cosTheta = dot(sampleDirection, vmm.directions[componentIndex]);
             float norm     = CalculateVMFNormalization(vmm.kappas[componentIndex]);
-            float v        = norm * exp(vmm.kappas[componentIndex] * min(cosTheta - 1.f, 0.f));
+            float v = norm * __expf(vmm.kappas[componentIndex] * min(cosTheta - 1.f, 0.f));
             statistics.sumWeights[componentIndex] = vmm.weights[componentIndex] * v;
 
             V += statistics.sumWeights[componentIndex];
@@ -201,7 +375,7 @@ __global__ void WeightedExpectation(const VMM *__restrict__ vmms,
         float componentWeight = statistics_.sumWeights[threadIndex];
         float normWeight      = WarpReduceSum(componentWeight);
         normWeight            = WarpReadLaneFirst(normWeight);
-        normWeight > FLT_EPSILON ? float(sampleCount) / normWeight : 0.f;
+        normWeight = normWeight > FLT_EPSILON ? float(sampleCount) / normWeight : 0.f;
         statistics_.sumWeights[threadIndex] *= normWeight;
     }
 
@@ -209,28 +383,135 @@ __global__ void WeightedExpectation(const VMM *__restrict__ vmms,
 
     if (threadIndex == 0)
     {
-        vmmStatistics[vmmIndex] = statistics_;
+        // vmmStatistics[vmmIndex] = statistics_;
     }
 }
 
-int main()
-{
-    printf("Hello World from CPU!\n");
+// __global void WeightedMAP()
+// {
+//     // uint totalNumVMMs = num.num;
+//     // if (dtID.x >= totalNumVMMs) return;
+//
+//     const float weightPrior = 0.01f;
+//
+//     uint vmmIndex         = groupID.x;
+//     VMM vmm               = vmms[vmmIndex];
+//     Statistics statistics = vmmStatistics[groupID.x];
+//     uint numSamples       = vmmCounts[vmmIndex];
+//
+//     // TODO: should it be one thread per VMM instead?
+//     // Update weights
+//     if (groupIndex < vmm.numComponents)
+//     {
+//         // TODO IMPORTANT: handle previous stats
+//         float weight = statistics.sumWeights[groupIndex];
+//         weight       = (weightPrior + weight) / (weightPrior * vmm.numComponents +
+//         numSamples);
+//
+//         vmms[vmmIndex].weights[groupIndex] = weight;
+//     }
+//     else if (groupIndex < MAX_COMPONENTS)
+//     {
+//         vmms[vmmIndex].weights[groupIndex] = 0.f;
+//     }
+//
+//     // Update kappas and directions
+//     uint totalNumSamples = numSamples;
+//
+//     const float currentEstimationWeight  = numSamples / totalNumSamples;
+//     const float previousEstimationWeight = 1.f - currentEstimationWeight;
+//
+//     const float meanCosinePrior         = 0.f;
+//     const float meanCosinePriorStrength = 0.2f;
+//     const float maxKappa                = 32000.f;
+//     const float maxMeanCosine           = KappaToMeanCosine(maxKappa);
+//
+//     if (groupIndex < vmm.numComponents)
+//     {
+//         float3 currentMeanDirection  = statistics.sumWeights[groupIndex] > 0.f
+//                                            ? statistics.sumWeightedDirections[groupIndex] /
+//                                                 statistics.sumWeights[groupIndex]
+//                                            : 0.f;
+//         float3 previousMeanDirection = 0.f;
+//
+//         float3 meanDirection = currentMeanDirection * currentEstimationWeight +
+//                                previousMeanDirection * previousEstimationWeight;
+//         float meanCosine = length(meanDirection);
+//
+//         if (meanCosine > 0.f)
+//         {
+//             vmms[vmmIndex].directions[groupIndex] = meanDirection / meanCosine;
+//         }
+//         float partialNumSamples = totalNumSamples * vmms[vmmIndex].weights[groupIndex];
+//         meanCosine =
+//             (meanCosinePrior * meanCosinePriorStrength + meanCosine * partialNumSamples) /
+//             (meanCosinePriorStrength + partialNumSamples);
+//         meanCosine                        = min(meanCosine, maxMeanCosine);
+//         vmms[vmmIndex].kappas[groupIndex] = MeanCosineToKappa(meanCosine);
+//     }
+//     else if (groupIndex < MAX_COMPONENTS)
+//     {
+//         vmms[vmmIndex].directions[groupIndex] = 0.f;
+//         vmms[vmmIndex].kappas[groupIndex]     = 0.f;
+//     }
+// }
 
+struct CUDAArena
+{
+    void *ptr;
+    uintptr_t base;
+    u32 totalSize;
+    u32 offset;
+
+    void Init(u32 size)
+    {
+        cudaMalloc(&ptr, size);
+        totalSize = size;
+        base      = uintptr_t(ptr);
+        offset    = 0;
+    }
+
+    void *Alloc(u32 size, uintptr_t alignment)
+    {
+        uintptr_t current = uintptr_t((char *)ptr + offset);
+        uintptr_t aligned = (current + alignment - 1) & ~(alignment - 1);
+        offset            = (aligned - base) + size;
+
+        Assert(offset <= totalSize);
+        return (void *)aligned;
+    }
+
+    template <typename T>
+    T *Alloc(u32 count, u32 alignment = 0)
+    {
+        alignment = alignment == 0 ? sizeof(T) : alignment;
+        return (T *)Alloc(sizeof(T) * count, alignment);
+    }
+
+    void Clear() { offset = 0; }
+    // void Release() { cudaFree; }
+};
+
+void test()
+{
     uint32_t numVMMs    = 32;
     uint32_t numSamples = 64;
-    VMM *vmms;
 
-    uint32_t totalSize = sizeof(VMM) * numVMMs;
-    totalSize += sizeof(u32) * (2 * numVMMs);
-    totalSize += sizeof(float3) * (2 * numVMMs);
+    CUDAArena allocator;
+    allocator.Init(megabytes(1));
 
-    cudaMalloc(&vmms, sizeof(VMM) * numVMMs);
+    printf("hello world\n");
+    VMM *vmms                = allocator.Alloc<VMM>(numVMMs, 4);
+    float3 *sampleDirections = allocator.Alloc<float3>(numSamples, 4);
+    uint32_t *vmmOffsets     = allocator.Alloc<uint32_t>(numVMMs, 4);
+    uint32_t *vmmCounts      = allocator.Alloc<uint32_t>(numSamples, 4);
+
     InitializeVMMS<<<1, numVMMs>>>(vmms, numVMMs);
+    InitializeSamples<<<1, numSamples>>>(sampleDirections, numSamples);
 
-    WeightedExpectation<<<1, 1>>>(vmms, const int *__restrict sampleDirections,
-                                  const int *__restrict vmmOffsets,
-                                  const int *__restrict vmmCounts, int totalNumSamples);
+    // WeightedExpectation<<<1, 1>>>(vmms, const int *__restrict sampleDirections,
+    //                               const int *__restrict vmmOffsets,
+    //                               const int *__restrict vmmCounts, int totalNumSamples);
 
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess)
@@ -241,6 +522,12 @@ int main()
     // CPU execution is asynchronous, so we must wait for the GPU to finish
     // before the program exits (otherwise the printfs might get cut off).
     cudaDeviceSynchronize();
+}
 
+} // namespace rt
+
+int main()
+{
+    rt::test();
     return 0;
 }

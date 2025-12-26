@@ -153,7 +153,8 @@ __forceinline Lane4U32 Min(const Lane4U32 &a, const Lane4U32 &b)
 #if defined(__SSE4_1__)
     return _mm_min_epu32(a, b);
 #else
-#error TODO
+    Assert(0);
+    return Lane4U32(0);
 #endif
 }
 __forceinline Lane4U32 Max(const Lane4U32 &a, const Lane4U32 &b)
@@ -161,7 +162,8 @@ __forceinline Lane4U32 Max(const Lane4U32 &a, const Lane4U32 &b)
 #if defined(__SSE4_1__)
     return _mm_max_epu32(a, b);
 #else
-#error TODO
+    Assert(0);
+    return Lane4U32(0);
 #endif
 }
 
