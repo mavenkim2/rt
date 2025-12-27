@@ -327,6 +327,27 @@ __global__ void AssignSamples(uint32_t *vmmOffsets, uint32_t *vmmCounts, uint32_
     }
 }
 
+inline __device__ float SoftAssignment(const VMM &vmm, float3 sampleDirection,
+                                       float *softAssignment)
+{
+    float V = 0.f;
+
+    for (uint32_t componentIndex = 0; componentIndex < vmm.numComponents; componentIndex++)
+    {
+        float cosTheta = dot(sampleDirection, vmm.directions[componentIndex]);
+        // TODO: precompute in shared memory
+        float norm = CalculateVMFNormalization(vmm.kappas[componentIndex]);
+        float v    = norm * __expf(vmm.kappas[componentIndex] * min(cosTheta - 1.f, 0.f));
+        softAssignment[componentIndex] = vmm.weights[componentIndex] * v;
+
+        V += softAssignment[componentIndex];
+    }
+
+    if (V <= 1e-16f) V = 0.f;
+
+    return V;
+}
+
 __global__ void UpdateMixture(const VMM *__restrict__ vmms,
                               Statistics *__restrict__ previousStatisticsArray,
                               const float3 *__restrict__ sampleDirections,
@@ -394,29 +415,10 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
             if (hasData)
             {
                 sampleDirection = sampleDirections[sampleIndex + offset];
-
-                for (uint32_t componentIndex = 0; componentIndex < sharedVMM.numComponents;
-                     componentIndex++)
-                {
-                    float cosTheta =
-                        dot(sampleDirection, sharedVMM.directions[componentIndex]);
-                    // TODO: precompute in shared memory
-                    float norm = CalculateVMFNormalization(sharedVMM.kappas[componentIndex]);
-                    float v    = norm * __expf(sharedVMM.kappas[componentIndex] *
-                                               min(cosTheta - 1.f, 0.f));
-                    statistics.sumWeights[componentIndex] =
-                        sharedVMM.weights[componentIndex] * v;
-
-                    V += statistics.sumWeights[componentIndex];
-                }
-                // TODO: what do I do here?
-                if (V <= 1e-16f)
-                {
-                    hasData = false;
-                    V       = 1.f;
-                }
+                V = SoftAssignment(sharedVMM, sampleDirection, statistics.sumWeights);
             }
 
+            hasData            = V > 0.f;
             float invV         = hasData ? 1.f / V : 0.f;
             float sampleWeight = 1.f;
 
@@ -499,13 +501,6 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
                                                     ? meanDirection / meanCosine
                                                     : sharedVMM.directions[threadIndex];
 
-            if (vmmIndex == 0)
-            {
-                printf("component: %u, dir: %f %f %f\n", threadIndex,
-                       sharedVMM.directions[threadIndex].x,
-                       sharedVMM.directions[threadIndex].y,
-                       sharedVMM.directions[threadIndex].z);
-            }
             float partialNumSamples = totalNumSamples * sharedVMM.weights[threadIndex];
 
             meanCosine =
@@ -515,6 +510,14 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
             float kappa =
                 threadIndex < sharedVMM.numComponents ? MeanCosineToKappa(meanCosine) : 0.f;
             sharedVMM.kappas[threadIndex] = kappa;
+
+            if (vmmIndex == 0)
+            {
+                printf("component: %u, dir: %f %f %f, kappa: %f\n", threadIndex,
+                       sharedVMM.directions[threadIndex].x,
+                       sharedVMM.directions[threadIndex].y,
+                       sharedVMM.directions[threadIndex].z, kappa);
+            }
         }
 
         __syncthreads();
@@ -529,6 +532,10 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
             if (relLogLikelihoodDifference < convergenceThreshold) break;
             previousLogLikelihood = logLikelihood;
         }
+    }
+
+    // Splitting
+    {
     }
 }
 
