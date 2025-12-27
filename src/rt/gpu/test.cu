@@ -212,6 +212,30 @@ __device__ T WarpReadLaneFirst(T val)
     return val;
 }
 
+inline __device__ void BuildOrthonormalBasis(const float3 &n, float3 &t0, float3 &t1)
+{
+    const float s = n.z >= 0.f ? 1.f : -1.f;
+    const float a = -1.0 / (s + n.z);
+    const float b = n.x * n.y * a;
+
+    t0 = make_float3(1.f + n.x * n.x * a * s, s * b, -s * n.x);
+    t1 = make_float3(b, s + n.y * n.y * a, -n.y);
+}
+
+inline __device__ float3 Map2DTo3D(float2 vec2D)
+{
+    float3 vec3D = make_float3(0.f);
+    float norm2  = vec2D.x * vec2D.x + vec2D.y * vec2D.y;
+    float length = norm2 > 0.f ? sqrt(norm2) : 0.f;
+    float sinc   = length > FLT_EPSILON ? sin(length) / length : 0.f;
+
+    vec3D.x = length > 0.0f ? vec2D.x * sinc : vec3D.x;
+    vec3D.y = length > 0.0f ? vec2D.y * sinc : vec3D.y;
+    vec3D.z = cos(length);
+
+    return vec3D;
+}
+
 struct VMM
 {
     float kappas[MAX_COMPONENTS];
@@ -219,6 +243,14 @@ struct VMM
     float weights[MAX_COMPONENTS];
 
     uint32_t numComponents;
+
+    __device__ void UpdateComponent(uint32_t componentIndex, float kappa, float3 dir,
+                                    float weight)
+    {
+        kappas[componentIndex]     = kappa;
+        directions[componentIndex] = dir;
+        weights[componentIndex]    = weight;
+    }
 };
 
 struct Statistics
@@ -387,6 +419,7 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
     const float maxKappa                = 32000.f;
     const float maxMeanCosine           = KappaToMeanCosine(maxKappa);
     const float convergenceThreshold    = 0.005f;
+    const float splittingThreshold      = 0.5f;
 
     const uint32_t numSampleBatches = (sampleCount + blockDim.x - 1) / blockDim.x;
 
@@ -624,7 +657,80 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
         {
             numUsedSamples = WarpReduceSum(numUsedSamples);
             numUsedSamples = WarpReadLaneFirst(numUsedSamples);
-            // chiSquareEstimateTotal /= float(numUsedSamples);
+
+            // TODO: need to divide by num samples here, or update calculation above
+            float chiSquareEstimate               = sharedChiSquareTotals[threadIndex];
+            uint32_t rank                         = 0;
+            const uint32_t numAvailableComponents = MAX_COMPONENTS - sharedVMM.numComponents;
+            for (uint32_t i = 0; i < MAX_COMPONENTS; i++)
+            {
+                float chiSquare    = sharedChiSquareTotals[i];
+                uint32_t increment = chiSquare > chiSquareEstimate ||
+                                     (chiSquare == chiSquareEstimate && i < threadIndex);
+                rank += increment;
+            }
+
+            bool split = sharedChiSquareTotals[threadIndex] > splittingThreshold &&
+                         rank < numAvailableComponents;
+
+            uint32_t splitMask     = __ballot_sync(0xffffffff, split);
+            uint32_t numComponents = sharedVMM.numComponents;
+            uint32_t newComponentIndex =
+                numComponents + __popc(splitMask & ((1u << threadIndex) - 1));
+
+            uint componentIndex = threadIndex;
+
+            if (split)
+            {
+                assert(newComponentIndex < MAX_COMPONENTS);
+
+                // TODO: obtain this data somehow
+                float sumWeights = 1.f;
+                float3 cov       = sharedCovarianceTotals[componentIndex] / sumWeights;
+
+                float negB = cov.x + cov.y;
+                float discriminant =
+                    sqrt((cov.x - cov.y) * (cov.x - cov.y) - 4 * cov.z * cov.z);
+                float eigenValue0   = 0.5f * (negB + discriminant);
+                float2 eigenVector0 = make_float2(-cov.z, cov.x - eigenValue0);
+
+                float norm0 = dot(eigenVector0, eigenVector0);
+                norm0       = norm0 > FLT_EPSILON ? rsqrt(norm0) : 1.f;
+                eigenVector0 *= norm0;
+
+                if (discriminant > 1e-8f)
+                {
+                    float2 temp     = eigenValue0 * eigenVector0 * 0.5f;
+                    float2 meanDir0 = temp;
+                    float2 meanDir1 = -temp;
+
+                    float3 meanDirection = sharedVMM.directions[componentIndex];
+
+                    float3 basis0, basis1;
+                    BuildOrthonormalBasis(meanDirection, basis0, basis1);
+
+                    float3 meanDir3D0 = Map2DTo3D(meanDir0);
+                    float3 meanDir3D1 = Map2DTo3D(meanDir1);
+
+                    float3 meanDirection0 = basis0 * meanDir3D0.x + basis1 * meanDir3D0.y +
+                                            meanDirection * meanDir3D0.z;
+                    float3 meanDirection1 = basis0 * meanDir3D1.x + basis1 * meanDir3D1.y +
+                                            meanDirection * meanDir3D1.z;
+
+                    float meanCosine  = KappaToMeanCosine(sharedVMM.kappas[componentIndex]);
+                    float meanCosine0 = meanCosine / abs(dot(meanDirection0, meanDirection));
+                    meanCosine0       = min(meanCosine0, maxMeanCosine);
+
+                    float kappa  = MeanCosineToKappa(meanCosine0);
+                    float weight = sharedVMM.weights[componentIndex] * 0.5f;
+
+                    sharedVMM.UpdateComponent(componentIndex, kappa, meanDirection0, weight);
+                    sharedVMM.UpdateComponent(newComponentIndex, kappa, meanDirection1,
+                                              weight);
+
+                    // TODO: update statistics
+                }
+            }
         }
     }
 }
