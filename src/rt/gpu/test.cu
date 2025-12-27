@@ -424,6 +424,8 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
 
             statistics.weightedLogLikelihood = hasData ? sampleWeight * log(V) : 0.f;
 
+            // TODO IMPORTANT: test accumulating in registers and then reduce at the end,
+            // instead of reducing in the loop
             for (uint32_t i = 0; i < sharedVMM.numComponents; i++)
             {
                 statistics.sumWeights[i] = hasData ? statistics.sumWeights[i] * invV : 0.f;
@@ -536,6 +538,94 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
 
     // Splitting
     {
+        // TODO: find
+        float mcEstimate = 0.f;
+
+        uint32_t numUsedSamples = 0;
+
+        // TODO IMPORTANT: these totals need to include totals from previous
+        // update passes
+        __shared__ float3 sharedCovarianceTotals[MAX_COMPONENTS];
+        __shared__ float sharedChiSquareTotals[MAX_COMPONENTS];
+
+        if (threadIndex < MAX_COMPONENTS)
+        {
+            sharedCovarianceTotals[threadIndex] = make_float3(0.f);
+            sharedChiSquareTotals[threadIndex]  = 0.f;
+        }
+
+        __syncthreads();
+
+        // Update split statistics
+        for (uint32_t batch = 0; batch < numSampleBatches; batch++)
+        {
+            Statistics statistics;
+            uint32_t sampleIndex   = threadIndex + blockDim.x * batch;
+            bool hasData           = sampleIndex < sampleCount;
+            float V                = 0.f;
+            float3 sampleDirection = make_float3(0.f);
+
+            if (hasData)
+            {
+                sampleDirection = sampleDirections[sampleIndex + offset];
+                V = SoftAssignment(sharedVMM, sampleDirection, statistics.sumWeights);
+            }
+
+            // TODO: load from memory
+            float sampleWeight = 1.f;
+            float samplePDF    = 1.f;
+            float sampleLi     = 1.f;
+
+            hasData    = V > 0.f;
+            float invV = V > 0.f ? 1.f / V : 0.f;
+            numUsedSamples += hasData;
+
+            // See equations 21 and 22 in Robust Fitting of Parallax-Aware Mixtures for
+            // Path Guiding. Note that this evaluates p^2/q - 2p + q, while the paper only
+            // evaluates p^2/q
+            for (uint32_t componentIndex = 0; componentIndex < sharedVMM.numComponents;
+                 componentIndex++)
+            {
+                float vmfPdf          = hasData ? statistics.sumWeights[componentIndex] : 0.f;
+                float partialValuePDF = (vmfPdf * sampleLi) / (mcEstimate * V);
+
+                float chiSquareEstimate =
+                    (vmfPdf * sampleLi * sampleLi) / (V * V * mcEstimate * mcEstimate);
+                chiSquareEstimate -= 2.f * partialValuePDF;
+                chiSquareEstimate += vmfPdf;
+                chiSquareEstimate /= samplePDF;
+                chiSquareEstimate = hasData ? chiSquareEstimate : 0.f;
+
+                // Calculate covariances
+                float3 localDirection = make_float3(0.f);
+
+                float softAssignmentWeight = vmfPdf * invV;
+                float assignedWeight       = softAssignmentWeight * sampleWeight;
+
+                float covXX = assignedWeight * localDirection.x * localDirection.x;
+                float covYY = assignedWeight * localDirection.y * localDirection.y;
+                float covXY = assignedWeight * localDirection.x * localDirection.y;
+                float3 cov  = make_float3(covXX, covYY, covXY);
+
+                // TODO IMPORTANT: save as above
+                chiSquareEstimate = WarpReduceSum(chiSquareEstimate);
+                cov               = WarpReduceSum(cov);
+
+                if ((threadIndex & (WARP_SIZE - 1)) == 0)
+                {
+                    atomicAdd(&sharedChiSquareTotals[componentIndex], chiSquareEstimate);
+                    atomicAdd(&sharedCovarianceTotals[componentIndex], cov);
+                }
+            }
+        }
+
+        // Split components
+        if (threadIndex < MAX_COMPONENTS)
+        {
+            numUsedSamples = WarpReduceSum(numUsedSamples);
+            numUsedSamples = WarpReadLaneFirst(numUsedSamples);
+            // chiSquareEstimateTotal /= float(numUsedSamples);
+        }
     }
 }
 
