@@ -246,19 +246,68 @@ inline __device__ float3 Map2DTo3D(float2 vec2D)
 struct VMM
 {
     float kappas[MAX_COMPONENTS];
-    float3 directions[MAX_COMPONENTS];
+    float directionX[MAX_COMPONENTS];
+    float directionY[MAX_COMPONENTS];
+    float directionZ[MAX_COMPONENTS];
     float weights[MAX_COMPONENTS];
 
     uint32_t numComponents;
 
+    inline __device__ float3 ReadDirection(uint32_t componentIndex) const
+    {
+        float3 dir;
+        dir.x = directionX[componentIndex];
+        dir.y = directionY[componentIndex];
+        dir.z = directionZ[componentIndex];
+        return dir;
+    }
+
+    inline __device__ void WriteDirection(uint32_t componentIndex, float3 dir)
+    {
+        directionX[componentIndex] = dir.x;
+        directionY[componentIndex] = dir.y;
+        directionZ[componentIndex] = dir.z;
+    }
+
     __device__ void UpdateComponent(uint32_t componentIndex, float kappa, float3 dir,
                                     float weight)
     {
-        kappas[componentIndex]     = kappa;
-        directions[componentIndex] = dir;
-        weights[componentIndex]    = weight;
+        kappas[componentIndex] = kappa;
+        WriteDirection(componentIndex, dir);
+        weights[componentIndex] = weight;
     }
 };
+
+inline __device__ float VMFProduct(float kappa0, float normalization0, float3 meanDirection0,
+                                   float kappa1, float normalization1, float3 meanDirection1,
+                                   float &productKappa, float &productNormalization,
+                                   float3 &productMeanDirection)
+{
+    productMeanDirection = kappa0 * meanDirection0 + kappa1 * meanDirection1;
+    productKappa         = sqrt(dot(productMeanDirection, productMeanDirection));
+
+    productNormalization      = 1.f / (4.f * PI);
+    float productEMinus2Kappa = 1.f;
+    if (productKappa > 1e-3f)
+    {
+        productEMinus2Kappa  = __expf(-2.0f * productKappa);
+        productNormalization = productKappa / (2.f * PI * (1.0f - productEMinus2Kappa));
+        productMeanDirection /= productKappa;
+    }
+    else
+    {
+        productKappa         = 0.0f;
+        productMeanDirection = meanDirection0;
+    }
+
+    float scale     = (normalization0 * normalization1) / productNormalization;
+    float cosTheta0 = dot(meanDirection0, productMeanDirection);
+    float cosTheta1 = dot(meanDirection1, productMeanDirection);
+
+    scale *= __expf(kappa0 * (cosTheta0 - 1.0f) + kappa1 * (cosTheta1 - 1.0f));
+
+    return scale;
+}
 
 struct Statistics
 {
@@ -321,7 +370,7 @@ __global__ void InitializeVMMS(VMM *vmms, uint32_t numVMMs)
             uniformDirection = make_float3(0, 0, 1);
         }
 
-        vmm.directions[n] = uniformDirection;
+        vmm.WriteDirection(n, uniformDirection);
         if (n < numComponents)
         {
             vmm.kappas[n]  = kappa;
@@ -373,7 +422,7 @@ inline __device__ float SoftAssignment(const VMM &vmm, float3 sampleDirection,
 
     for (uint32_t componentIndex = 0; componentIndex < vmm.numComponents; componentIndex++)
     {
-        float cosTheta = dot(sampleDirection, vmm.directions[componentIndex]);
+        float cosTheta = dot(sampleDirection, vmm.ReadDirection(componentIndex));
         // TODO: precompute in shared memory
         float norm = CalculateVMFNormalization(vmm.kappas[componentIndex]);
         float v    = norm * __expf(vmm.kappas[componentIndex] * min(cosTheta - 1.f, 0.f));
@@ -395,10 +444,6 @@ inline __device__ void UpdateMixtureParameters(VMM &sharedVMM, Statistics &share
                                                uint32_t sampleCount, uint32_t mask = 0)
 {
     assert(!masked || (masked && mask != 0));
-    if constexpr (!masked)
-    {
-        mask = 0xffffffff;
-    }
 
     const uint32_t maxNumIterations     = 100;
     const float weightPrior             = 0.01f;
@@ -502,7 +547,7 @@ inline __device__ void UpdateMixtureParameters(VMM &sharedVMM, Statistics &share
             float sumMaskedWeights   = threadIsEnabled ? weight : 0.f;
             float sumUnmaskedWeights = threadIsEnabled ? 0.f : weight;
 
-            if (threadIsEnabled)
+            if (!masked || threadIsEnabled)
             {
                 sharedVMM.weights[threadIndex] = weight;
             }
@@ -516,7 +561,7 @@ inline __device__ void UpdateMixtureParameters(VMM &sharedVMM, Statistics &share
             }
 
             // Update kappas and directions
-            if (threadIsEnabled)
+            if (!masked || threadIsEnabled)
             {
                 const float currentEstimationWeight  = float(sampleCount) / totalNumSamples;
                 const float previousEstimationWeight = 1.f - currentEstimationWeight;
@@ -538,9 +583,10 @@ inline __device__ void UpdateMixtureParameters(VMM &sharedVMM, Statistics &share
                 float meanCosine = length(meanDirection);
 
                 // TODO: make sure uninitialized components have correct default state?
-                sharedVMM.directions[threadIndex] = meanCosine > 0.f
-                                                        ? meanDirection / meanCosine
-                                                        : sharedVMM.directions[threadIndex];
+                if (meanCosine > 0.f)
+                {
+                    sharedVMM.WriteDirection(threadIndex, meanDirection / meanCosine);
+                }
 
                 float partialNumSamples = totalNumSamples * sharedVMM.weights[threadIndex];
 
@@ -620,6 +666,10 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
                             sumSampleWeights, offset, sampleCount);
 
     // Splitting
+    __shared__ float3 sharedCovarianceTotals[MAX_COMPONENTS];
+    __shared__ float sharedChiSquareTotals[MAX_COMPONENTS];
+    __shared__ float sharedSumWeights[MAX_COMPONENTS];
+
     {
         const uint32_t totalNumSamples = previousStatistics.numSamples + sampleCount;
         const float mcEstimate         = sumSampleWeights / float(totalNumSamples);
@@ -627,9 +677,6 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
 
         // TODO IMPORTANT: these totals need to include totals from previous
         // update passes
-        __shared__ float3 sharedCovarianceTotals[MAX_COMPONENTS];
-        __shared__ float sharedChiSquareTotals[MAX_COMPONENTS];
-        __shared__ float sharedSumWeights[MAX_COMPONENTS];
 
         if (threadIndex < MAX_COMPONENTS)
         {
@@ -682,7 +729,7 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
 
                 // Calculate covariances
                 float3 t0, t1;
-                float3 vmmComponentDir = sharedVMM.directions[componentIndex];
+                float3 vmmComponentDir = sharedVMM.ReadDirection(componentIndex);
                 BuildOrthonormalBasis(vmmComponentDir, t0, t1);
                 float3 localDirection =
                     make_float3(dot(t0, sampleDirection), dot(t1, sampleDirection),
@@ -761,7 +808,7 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
                     float2 meanDir0 = temp;
                     float2 meanDir1 = -temp;
 
-                    float3 meanDirection = sharedVMM.directions[componentIndex];
+                    float3 meanDirection = sharedVMM.ReadDirection(componentIndex);
 
                     float3 basis0, basis1;
                     BuildOrthonormalBasis(meanDirection, basis0, basis1);
@@ -800,15 +847,52 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
 
         if (threadIndex < MAX_COMPONENTS)
         {
-            printf("thread: %u, %f %f %f %f %f\n", threadIndex, sharedVMM.kappas[threadIndex],
-                   sharedVMM.directions[threadIndex].x, sharedVMM.directions[threadIndex].y,
-                   sharedVMM.directions[threadIndex].z, sharedVMM.weights[threadIndex]);
+            // printf("thread: %u, %f %f %f %f %f\n", threadIndex,
+            // sharedVMM.kappas[threadIndex],
+            //        sharedVMM.directions[threadIndex].x, sharedVMM.directions[threadIndex].y,
+            //        sharedVMM.directions[threadIndex].z, sharedVMM.weights[threadIndex]);
         }
 
         // Update split components
         UpdateMixtureParameters<true>(sharedVMM, sharedStatistics, previousStatistics,
                                       sampleDirections, sumSampleWeights, offset, sampleCount,
                                       sharedSplitMask);
+    }
+
+    // Reuse shared memory
+    float *normalizations = sharedSumWeights;
+
+    // Merging
+    {
+        const uint32_t numComponents = sharedVMM.numComponents;
+        const uint32_t numPairs      = (numComponents * numComponents - numComponents) / 2;
+
+        const uint32_t numMergeBatches = (numPairs + blockDim.x - 1) / blockDim.x;
+
+        for (uint32_t batch = 0; batch < numMergeBatches; batch++)
+        {
+            // Calculate the merge cost for the requisite pair
+            const uint32_t componentIndex0 = 0;
+            const uint32_t componentIndex1 = 0;
+
+            float kappa0          = sharedVMM.kappas[componentIndex0];
+            float kappa1          = sharedVMM.kappas[componentIndex1];
+            float normalization0  = CalculateVMFNormalization(kappa0);
+            float normalization1  = CalculateVMFNormalization(kappa1);
+            float weight0         = sharedVMM.weights[componentIndex0];
+            float weight1         = sharedVMM.weights[componentIndex1];
+            float3 meanDirection0 = sharedVMM.ReadDirection(componentIndex0);
+            float3 meanDirection1 = sharedVMM.ReadDirection(componentIndex1);
+
+            float weight00 = weight0 * weight0;
+
+            float productKappa, productNormalization;
+            float3 productMeanDirection;
+
+            float scale00 = VMFProduct(kappa0, normalization0, meanDirection0, kappa1,
+                                       normalization1, meanDirection1, productKappa,
+                                       productNormalization, productMeanDirection);
+        }
     }
 }
 
