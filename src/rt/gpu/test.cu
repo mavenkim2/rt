@@ -860,24 +860,55 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
     }
 
     // Reuse shared memory
-    float *normalizations = sharedSumWeights;
+    float *mergeKappas      = sharedSumWeights;
+    float *mergeProducts    = sharedChiSquareTotals;
+    float3 *mergeDirections = sharedCovarianceTotals;
 
     // Merging
     {
-        const uint32_t numComponents = sharedVMM.numComponents;
-        const uint32_t numPairs      = (numComponents * numComponents - numComponents) / 2;
-
+        const uint32_t numComponents   = sharedVMM.numComponents;
+        const uint32_t numPairs        = (numComponents * numComponents - numComponents) / 2;
         const uint32_t numMergeBatches = (numPairs + blockDim.x - 1) / blockDim.x;
+
+        if (threadIndex < sharedVMM.numComponents)
+        {
+            float kappa          = sharedVMM.kappas[threadIndex];
+            float normalization  = CalculateVMFNormalization(kappa);
+            float3 meanDirection = sharedVMM.ReadDirection(threadIndex);
+
+            float productKappa, productNormalization;
+            float3 productMeanDirection;
+            float scale = VMFProduct(kappa, normalization, meanDirection, kappa, normalization,
+                                     meanDirection, productKappa, productNormalization,
+                                     productMeanDirection);
+
+            mergeKappas[threadIndex]     = productKappa;
+            mergeProducts[threadIndex]   = scale;
+            mergeDirections[threadIndex] = productMeanDirection;
+        }
+
+        __syncthreads();
 
         for (uint32_t batch = 0; batch < numMergeBatches; batch++)
         {
+            // 0  1  2  3  4  5  6  7  8
+            // 1  9 10 11 12 13 14 15 16
+            // 2 10 17 18 19 20 21 22 23
+            // 3 11 18 24 25 26 27 28 29
+
+            // TODO: instead of recomputing the chi square estimate for
+            // every merge iteration, cache in shared memory and update only the pairs
+            // for the components that have changed
+
+            // index % components < index / components ? : index - index / components
+
             // Calculate the merge cost for the requisite pair
             const uint32_t componentIndex0 = 0;
             const uint32_t componentIndex1 = 0;
 
             float kappa0          = sharedVMM.kappas[componentIndex0];
-            float kappa1          = sharedVMM.kappas[componentIndex1];
             float normalization0  = CalculateVMFNormalization(kappa0);
+            float kappa1          = sharedVMM.kappas[componentIndex1];
             float normalization1  = CalculateVMFNormalization(kappa1);
             float weight0         = sharedVMM.weights[componentIndex0];
             float weight1         = sharedVMM.weights[componentIndex1];
@@ -889,9 +920,15 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
             float productKappa, productNormalization;
             float3 productMeanDirection;
 
-            float scale00 = VMFProduct(kappa0, normalization0, meanDirection0, kappa1,
+            float scale00 = mergeProducts[componentIndex0];
+            float scale11 = mergeProducts[componentIndex1];
+            float scale01 = VMFProduct(kappa0, normalization0, meanDirection0, kappa1,
                                        normalization1, meanDirection1, productKappa,
                                        productNormalization, productMeanDirection);
+
+            // is this even worth it? like this is a non trivial amount of effort.
+            // like it's not hard but it's not free. plus there's a potential for errors
+            // over just copying the code dumbly.
         }
     }
 }
