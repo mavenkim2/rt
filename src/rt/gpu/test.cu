@@ -309,6 +309,41 @@ inline __device__ float VMFProduct(float kappa0, float normalization0, float3 me
     return scale;
 }
 
+__device__ float VMFIntegratedDivision(const float3 &meanDirection0, const float &kappa0,
+                                       const float &normalization0,
+                                       const float3 &meanDirection1, const float &kappa1,
+                                       const float &normalization1)
+{
+    float eMinus2Kappa1         = __expf(-2.f * kappa1);
+    float3 productMeanDirection = kappa0 * meanDirection0 + kappa1 * meanDirection1;
+
+    float productKappa = sqrt(dot(productMeanDirection, productMeanDirection));
+
+    float productNormalization = 1.0f / (4.0f * PI);
+    float productEMinus2Kappa  = 1.0f;
+    if (productKappa > 1e-3f)
+    {
+        productEMinus2Kappa  = __expf(-2.0f * productKappa);
+        productNormalization = productKappa / (2.0f * PI * (1.0f - productEMinus2Kappa));
+        productMeanDirection /= productKappa;
+    }
+    else
+    {
+        productKappa         = 0.0f;
+        productMeanDirection = meanDirection0;
+    }
+
+    float scale     = (normalization0 * normalization1) / productNormalization;
+    float cosTheta0 = dot(meanDirection0, productMeanDirection);
+    float cosTheta1 = dot(meanDirection1, productMeanDirection);
+
+    // TODO IMPORTANT: shouldn't the 1 - eMinus2Kappa1 be squared???
+    scale *= (4.0f * PI * PI * (1.0f - eMinus2Kappa1)) / (kappa1 * kappa1);
+    scale *= __expf((kappa0 * (cosTheta0 - 1.0f) + kappa1 * (cosTheta1 + 1.0f)));
+
+    return scale;
+}
+
 struct Statistics
 {
     float weightedLogLikelihood;
@@ -634,10 +669,10 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
     __shared__ VMM sharedVMM;
     __shared__ float sumSampleWeights;
 
-    uint32_t threadIndex = threadIdx.x;
-    uint32_t vmmIndex    = blockIdx.x;
-    uint32_t sampleCount = vmmCounts[vmmIndex];
-    uint32_t offset      = vmmOffsets[vmmIndex];
+    const uint32_t threadIndex = threadIdx.x;
+    uint32_t vmmIndex          = blockIdx.x;
+    uint32_t sampleCount       = vmmCounts[vmmIndex];
+    uint32_t offset            = vmmOffsets[vmmIndex];
 
     if (threadIndex == 0)
     {
@@ -866,7 +901,8 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
 
     // Merging
     {
-        const uint32_t numComponents   = sharedVMM.numComponents;
+        const uint32_t numComponents = sharedVMM.numComponents;
+
         const uint32_t numPairs        = (numComponents * numComponents - numComponents) / 2;
         const uint32_t numMergeBatches = (numPairs + blockDim.x - 1) / blockDim.x;
 
@@ -891,44 +927,93 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
 
         for (uint32_t batch = 0; batch < numMergeBatches; batch++)
         {
-            // 0  1  2  3  4  5  6  7  8
-            // 1  9 10 11 12 13 14 15 16
-            // 2 10 17 18 19 20 21 22 23
-            // 3 11 18 24 25 26 27 28 29
+            // X 0 1 2  3  4   5  6  7
+            // X X 8 9  10 11 12 13 14
+            // X X X 15 16 17 18 19 20
 
             // TODO: instead of recomputing the chi square estimate for
             // every merge iteration, cache in shared memory and update only the pairs
             // for the components that have changed
 
-            // index % components < index / components ? : index - index / components
-
             // Calculate the merge cost for the requisite pair
-            const uint32_t componentIndex0 = 0;
-            const uint32_t componentIndex1 = 0;
+            uint32_t indexInBatch = batch * blockDim.x + threadIndex;
+            float a               = 1 + (numComponents - 1) * 2;
+            uint32_t row          = 1 + uint32_t(a - sqrt(a * a - 8.f * indexInBatch)) / 2;
 
-            float kappa0          = sharedVMM.kappas[componentIndex0];
-            float normalization0  = CalculateVMFNormalization(kappa0);
-            float kappa1          = sharedVMM.kappas[componentIndex1];
-            float normalization1  = CalculateVMFNormalization(kappa1);
-            float weight0         = sharedVMM.weights[componentIndex0];
-            float weight1         = sharedVMM.weights[componentIndex1];
-            float3 meanDirection0 = sharedVMM.ReadDirection(componentIndex0);
-            float3 meanDirection1 = sharedVMM.ReadDirection(componentIndex1);
+            uint32_t newIndexInBatch = indexInBatch + row * (row + 1) / 2;
 
-            float weight00 = weight0 * weight0;
+            const uint32_t componentIndex0 = newIndexInBatch / numComponents;
+            const uint32_t componentIndex1 = newIndexInBatch % numComponents;
 
-            float productKappa, productNormalization;
-            float3 productMeanDirection;
+            // if (blockIdx.x == 0 && indexInBatch < numPairs)
+            // {
+            //     printf("%u, thread: %u, %u %u\n", numComponents, threadIndex,
+            //     componentIndex0,
+            //            componentIndex1);
+            // }
 
-            float scale00 = mergeProducts[componentIndex0];
-            float scale11 = mergeProducts[componentIndex1];
-            float scale01 = VMFProduct(kappa0, normalization0, meanDirection0, kappa1,
-                                       normalization1, meanDirection1, productKappa,
-                                       productNormalization, productMeanDirection);
+            if (indexInBatch < numPairs)
+            {
+                float kappa0          = sharedVMM.kappas[componentIndex0];
+                float normalization0  = CalculateVMFNormalization(kappa0);
+                float kappa1          = sharedVMM.kappas[componentIndex1];
+                float normalization1  = CalculateVMFNormalization(kappa1);
+                float weight0         = sharedVMM.weights[componentIndex0];
+                float weight1         = sharedVMM.weights[componentIndex1];
+                float3 meanDirection0 = sharedVMM.ReadDirection(componentIndex0);
+                float3 meanDirection1 = sharedVMM.ReadDirection(componentIndex1);
 
-            // is this even worth it? like this is a non trivial amount of effort.
-            // like it's not hard but it's not free. plus there's a potential for errors
-            // over just copying the code dumbly.
+                float kappa00         = mergeKappas[componentIndex0];
+                float normalization00 = CalculateVMFNormalization(kappa00);
+                float scale00         = mergeProducts[componentIndex0];
+                float3 dir00          = mergeDirections[componentIndex0];
+
+                float kappa11         = mergeKappas[componentIndex1];
+                float normalization11 = CalculateVMFNormalization(kappa11);
+                float scale11         = mergeProducts[componentIndex1];
+                float3 dir11          = mergeDirections[componentIndex1];
+
+                float weight         = weight0 + weight1;
+                float3 meanDirection = weight0 * KappaToMeanCosine(kappa0) * meanDirection0 +
+                                       weight1 * KappaToMeanCosine(kappa1) * meanDirection1;
+                meanDirection /= weight;
+                float meanCosine = dot(meanDirection, meanDirection);
+                float kappa      = 0.f;
+
+                if (meanCosine > 0.f)
+                {
+                    meanCosine  = sqrt(meanCosine);
+                    float kappa = MeanCosineToKappa(meanCosine);
+                    meanDirection /= meanCosine;
+                }
+                else
+                {
+                    meanDirection = meanDirection0;
+                }
+
+                float normalization = CalculateVMFNormalization(kappa);
+
+                float kappa01, normalization01;
+                float3 dir01;
+                float scale01 =
+                    VMFProduct(kappa0, normalization0, meanDirection0, kappa1, normalization1,
+                               meanDirection1, kappa01, normalization01, dir01);
+
+                float chiSquareIJ = 0.0f;
+                chiSquareIJ +=
+                    (weight0 * weight0 / weight) *
+                    (scale00 * VMFIntegratedDivision(dir00, kappa00, normalization00,
+                                                     -meanDirection, kappa, normalization));
+                chiSquareIJ +=
+                    (weight1 * weight1 / weight) *
+                    (scale11 * VMFIntegratedDivision(dir11, kappa11, normalization11,
+                                                     -meanDirection, kappa, normalization));
+                chiSquareIJ +=
+                    2.0f * (weight0 * weight1 / weight) *
+                    (scale01 * VMFIntegratedDivision(dir01, kappa01, normalization01,
+                                                     -meanDirection, kappa, normalization));
+                chiSquareIJ -= weight;
+            }
         }
     }
 }
