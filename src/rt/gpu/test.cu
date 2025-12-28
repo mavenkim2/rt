@@ -212,6 +212,13 @@ __device__ T WarpReadLaneFirst(T val)
     return val;
 }
 
+template <typename T>
+__device__ T WarpReduceSumBroadcast(T val)
+{
+    val = WarpReduceSum(val);
+    return WarpReadLaneFirst(val);
+}
+
 inline __device__ void BuildOrthonormalBasis(const float3 &n, float3 &t0, float3 &t1)
 {
     const float s = n.z >= 0.f ? 1.f : -1.f;
@@ -380,37 +387,18 @@ inline __device__ float SoftAssignment(const VMM &vmm, float3 sampleDirection,
     return V;
 }
 
-__global__ void UpdateMixture(const VMM *__restrict__ vmms,
-                              Statistics *__restrict__ previousStatisticsArray,
-                              const float3 *__restrict__ sampleDirections,
-                              const uint32_t *__restrict__ vmmOffsets,
-                              const uint32_t *__restrict__ vmmCounts)
+template <bool masked = false>
+inline __device__ void UpdateMixtureParameters(VMM &sharedVMM, Statistics &sharedStatistics,
+                                               Statistics &previousStatistics,
+                                               const float3 *sampleDirections,
+                                               float &sumSampleWeights, uint32_t sampleOffset,
+                                               uint32_t sampleCount, uint32_t mask = 0)
 {
-    __shared__ Statistics sharedStatistics;
-    __shared__ Statistics previousStatistics;
-    __shared__ VMM sharedVMM;
-
-    uint32_t threadIndex = threadIdx.x;
-    uint32_t vmmIndex    = blockIdx.x;
-    uint32_t sampleCount = vmmCounts[vmmIndex];
-    uint32_t offset      = vmmOffsets[vmmIndex];
-
-    if (threadIndex == 0)
+    assert(!masked || (masked && mask != 0));
+    if constexpr (!masked)
     {
-        sharedVMM = vmms[vmmIndex];
-        for (uint32_t i = 0; i < sharedVMM.numComponents; i++)
-        {
-            sharedStatistics.sumWeights[i]              = 0.f;
-            sharedStatistics.sumWeightedDirections[i]   = make_float3(0.f);
-            previousStatistics.sumWeights[i]            = 0.f;
-            previousStatistics.sumWeightedDirections[i] = make_float3(0.f);
-        }
-        sharedStatistics.weightedLogLikelihood   = 0.f;
-        previousStatistics.weightedLogLikelihood = 0.f;
-        previousStatistics.numSamples            = 0;
+        mask = 0xffffffff;
     }
-
-    __syncthreads();
 
     const uint32_t maxNumIterations     = 100;
     const float weightPrior             = 0.01f;
@@ -419,12 +407,11 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
     const float maxKappa                = 32000.f;
     const float maxMeanCosine           = KappaToMeanCosine(maxKappa);
     const float convergenceThreshold    = 0.005f;
-    const float splittingThreshold      = 0.5f;
-
-    const uint32_t numSampleBatches = (sampleCount + blockDim.x - 1) / blockDim.x;
+    const uint32_t numSampleBatches     = (sampleCount + blockDim.x - 1) / blockDim.x;
 
     float previousLogLikelihood = 0.f;
 
+    const uint32_t threadIndex = threadIdx.x;
     for (uint32_t iteration = 0; iteration < maxNumIterations; iteration++)
     {
         if (threadIndex < sharedVMM.numComponents)
@@ -447,7 +434,7 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
 
             if (hasData)
             {
-                sampleDirection = sampleDirections[sampleIndex + offset];
+                sampleDirection = sampleDirections[sampleIndex + sampleOffset];
                 V = SoftAssignment(sharedVMM, sampleDirection, statistics.sumWeights);
             }
 
@@ -472,7 +459,6 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
 
                 if ((threadIndex & (WARP_SIZE - 1)) == 0)
                 {
-                    printf("warp sum: %f\n", sumWeights);
                     atomicAdd(&sharedStatistics.sumWeights[i], sumWeights);
                     atomicAdd(&sharedStatistics.sumWeightedDirections[i],
                               sumWeightedDirections);
@@ -482,7 +468,7 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
             float weightedLogLikelihood = WarpReduceSum(statistics.weightedLogLikelihood);
             if ((threadIndex & (WARP_SIZE - 1)) == 0)
             {
-                printf("log like: %f\n", weightedLogLikelihood);
+                // printf("log like: %f\n", weightedLogLikelihood);
                 atomicAdd(&sharedStatistics.weightedLogLikelihood, weightedLogLikelihood);
             }
         }
@@ -495,8 +481,10 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
             // NOTE: if MAX_COMPONENTS > 32, this no longer works
             // Normalize
             float componentWeight = sharedStatistics.sumWeights[threadIndex];
-            float normWeight      = WarpReduceSum(componentWeight);
-            normWeight            = WarpReadLaneFirst(normWeight);
+            float normWeight      = WarpReduceSumBroadcast(componentWeight);
+
+            if (threadIndex == 0) sumSampleWeights = normWeight;
+
             normWeight = normWeight > FLT_EPSILON ? float(sampleCount) / normWeight : 0.f;
             sharedStatistics.sumWeights[threadIndex] *= normWeight;
 
@@ -509,49 +497,61 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
                          : (weightPrior + weight) /
                                (weightPrior * sharedVMM.numComponents + sampleCount);
 
-            sharedVMM.weights[threadIndex] = weight;
+            const bool threadIsEnabled = mask & (1u << threadIndex);
+
+            float sumMaskedWeights   = threadIsEnabled ? weight : 0.f;
+            float sumUnmaskedWeights = threadIsEnabled ? 0.f : weight;
+
+            if (threadIsEnabled)
+            {
+                sharedVMM.weights[threadIndex] = weight;
+            }
+
+            if constexpr (masked)
+            {
+                // Makes sure weights always sum to one
+                float invSumWeights = 1.f / WarpReduceSumBroadcast(sumMaskedWeights);
+                invSumWeights *= 1.f - WarpReduceSumBroadcast(sumUnmaskedWeights);
+                sharedVMM.weights[threadIndex] *= invSumWeights;
+            }
 
             // Update kappas and directions
-            const float currentEstimationWeight  = float(sampleCount) / totalNumSamples;
-            const float previousEstimationWeight = 1.f - currentEstimationWeight;
-
-            float3 currentMeanDirection =
-                sharedStatistics.sumWeights[threadIndex] > 0.f
-                    ? sharedStatistics.sumWeightedDirections[threadIndex] /
-                          sharedStatistics.sumWeights[threadIndex]
-                    : make_float3(0.f);
-            float3 previousMeanDirection =
-                previousStatistics.sumWeights[threadIndex] > 0.f
-                    ? previousStatistics.sumWeightedDirections[threadIndex] /
-                          previousStatistics.sumWeights[threadIndex]
-                    : make_float3(0.f);
-
-            float3 meanDirection = currentMeanDirection * currentEstimationWeight +
-                                   previousMeanDirection * previousEstimationWeight;
-
-            float meanCosine = length(meanDirection);
-
-            // TODO: make sure uninitialized components have correct default state?
-            sharedVMM.directions[threadIndex] = meanCosine > 0.f
-                                                    ? meanDirection / meanCosine
-                                                    : sharedVMM.directions[threadIndex];
-
-            float partialNumSamples = totalNumSamples * sharedVMM.weights[threadIndex];
-
-            meanCosine =
-                (meanCosinePrior * meanCosinePriorStrength + meanCosine * partialNumSamples) /
-                (meanCosinePriorStrength + partialNumSamples);
-            meanCosine = min(meanCosine, maxMeanCosine);
-            float kappa =
-                threadIndex < sharedVMM.numComponents ? MeanCosineToKappa(meanCosine) : 0.f;
-            sharedVMM.kappas[threadIndex] = kappa;
-
-            if (vmmIndex == 0)
+            if (threadIsEnabled)
             {
-                printf("component: %u, dir: %f %f %f, kappa: %f\n", threadIndex,
-                       sharedVMM.directions[threadIndex].x,
-                       sharedVMM.directions[threadIndex].y,
-                       sharedVMM.directions[threadIndex].z, kappa);
+                const float currentEstimationWeight  = float(sampleCount) / totalNumSamples;
+                const float previousEstimationWeight = 1.f - currentEstimationWeight;
+
+                float3 currentMeanDirection =
+                    sharedStatistics.sumWeights[threadIndex] > 0.f
+                        ? sharedStatistics.sumWeightedDirections[threadIndex] /
+                              sharedStatistics.sumWeights[threadIndex]
+                        : make_float3(0.f);
+                float3 previousMeanDirection =
+                    previousStatistics.sumWeights[threadIndex] > 0.f
+                        ? previousStatistics.sumWeightedDirections[threadIndex] /
+                              previousStatistics.sumWeights[threadIndex]
+                        : make_float3(0.f);
+
+                float3 meanDirection = currentMeanDirection * currentEstimationWeight +
+                                       previousMeanDirection * previousEstimationWeight;
+
+                float meanCosine = length(meanDirection);
+
+                // TODO: make sure uninitialized components have correct default state?
+                sharedVMM.directions[threadIndex] = meanCosine > 0.f
+                                                        ? meanDirection / meanCosine
+                                                        : sharedVMM.directions[threadIndex];
+
+                float partialNumSamples = totalNumSamples * sharedVMM.weights[threadIndex];
+
+                meanCosine = (meanCosinePrior * meanCosinePriorStrength +
+                              meanCosine * partialNumSamples) /
+                             (meanCosinePriorStrength + partialNumSamples);
+                meanCosine                    = min(meanCosine, maxMeanCosine);
+                float kappa                   = threadIndex < sharedVMM.numComponents
+                                                    ? MeanCosineToKappa(meanCosine)
+                                                    : 0.f;
+                sharedVMM.kappas[threadIndex] = kappa;
             }
         }
 
@@ -568,23 +568,74 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
             previousLogLikelihood = logLikelihood;
         }
     }
+}
+
+// TODO IMPORTANT:
+// - handle unassigned components in MAP update
+// - make sure to update statistics and rewrite to memory
+// - make sure to get chi square statistics fromm previous update
+// - make sure to load sample weights and pdfs for chi square splitting
+// - proper criteria for splitting/merging
+// - make sure to test performance of atomics vs block reduce, different block sizes
+__global__ void UpdateMixture(const VMM *__restrict__ vmms,
+                              Statistics *__restrict__ previousStatisticsArray,
+                              const float3 *__restrict__ sampleDirections,
+                              const uint32_t *__restrict__ vmmOffsets,
+                              const uint32_t *__restrict__ vmmCounts)
+{
+    __shared__ Statistics sharedStatistics;
+    __shared__ Statistics previousStatistics;
+    __shared__ VMM sharedVMM;
+    __shared__ float sumSampleWeights;
+
+    uint32_t threadIndex = threadIdx.x;
+    uint32_t vmmIndex    = blockIdx.x;
+    uint32_t sampleCount = vmmCounts[vmmIndex];
+    uint32_t offset      = vmmOffsets[vmmIndex];
+
+    if (threadIndex == 0)
+    {
+        sharedVMM = vmms[vmmIndex];
+        for (uint32_t i = 0; i < sharedVMM.numComponents; i++)
+        {
+            sharedStatistics.sumWeights[i]              = 0.f;
+            sharedStatistics.sumWeightedDirections[i]   = make_float3(0.f);
+            previousStatistics.sumWeights[i]            = 0.f;
+            previousStatistics.sumWeightedDirections[i] = make_float3(0.f);
+        }
+        sharedStatistics.weightedLogLikelihood   = 0.f;
+        previousStatistics.weightedLogLikelihood = 0.f;
+        previousStatistics.numSamples            = 0;
+    }
+
+    __syncthreads();
+
+    const float maxKappa           = 32000.f;
+    const float maxMeanCosine      = KappaToMeanCosine(maxKappa);
+    const float splittingThreshold = 0.5f;
+
+    const uint32_t numSampleBatches = (sampleCount + blockDim.x - 1) / blockDim.x;
+
+    UpdateMixtureParameters(sharedVMM, sharedStatistics, previousStatistics, sampleDirections,
+                            sumSampleWeights, offset, sampleCount);
 
     // Splitting
     {
-        // TODO: find
-        float mcEstimate = 0.f;
-
-        uint32_t numUsedSamples = 0;
+        const uint32_t totalNumSamples = previousStatistics.numSamples + sampleCount;
+        const float mcEstimate         = sumSampleWeights / float(totalNumSamples);
+        uint32_t numUsedSamples        = 0;
 
         // TODO IMPORTANT: these totals need to include totals from previous
         // update passes
         __shared__ float3 sharedCovarianceTotals[MAX_COMPONENTS];
         __shared__ float sharedChiSquareTotals[MAX_COMPONENTS];
+        __shared__ float sharedSumWeights[MAX_COMPONENTS];
 
         if (threadIndex < MAX_COMPONENTS)
         {
             sharedCovarianceTotals[threadIndex] = make_float3(0.f);
             sharedChiSquareTotals[threadIndex]  = 0.f;
+            sharedSumWeights[threadIndex]       = 0.f;
         }
 
         __syncthreads();
@@ -630,7 +681,12 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
                 chiSquareEstimate = hasData ? chiSquareEstimate : 0.f;
 
                 // Calculate covariances
-                float3 localDirection = make_float3(0.f);
+                float3 t0, t1;
+                float3 vmmComponentDir = sharedVMM.directions[componentIndex];
+                BuildOrthonormalBasis(vmmComponentDir, t0, t1);
+                float3 localDirection =
+                    make_float3(dot(t0, sampleDirection), dot(t1, sampleDirection),
+                                dot(vmmComponentDir, sampleDirection));
 
                 float softAssignmentWeight = vmfPdf * invV;
                 float assignedWeight       = softAssignmentWeight * sampleWeight;
@@ -643,22 +699,24 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
                 // TODO IMPORTANT: save as above
                 chiSquareEstimate = WarpReduceSum(chiSquareEstimate);
                 cov               = WarpReduceSum(cov);
+                assignedWeight    = WarpReduceSum(assignedWeight);
 
                 if ((threadIndex & (WARP_SIZE - 1)) == 0)
                 {
                     atomicAdd(&sharedChiSquareTotals[componentIndex], chiSquareEstimate);
                     atomicAdd(&sharedCovarianceTotals[componentIndex], cov);
+                    atomicAdd(&sharedSumWeights[componentIndex], assignedWeight);
                 }
             }
         }
 
+        __shared__ uint32_t sharedSplitMask;
         // Split components
         if (threadIndex < MAX_COMPONENTS)
         {
             numUsedSamples = WarpReduceSum(numUsedSamples);
             numUsedSamples = WarpReadLaneFirst(numUsedSamples);
 
-            // TODO: need to divide by num samples here, or update calculation above
             float chiSquareEstimate               = sharedChiSquareTotals[threadIndex];
             uint32_t rank                         = 0;
             const uint32_t numAvailableComponents = MAX_COMPONENTS - sharedVMM.numComponents;
@@ -684,8 +742,7 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
             {
                 assert(newComponentIndex < MAX_COMPONENTS);
 
-                // TODO: obtain this data somehow
-                float sumWeights = 1.f;
+                float sumWeights = sharedSumWeights[componentIndex];
                 float3 cov       = sharedCovarianceTotals[componentIndex] / sumWeights;
 
                 float negB = cov.x + cov.y;
@@ -728,10 +785,30 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
                     sharedVMM.UpdateComponent(newComponentIndex, kappa, meanDirection1,
                                               weight);
 
-                    // TODO: update statistics
+                    // TODO: update and split statistics
                 }
             }
+
+            if (threadIndex == 0)
+            {
+                sharedVMM.numComponents += __popc(splitMask);
+                sharedSplitMask = splitMask;
+            }
         }
+
+        __syncthreads();
+
+        if (threadIndex < MAX_COMPONENTS)
+        {
+            printf("thread: %u, %f %f %f %f %f\n", threadIndex, sharedVMM.kappas[threadIndex],
+                   sharedVMM.directions[threadIndex].x, sharedVMM.directions[threadIndex].y,
+                   sharedVMM.directions[threadIndex].z, sharedVMM.weights[threadIndex]);
+        }
+
+        // Update split components
+        UpdateMixtureParameters<true>(sharedVMM, sharedStatistics, previousStatistics,
+                                      sampleDirections, sumSampleWeights, offset, sampleCount,
+                                      sharedSplitMask);
     }
 }
 
