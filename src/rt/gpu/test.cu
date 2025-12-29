@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <cfloat>
 #include <stdio.h>
 #include "../base.h"
 #include "helper_math.h"
@@ -195,6 +196,17 @@ __device__ float3 WarpReduceSum(float3 val)
     val.x = WarpReduceSum(val.x);
     val.y = WarpReduceSum(val.y);
     val.z = WarpReduceSum(val.z);
+    return val;
+}
+
+template <typename T>
+__device__ T WarpReduceMin(T val)
+{
+#pragma unroll
+    for (int offset = (WARP_SIZE >> 1); offset > 0; offset >>= 1)
+    {
+        val += __shfl_down_sync(0xffffffff, val, offset);
+    }
     return val;
 }
 
@@ -873,20 +885,18 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
 
             if (threadIndex == 0)
             {
-                sharedVMM.numComponents += __popc(splitMask);
-                sharedSplitMask = splitMask;
+                uint32_t newNumComponents = __popc(splitMask);
+                assert(sharedVMM.numComponents + newNumComponents <= MAX_COMPONENTS);
+
+                uint32_t maskExtend = ((1u << newNumComponents) - 1u)
+                                      << sharedVMM.numComponents;
+
+                sharedVMM.numComponents += newNumComponents;
+                sharedSplitMask = splitMask | maskExtend;
             }
         }
 
         __syncthreads();
-
-        if (threadIndex < MAX_COMPONENTS)
-        {
-            // printf("thread: %u, %f %f %f %f %f\n", threadIndex,
-            // sharedVMM.kappas[threadIndex],
-            //        sharedVMM.directions[threadIndex].x, sharedVMM.directions[threadIndex].y,
-            //        sharedVMM.directions[threadIndex].z, sharedVMM.weights[threadIndex]);
-        }
 
         // Update split components
         UpdateMixtureParameters<true>(sharedVMM, sharedStatistics, previousStatistics,
@@ -908,7 +918,14 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
 
         if (threadIndex < sharedVMM.numComponents)
         {
-            float kappa          = sharedVMM.kappas[threadIndex];
+            float kappa = sharedVMM.kappas[threadIndex];
+            if (blockIdx.x == 0)
+            {
+                printf("weight: %f\n", sharedVMM.weights[threadIndex]);
+                printf("%u, thread: %u, %f\n", numComponents, threadIndex, kappa);
+                float3 dir = sharedVMM.ReadDirection(threadIndex);
+                printf("%f %f %f\n", dir.x, dir.y, dir.z);
+            }
             float normalization  = CalculateVMFNormalization(kappa);
             float3 meanDirection = sharedVMM.ReadDirection(threadIndex);
 
@@ -925,6 +942,7 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
 
         __syncthreads();
 
+        // TODO: I'm pretty sure they don't combine components that were just split?
         for (uint32_t batch = 0; batch < numMergeBatches; batch++)
         {
             // X 0 1 2  3  4   5  6  7
@@ -945,12 +963,7 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
             const uint32_t componentIndex0 = newIndexInBatch / numComponents;
             const uint32_t componentIndex1 = newIndexInBatch % numComponents;
 
-            // if (blockIdx.x == 0 && indexInBatch < numPairs)
-            // {
-            //     printf("%u, thread: %u, %u %u\n", numComponents, threadIndex,
-            //     componentIndex0,
-            //            componentIndex1);
-            // }
+            float chiSquareIJ = FLT_MAX;
 
             if (indexInBatch < numPairs)
             {
@@ -982,8 +995,8 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
 
                 if (meanCosine > 0.f)
                 {
-                    meanCosine  = sqrt(meanCosine);
-                    float kappa = MeanCosineToKappa(meanCosine);
+                    meanCosine = sqrt(meanCosine);
+                    kappa      = MeanCosineToKappa(meanCosine);
                     meanDirection /= meanCosine;
                 }
                 else
@@ -999,7 +1012,7 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
                     VMFProduct(kappa0, normalization0, meanDirection0, kappa1, normalization1,
                                meanDirection1, kappa01, normalization01, dir01);
 
-                float chiSquareIJ = 0.0f;
+                chiSquareIJ = 0.f;
                 chiSquareIJ +=
                     (weight0 * weight0 / weight) *
                     (scale00 * VMFIntegratedDivision(dir00, kappa00, normalization00,
@@ -1013,6 +1026,12 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
                     (scale01 * VMFIntegratedDivision(dir01, kappa01, normalization01,
                                                      -meanDirection, kappa, normalization));
                 chiSquareIJ -= weight;
+
+                if (blockIdx.x == 0)
+                {
+                    // printf("%u, thread: %u, %u %u %f\n", numComponents, threadIndex,
+                    //        componentIndex0, componentIndex1, chiSquareIJ);
+                }
             }
         }
     }
