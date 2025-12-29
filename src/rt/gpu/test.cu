@@ -8,6 +8,7 @@
 #define PI             3.14159265358979323846f
 #define MAX_COMPONENTS 32
 #define WARP_SIZE      32
+#define WARP_SHIFT     5u
 
 static_assert(MAX_COMPONENTS <= WARP_SIZE, "too many max components");
 
@@ -1036,6 +1037,88 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
         }
     }
 }
+
+// cuda kd tree build
+struct KDTreeNode
+{
+    float splitPos;
+    uint32_t childIndex_dim;
+
+    __device__ uint32_t GetSplitDim() const { return childIndex_dim >> 30; }
+};
+
+#define PARTITION_THREADS_IN_BLOCK 256
+#define PARTITION_WARPS_IN_BLOCK   (PARTITION_THREADS_IN_BLOCK >> WARP_SHIFT)
+
+__device__ void PartitionSamplesMultiBlock(uint32_t *sampleIndices, uint32_t *newSampleIndices,
+                                           KDTreeNode &node, uint32_t numSamples,
+                                           uint32_t *sampleOffset, float *samplesX,
+                                           float *samplesY, float *samplesZ)
+{
+    const uint32_t wid = threadIdx.x >> WARP_SHIFT;
+
+    uint32_t sampleIndexIndex = threadIdx.x + blockDim.x * blockIdx.x;
+    if (sampleIndexIndex >= numSamples) return;
+
+    float splitPos = node.splitPos;
+    uint32_t dim   = node.GetSplitDim();
+
+    float *samplesArray = dim == 0 ? samplesX : (dim == 1 ? samplesY : samplesZ);
+
+    uint32_t sampleIndex = sampleIndices[sampleIndexIndex];
+    bool isLeft          = samplesArray[sampleIndex] < splitPos;
+
+    __shared__ uint32_t numLefts[PARTITION_WARPS_IN_BLOCK];
+    __shared__ uint32_t numRights[PARTITION_WARPS_IN_BLOCK];
+
+    uint32_t mask      = __activemask();
+    uint32_t leftMask  = __ballot_sync(mask, isLeft);
+    uint32_t rightMask = __ballot_sync(mask, !isLeft);
+
+    if ((threadIdx.x & (WARP_SIZE - 1)) == 0)
+    {
+        numLefts[wid]  = __popc(leftMask);
+        numRights[wid] = __popc(rightMask);
+    }
+
+    __syncthreads();
+
+    __shared__ uint32_t leftOffset;
+    __shared__ uint32_t rightOffset;
+
+    if (threadIdx.x == 0)
+    {
+        uint32_t totalLeft  = 0;
+        uint32_t totalRight = 0;
+        for (uint32_t i = 0; i < PARTITION_WARPS_IN_BLOCK; i++)
+        {
+            uint32_t numLeft = numLefts[i];
+            numLefts[i]      = totalLeft;
+            totalLeft += numLeft;
+
+            uint32_t numRight = numRights[i];
+            numRights[i]      = totalRight;
+            totalRight += numRight;
+        }
+        leftOffset  = atomicAdd(&sampleOffset[0], totalLeft);
+        rightOffset = atomicAdd(&sampleOffset[1], totalRight);
+    }
+
+    __syncthreads();
+
+    uint32_t threadInWarp = threadIdx.x & 31u;
+    uint32_t lOffset =
+        leftOffset + numLefts[wid] + __popc(leftMask & ((1u << threadInWarp) - 1u));
+    uint32_t rOffset =
+        rightOffset + numRights[wid] + __popc(rightMask & ((1u << threadInWarp) - 1u));
+
+    // TODO ?
+    uint32_t nodeOffset      = 0;
+    uint32_t offset          = nodeOffset + (isLeft ? lOffset : numSamples - 1 - rOffset);
+    newSampleIndices[offset] = sampleIndex;
+}
+
+__global__ void UpdateKDTree(uint32_t *sampleIndices) { KDTreeNode node; }
 
 struct CUDAArena
 {
