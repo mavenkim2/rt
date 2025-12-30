@@ -4,6 +4,7 @@
 #include "../base.h"
 #include "helper_math.h"
 #include "../thread_context.h"
+#include <cuda_runtime.h>
 
 #define PI             3.14159265358979323846f
 #define MAX_COMPONENTS 32
@@ -1118,7 +1119,113 @@ __device__ void PartitionSamplesMultiBlock(uint32_t *sampleIndices, uint32_t *ne
     newSampleIndices[offset] = sampleIndex;
 }
 
-__global__ void UpdateKDTree(uint32_t *sampleIndices) { KDTreeNode node; }
+// you first find the split position. then you partition. then you recursively call
+// the kernel on the children. in gpu land you push the work to the queue.
+
+struct Queue
+{
+    uint32_t readOffset;
+    uint32_t writeOffset;
+};
+
+struct WorkItem
+{
+    enum class Type
+    {
+        MultiBlock,
+        Block,
+        Warp,
+    };
+
+    Type type;
+
+    uint32_t depth;
+    uint32_t nodeIndex;
+    uint32_t offset;
+    uint32_t count;
+};
+
+template <typename T, uint32_t blockSize, uint32_t numElements>
+__device__ void BlockReduction(uint32_t *__restrict__ data)
+{
+    static const uint32_t numWarps             = blockSize >> WARP_SHIFT;
+    static const uint32_t numElementsPerThread = (numElements + blockSize - 1) / blockSize;
+
+    uint32_t wId   = threadIdx.x >> WARP_SHIFT;
+    uint32_t total = 0;
+
+    // you assign a certain number of elements to each thread
+    // you have each thread block do a coalesced read, looped by the above number
+    // then each thread has a total. you warp reduce sum, write to shared memory
+    // and then reduce in shared memory
+
+    uint32_t i = threadIdx.x;
+    while (i < numElements)
+    {
+        total += data[i];
+        i += blockSize;
+    }
+
+    total = WarpReduceSum(total);
+    __shared__ uint32_t totals[numWarps];
+
+    if ((threadIdx.x & 31) == 0)
+    {
+        totals[wId] = total;
+    }
+
+    __syncthreads();
+
+#pragma unroll
+    for (uint32_t offset = (numWarps >> 1); offset > 0; offset >>= 1)
+    {
+        if (threadIdx.x < offset)
+        {
+            totals[threadIdx.x] += totals[threadIdx.x + offset];
+        }
+        if (offset > WARP_SIZE)
+        {
+            __syncthreads();
+        }
+    }
+
+    if (threadIdx.x == 0)
+    {
+        // write out
+    }
+}
+
+__global__ void UpdateKDTree(Queue *queue, WorkItem *workItems, uint32_t *sampleIndices0,
+                             uint32_t *sampleIndices1, float *samplesX, float *samplesY,
+                             float *samplesZ)
+{
+    __shared__ WorkItem workItem;
+
+    for (;;)
+    {
+        uint32_t readOffset = atomicAdd(&queue->readOffset, 1);
+        WorkItem item       = workItems[readOffset];
+
+        __syncthreads();
+
+        switch (item.type)
+        {
+            case WorkItem::Type::MultiBlock:
+            {
+                // uint32_t *sampleIndices    = (depth & 1) ? sampleIndices1 : sampleIndices0;
+                // uint32_t *newSampleIndices = (depth & 1) ? sampleIndices0 : sampleIndices1;
+                // PartitionSamplesMultiBlock(sampleIndices, newSampleIndices, KDTreeNode &
+                // node,
+                //                            item.count, uint32_t *sampleOffset, float
+                //                            *samplesX, float *samplesY, float *samplesZ);
+            }
+            break;
+            default:
+            {
+            }
+        }
+    }
+}
 
 struct CUDAArena
 {

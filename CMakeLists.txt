@@ -427,8 +427,14 @@ if (CMAKE_CUDA_COMPILER)
     enable_language (CUDA)
     #message(STATUS "CUDA Compiler: ${CMAKE_CUDA_COMPILER}")
     message(STATUS "CUDA Architecture: ${CMAKE_CUDA_ARCHITECTURES}")
+    set(CMAKE_CUDA_ARCHITECTURES "native")
     add_executable(rt_cuda_exe
         ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/gpu/test.cu
+    )
+    set_target_properties(rt_cuda_exe PROPERTIES
+        CUDA_ARCHITECTURES native
+        CMAKE_CUDA_STANDARD 17
+        CMAKE_CUDA_STANDARD_REQUIRED ON
     )
 else()
     message (STATUS "could not find cuda compiler")
