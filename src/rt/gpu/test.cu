@@ -20,6 +20,20 @@ __device__ void atomicAdd(float3 *a, float3 b)
     atomicAdd(&a->z, b.z);
 }
 
+__device__ void atomicMin(uint3 *a, uint3 b)
+{
+    atomicMin(&a->x, b.x);
+    atomicMin(&a->y, b.y);
+    atomicMin(&a->z, b.z);
+}
+
+__device__ void atomicMax(uint3 *a, uint3 b)
+{
+    atomicMax(&a->x, b.x);
+    atomicMax(&a->y, b.y);
+    atomicMax(&a->z, b.z);
+}
+
 namespace rt
 {
 
@@ -204,11 +218,62 @@ __device__ float3 WarpReduceSum(float3 val)
 template <typename T>
 __device__ T WarpReduceMin(T val)
 {
+    T minVal = val;
 #pragma unroll
     for (int offset = (WARP_SIZE >> 1); offset > 0; offset >>= 1)
     {
-        val += __shfl_down_sync(0xffffffff, val, offset);
+        T temp = __shfl_down_sync(0xffffffff, val, offset);
+        minVal = min(minVal, temp);
     }
+    return minVal;
+}
+
+template <>
+__device__ float3 WarpReduceMin(float3 val)
+{
+    val.x = WarpReduceMin(val.x);
+    val.y = WarpReduceMin(val.y);
+    val.z = WarpReduceMin(val.z);
+    return val;
+}
+
+template <>
+__device__ uint3 WarpReduceMin(uint3 val)
+{
+    val.x = WarpReduceMin(val.x);
+    val.y = WarpReduceMin(val.y);
+    val.z = WarpReduceMin(val.z);
+    return val;
+}
+
+template <typename T>
+__device__ T WarpReduceMax(T val)
+{
+    T maxVal = val;
+#pragma unroll
+    for (int offset = (WARP_SIZE >> 1); offset > 0; offset >>= 1)
+    {
+        T temp = __shfl_down_sync(0xffffffff, val, offset);
+        maxVal = max(maxVal, temp);
+    }
+    return maxVal;
+}
+
+template <>
+__device__ float3 WarpReduceMax(float3 val)
+{
+    val.x = WarpReduceMax(val.x);
+    val.y = WarpReduceMax(val.y);
+    val.z = WarpReduceMax(val.z);
+    return val;
+}
+
+template <>
+__device__ uint3 WarpReduceMax(uint3 val)
+{
+    val.x = WarpReduceMax(val.x);
+    val.y = WarpReduceMax(val.y);
+    val.z = WarpReduceMax(val.z);
     return val;
 }
 
@@ -232,6 +297,101 @@ __device__ T WarpReduceSumBroadcast(T val)
     val = WarpReduceSum(val);
     return WarpReadLaneFirst(val);
 }
+
+inline __device__ uint32_t FloatToOrderedUint(float f)
+{
+    uint32_t u    = __float_as_uint(f);
+    uint32_t mask = f > 0.f ? 0x80000000 : ~0u;
+    return u ^ mask;
+}
+
+inline __device__ float OrderedUintToFloat(uint32_t u)
+{
+    uint32_t mask = (u & 0x80000000) ? 0x80000000 : ~0u;
+    return __uint_as_float(u ^ mask);
+}
+
+inline __device__ uint3 FloatToOrderedUint(float3 f)
+{
+    uint3 u;
+    u.x = FloatToOrderedUint(f.x);
+    u.y = FloatToOrderedUint(f.y);
+    u.z = FloatToOrderedUint(f.z);
+    return u;
+}
+
+inline __device__ float3 OrderedUintToFloat(uint3 u)
+{
+    float3 f;
+    f.x = OrderedUintToFloat(u.x);
+    f.y = OrderedUintToFloat(u.y);
+    f.z = OrderedUintToFloat(u.z);
+    return f;
+}
+
+template <typename T>
+struct Bounds
+{
+    T boundsMin;
+    T boundsMax;
+
+    __device__ void Extend(T value)
+    {
+        boundsMin = min(boundsMin, value);
+        boundsMax = max(boundsMax, value);
+    }
+
+    __device__ void WarpReduce()
+    {
+        boundsMin = WarpReduceMin(boundsMin);
+        boundsMax = WarpReduceMax(boundsMax);
+    }
+
+    __device__ void AtomicMerge(Bounds &other) {}
+};
+
+template <>
+struct Bounds<float3>
+{
+private:
+    uint3 boundsMin;
+    uint3 boundsMax;
+
+public:
+    __device__ Bounds()
+    {
+        const uint pos_inf = 0xff800000;
+        const uint neg_inf = ~0xff800000;
+
+        boundsMin = make_uint3(pos_inf);
+        boundsMax = make_uint3(neg_inf);
+    }
+
+    __device__ void Extend(float3 value)
+    {
+        uint3 val = FloatToOrderedUint(value);
+        boundsMin = min(boundsMin, val);
+        boundsMax = max(boundsMax, val);
+    }
+
+    __device__ void WarpReduce()
+    {
+        boundsMin = WarpReduceMin(boundsMin);
+        boundsMax = WarpReduceMax(boundsMax);
+    }
+
+    __device__ void AtomicMerge(Bounds &other)
+    {
+        atomicMin(&boundsMin, other.boundsMin);
+        atomicMax(&boundsMax, other.boundsMax);
+    }
+
+    __device__ float3 GetBoundsMin() { return OrderedUintToFloat(boundsMin); }
+
+    __device__ float3 GetBoundsMax() { return OrderedUintToFloat(boundsMax); }
+};
+
+typedef Bounds<float3> Bounds3f;
 
 inline __device__ void BuildOrthonormalBasis(const float3 &n, float3 &t0, float3 &t1)
 {
@@ -438,8 +598,16 @@ __global__ void InitializeVMMS(VMM *vmms, uint32_t numVMMs)
     vmms[vmmIndex] = vmm;
 }
 
-__global__ void InitializeSamples(float3 *__restrict__ sampleDirections, uint32_t numSamples)
+__global__ void InitializeSamples(Bounds3f *sampleBounds,
+                                  float3 *__restrict__ sampleDirections,
+                                  float3 *__restrict__ samplePositions, uint32_t numSamples,
+                                  float3 sceneMin, float3 sceneMax)
 {
+    if (threadIdx.x == 0 && blockIdx.x == 0)
+    {
+        *sampleBounds = Bounds3f();
+    }
+
     uint32_t sampleIndex = threadIdx.x + blockIdx.x * blockDim.x;
     if (sampleIndex < numSamples)
     {
@@ -447,6 +615,14 @@ __global__ void InitializeSamples(float3 *__restrict__ sampleDirections, uint32_
         float2 u                      = rng.Uniform2D();
         float3 dir                    = SampleUniformSphere(u);
         sampleDirections[sampleIndex] = dir;
+
+        float3 p = make_float3(rng.Uniform2D(), rng.Uniform());
+        p        = p * (sceneMax - sceneMin) + sceneMin;
+        // if (blockIdx.x == 0)
+        // {
+        //     printf("%f %f %f\n", p.x, p.y, p.z);
+        // }
+        samplePositions[sampleIndex] = p;
     }
 }
 
@@ -1145,29 +1321,72 @@ struct WorkItem
     uint32_t count;
 };
 
-template <typename T, uint32_t blockSize, uint32_t numElements>
-__device__ void BlockReduction(uint32_t *__restrict__ data)
+#define INTEGER_BINS float(1 << 18)
+struct SampleStatistics
 {
-    static const uint32_t numWarps             = blockSize >> WARP_SHIFT;
-    static const uint32_t numElementsPerThread = (numElements + blockSize - 1) / blockSize;
+    uint32_t numSamples;
+    uint3 boundsMin;
+    uint3 boundsMax;
 
-    uint32_t wId   = threadIdx.x >> WARP_SHIFT;
-    uint32_t total = 0;
-
-    // you assign a certain number of elements to each thread
-    // you have each thread block do a coalesced read, looped by the above number
-    // then each thread has a total. you warp reduce sum, write to shared memory
-    // and then reduce in shared memory
-
-    uint32_t i = threadIdx.x;
-    while (i < numElements)
+    __device__ SampleStatistics()
     {
-        total += data[i];
-        i += blockSize;
+        const uint pos_inf = 0xff800000;
+        const uint neg_inf = ~0xff800000;
+
+        boundsMin = make_uint3(pos_inf);
+        boundsMax = make_uint3(neg_inf);
     }
 
-    total = WarpReduceSum(total);
-    __shared__ uint32_t totals[numWarps];
+    __device__ void AddSample(float3 pos, float3 center, float3 invHalfExtent)
+    {
+        numSamples++;
+        float3 tmpSample = (pos - center) * invHalfExtent;
+        int3 tmpVariance = make_int3((tmpSample * tmpSample) * INTEGER_BINS);
+
+        uint3 uintSample = FloatToOrderedUint(tmpSample);
+        boundsMin        = min(boundsMin, uintSample);
+        boundsMax        = max(boundsMax, uintSample);
+    }
+
+    __device__ void WarpReduce()
+    {
+        boundsMin = WarpReduceMin(boundsMin);
+        boundsMax = WarpReduceMax(boundsMax);
+    }
+
+    __device__ inline void AtomicMerge(const SampleStatistics &other)
+    {
+        atomicMin(&boundsMin.x, other.boundsMin.x);
+        atomicMin(&boundsMin.y, other.boundsMin.y);
+        atomicMin(&boundsMin.z, other.boundsMin.z);
+
+        atomicMax(&boundsMax.x, other.boundsMax.x);
+        atomicMax(&boundsMax.y, other.boundsMax.y);
+        atomicMax(&boundsMax.z, other.boundsMax.z);
+    }
+};
+
+template <uint32_t blockSize, typename MergeType, typename AddFunc>
+__device__ void BlockReduction(MergeType &out, uint32_t numElements, uint32_t blockIndex,
+                               uint32_t stride, AddFunc &&addFunc)
+{
+    static const uint32_t numWarps = blockSize >> WARP_SHIFT;
+    static_assert(numWarps <= WARP_SIZE);
+    const uint32_t numElementsPerThread = (numElements + blockSize - 1) / blockSize;
+
+    uint32_t wId = threadIdx.x >> WARP_SHIFT;
+    MergeType total;
+
+    uint32_t i = threadIdx.x + blockIndex * blockSize;
+    while (i < numElements)
+    {
+        addFunc(total, i);
+        i += stride;
+    }
+
+    total.WarpReduce();
+
+    __shared__ MergeType totals[numWarps];
 
     if ((threadIdx.x & 31) == 0)
     {
@@ -1176,23 +1395,58 @@ __device__ void BlockReduction(uint32_t *__restrict__ data)
 
     __syncthreads();
 
-#pragma unroll
-    for (uint32_t offset = (numWarps >> 1); offset > 0; offset >>= 1)
+    if (wId == 0)
     {
-        if (threadIdx.x < offset)
+        MergeType finalTotal = threadIdx.x < numWarps ? totals[threadIdx.x] : MergeType();
+        finalTotal.WarpReduce();
+        if (threadIdx.x == 0)
         {
-            totals[threadIdx.x] += totals[threadIdx.x + offset];
-        }
-        if (offset > WARP_SIZE)
-        {
-            __syncthreads();
+            out.AtomicMerge(finalTotal);
         }
     }
+}
 
-    if (threadIdx.x == 0)
-    {
-        // write out
-    }
+template <uint32_t blockSize, typename MergeType, typename AddFunc>
+__device__ void BlockReductionGridStride(MergeType &out, uint32_t numElements,
+                                         AddFunc &&addFunc)
+{
+    BlockReduction<blockSize>(out, numElements, blockIdx.x, blockSize * gridDim.x, addFunc);
+}
+
+// __device__ void ReduceSamples(SampleStatistics &blockStatistics, uint32_t *sampleIndices,
+//                               float3 *samplePositions, uint32_t numElementsPerBlock)
+// {
+//     float3 center, invHalfExtent;
+//
+//     float3 *pos               = 0;
+//     const uint32_t numSamples = 256 * 1024;
+//
+//     // TODO: the shared memory reads have bank conflicts. soa the data
+//     BlockReduction<256>(
+//         blockStatistics, numElementsPerBlock, [&](SampleStatistics &total, uint32_t index) {
+//             float3 samplePos = samplePositions[index];
+//
+//             total.AddSample(samplePositions[sampleIndices[index]], center, invHalfExtent);
+//         });
+// }
+
+template <uint32_t blockSize>
+__global__ void GetSampleBounds(Bounds3f *sampleBounds, float3 *samplePositions,
+                                uint32_t numSamples)
+{
+    BlockReductionGridStride<blockSize>(*sampleBounds, numSamples,
+                                        [&](Bounds3f &bounds, uint32_t index) {
+                                            float3 samplePos = samplePositions[index];
+                                            bounds.Extend(samplePos);
+                                        });
+}
+
+__global__ void PrintSampleBounds(Bounds3f *sampleBounds)
+{
+    float3 boundsMin = sampleBounds->GetBoundsMin();
+    float3 boundsMax = sampleBounds->GetBoundsMax();
+    printf("bounds: %f %f %f %f %f %f\n", boundsMin.x, boundsMin.y, boundsMin.z, boundsMax.x,
+           boundsMax.y, boundsMax.z);
 }
 
 __global__ void UpdateKDTree(Queue *queue, WorkItem *workItems, uint32_t *sampleIndices0,
@@ -1266,14 +1520,31 @@ struct CUDAArena
 void test()
 {
     uint32_t numVMMs    = 4;
-    uint32_t numSamples = numVMMs * WARP_SIZE;
+    uint32_t numSamples = 1u << 20u; // numVMMs * WARP_SIZE;
 
     CUDAArena allocator;
-    allocator.Init(megabytes(1));
+    allocator.Init(megabytes(32));
 
     printf("hello world\n");
+    Bounds3f *sampleBounds   = allocator.Alloc<Bounds3f>(1, 4u);
+    float3 *samplePositions  = allocator.Alloc<float3>(numSamples, 4u);
+    float3 *sampleDirections = allocator.Alloc<float3>(numSamples, 4);
+
+    float3 sceneMin = make_float3(0.f);
+    float3 sceneMax = make_float3(100.f);
+
+    InitializeSamples<<<(numSamples + 255) / 256, 256>>>(
+        sampleBounds, sampleDirections, samplePositions, numSamples, sceneMin, sceneMax);
+
+    // testing reduce
+    uint32_t numBlocks       = (numSamples + 255) / 256;
+    const uint32_t blockSize = 256;
+    GetSampleBounds<blockSize>
+        <<<numBlocks, blockSize>>>(sampleBounds, samplePositions, numSamples);
+    PrintSampleBounds<<<1, 1>>>(sampleBounds);
+
+#if 0
     VMM *vmms                 = allocator.Alloc<VMM>(numVMMs, 4);
-    float3 *sampleDirections  = allocator.Alloc<float3>(numSamples, 4);
     uint32_t *vmmOffsets      = allocator.Alloc<uint32_t>(numVMMs, 4);
     uint32_t *vmmCounts       = allocator.Alloc<uint32_t>(numSamples, 4);
     Statistics *vmmStatistics = allocator.Alloc<Statistics>(numVMMs, 4);
@@ -1285,6 +1556,7 @@ void test()
 
     UpdateMixture<<<numVMMs, WARP_SIZE>>>(vmms, vmmStatistics, sampleDirections, vmmOffsets,
                                           vmmCounts);
+#endif
 
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess)

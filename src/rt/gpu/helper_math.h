@@ -981,6 +981,19 @@ inline __host__ __device__ float4 fminf(float4 a, float4 b)
     return make_float4(fminf(a.x, b.x), fminf(a.y, b.y), fminf(a.z, b.z), fminf(a.w, b.w));
 }
 
+inline __host__ __device__ float2 min(float2 a, float2 b)
+{
+    return make_float2(fminf(a.x, b.x), fminf(a.y, b.y));
+}
+inline __host__ __device__ float3 min(float3 a, float3 b)
+{
+    return make_float3(fminf(a.x, b.x), fminf(a.y, b.y), fminf(a.z, b.z));
+}
+inline __host__ __device__ float4 min(float4 a, float4 b)
+{
+    return make_float4(fminf(a.x, b.x), fminf(a.y, b.y), fminf(a.z, b.z), fminf(a.w, b.w));
+}
+
 inline __host__ __device__ int2 min(int2 a, int2 b)
 {
     return make_int2(min(a.x, b.x), min(a.y, b.y));
@@ -1020,6 +1033,19 @@ inline __host__ __device__ float3 fmaxf(float3 a, float3 b)
     return make_float3(fmaxf(a.x, b.x), fmaxf(a.y, b.y), fmaxf(a.z, b.z));
 }
 inline __host__ __device__ float4 fmaxf(float4 a, float4 b)
+{
+    return make_float4(fmaxf(a.x, b.x), fmaxf(a.y, b.y), fmaxf(a.z, b.z), fmaxf(a.w, b.w));
+}
+
+inline __host__ __device__ float2 max(float2 a, float2 b)
+{
+    return make_float2(fmaxf(a.x, b.x), fmaxf(a.y, b.y));
+}
+inline __host__ __device__ float3 max(float3 a, float3 b)
+{
+    return make_float3(fmaxf(a.x, b.x), fmaxf(a.y, b.y), fmaxf(a.z, b.z));
+}
+inline __host__ __device__ float4 max(float4 a, float4 b)
 {
     return make_float4(fmaxf(a.x, b.x), fmaxf(a.y, b.y), fmaxf(a.z, b.z), fmaxf(a.w, b.w));
 }
