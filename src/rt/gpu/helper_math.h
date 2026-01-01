@@ -181,6 +181,12 @@ inline __host__ __device__ uint4 make_uint4(uint2 a, uint b, uint c)
     return make_uint4(a.x, a.y, b, c);
 }
 
+///
+inline __host__ __device__ float Get(const float3 &f, uint32_t dim)
+{
+    return dim == 0 ? f.x : (dim == 1 ? f.y : f.z);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // negate
 ////////////////////////////////////////////////////////////////////////////////

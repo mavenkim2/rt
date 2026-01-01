@@ -429,6 +429,8 @@ typedef Bounds<float3> Bounds3f;
 
 #define INTEGER_BINS                     float(1 << 18)
 #define INTEGER_SAMPLE_STATS_BOUND_SCALE (1.0f + 2.f / INTEGER_BINS)
+#define MAX_TREE_DEPTH                   32
+#define MAX_SAMPLES_PER_LEAF             32000
 
 struct SampleStatistics
 {
@@ -468,6 +470,38 @@ struct SampleStatistics
         atomicAdd(&mean, other.mean);
         atomicAdd(&variance, other.variance);
         atomicAdd(&numSamples, other.numSamples);
+    }
+
+    void GetSplitDimensionAndPosition(uint32_t &splitDim, float &splitPos)
+    {
+        auto maxDimension = [](const float3 &v) -> uint32_t {
+            return v.x > v.y ? (v.x > v.z ? 0 : 2) : (v.y > v.z ? 1 : 2);
+        };
+
+        float invNumSamples      = 1.f / float(numSamples);
+        float3 sampleMean        = (make_float3(mean) * invNumSamples) / INTEGER_BINS;
+        float3 sampleVariance    = make_float3(0.f);
+        float3 sampleBoundExtend = make_float3(0.f);
+
+        if (sampleVariance.x == sampleVariance.y && sampleVariance.y == sampleVariance.z)
+        {
+            if (sampleBoundExtend.x == sampleBoundExtend.y &&
+                sampleBoundExtend.y == sampleBoundExtend.z)
+            {
+                splitDim = (splitDim + 1) % 3;
+                splitPos = Get(sampleMean, splitDim);
+            }
+            else
+            {
+                splitDim = maxDimension(sampleBoundExtend);
+                splitPos = Get(sampleMean, splitDim);
+            }
+        }
+        else
+        {
+            splitDim = maxDimension(sampleVariance);
+            splitPos = Get(sampleMean, splitDim);
+        }
     }
 };
 
@@ -678,13 +712,18 @@ __global__ void InitializeVMMS(VMM *vmms, uint32_t numVMMs)
 
 __global__ void InitializeSamples(SampleStatistics *statistics, Bounds3f *sampleBounds,
                                   float3 *__restrict__ sampleDirections,
-                                  float3 *__restrict__ samplePositions, uint32_t numSamples,
+                                  float3 *__restrict__ samplePositions,
+                                  uint32_t *__restrict__ sampleIndices, uint32_t numSamples,
                                   float3 sceneMin, float3 sceneMax)
 {
     if (threadIdx.x == 0 && blockIdx.x == 0)
     {
         *sampleBounds = Bounds3f();
-        *statistics   = SampleStatistics();
+
+        for (uint32_t i = 0; i < 3; i++)
+        {
+            statistics[i] = SampleStatistics();
+        }
     }
 
     uint32_t sampleIndex = threadIdx.x + blockIdx.x * blockDim.x;
@@ -694,6 +733,8 @@ __global__ void InitializeSamples(SampleStatistics *statistics, Bounds3f *sample
         float2 u                      = rng.Uniform2D();
         float3 dir                    = SampleUniformSphere(u);
         sampleDirections[sampleIndex] = dir;
+
+        sampleIndices[sampleIndex] = sampleIndex;
 
         float3 p = make_float3(rng.Uniform2D(), rng.Uniform());
         p        = p * (sceneMax - sceneMin) + sceneMin;
@@ -1300,29 +1341,29 @@ struct KDTreeNode
     float splitPos;
     uint32_t childIndex_dim;
 
+    uint32_t sampleOffset;
+    uint32_t sampleCount;
+
     __device__ uint32_t GetSplitDim() const { return childIndex_dim >> 30; }
 };
 
 #define PARTITION_THREADS_IN_BLOCK 256
 #define PARTITION_WARPS_IN_BLOCK   (PARTITION_THREADS_IN_BLOCK >> WARP_SHIFT)
 
-__device__ void PartitionSamplesMultiBlock(uint32_t *sampleIndices, uint32_t *newSampleIndices,
-                                           KDTreeNode &node, uint32_t numSamples,
-                                           uint32_t *sampleOffset, float *samplesX,
-                                           float *samplesY, float *samplesZ)
+__device__ void PartitionSamples(uint32_t *sampleIndices, uint32_t *newSampleIndices,
+                                 float splitPos, uint32_t splitDim, uint32_t numSamples,
+                                 uint32_t *sampleLeftOffset, uint32_t *sampleRightOffset,
+                                 float3 *samplePositions)
 {
     const uint32_t wid = threadIdx.x >> WARP_SHIFT;
 
     uint32_t sampleIndexIndex = threadIdx.x + blockDim.x * blockIdx.x;
     if (sampleIndexIndex >= numSamples) return;
 
-    float splitPos = node.splitPos;
-    uint32_t dim   = node.GetSplitDim();
-
-    float *samplesArray = dim == 0 ? samplesX : (dim == 1 ? samplesY : samplesZ);
+    uint32_t dim = splitDim;
 
     uint32_t sampleIndex = sampleIndices[sampleIndexIndex];
-    bool isLeft          = samplesArray[sampleIndex] < splitPos;
+    bool isLeft          = Get(samplePositions[sampleIndex], dim) < splitPos;
 
     __shared__ uint32_t numLefts[PARTITION_WARPS_IN_BLOCK];
     __shared__ uint32_t numRights[PARTITION_WARPS_IN_BLOCK];
@@ -1356,8 +1397,8 @@ __device__ void PartitionSamplesMultiBlock(uint32_t *sampleIndices, uint32_t *ne
             numRights[i]      = totalRight;
             totalRight += numRight;
         }
-        leftOffset  = atomicAdd(&sampleOffset[0], totalLeft);
-        rightOffset = atomicAdd(&sampleOffset[1], totalRight);
+        leftOffset  = atomicAdd(sampleLeftOffset, totalLeft);
+        rightOffset = atomicAdd(sampleRightOffset, totalRight);
     }
 
     __syncthreads();
@@ -1368,10 +1409,13 @@ __device__ void PartitionSamplesMultiBlock(uint32_t *sampleIndices, uint32_t *ne
     uint32_t rOffset =
         rightOffset + numRights[wid] + __popc(rightMask & ((1u << threadInWarp) - 1u));
 
-    // TODO ?
-    uint32_t nodeOffset      = 0;
-    uint32_t offset          = nodeOffset + (isLeft ? lOffset : numSamples - 1 - rOffset);
+    uint32_t offset          = (isLeft ? lOffset : numSamples - 1 - rOffset);
     newSampleIndices[offset] = sampleIndex;
+
+    // if (blockIdx.x == 0)
+    // {
+    //     printf("%u %u %u\n", threadIdx.x, offset, sampleIndex);
+    // }
 }
 
 // you first find the split position. then you partition. then you recursively call
@@ -1404,7 +1448,7 @@ template <uint32_t blockSize, typename MergeType, typename AddFunc>
 __device__ void BlockReduction(MergeType &out, uint32_t numElements, uint32_t blockIndex,
                                uint32_t stride, AddFunc &&addFunc)
 {
-    static const uint32_t numWarps = blockSize >> WARP_SHIFT;
+    static constexpr uint32_t numWarps = blockSize >> WARP_SHIFT;
     static_assert(numWarps <= WARP_SIZE);
     const uint32_t numElementsPerThread = (numElements + blockSize - 1) / blockSize;
 
@@ -1486,16 +1530,107 @@ __global__ void ReduceSamples(SampleStatistics *statistics, Bounds3f *bounds,
                                         });
 }
 
-__global__ void PrintStatistics(SampleStatistics *sampleStatistics)
+template <uint32_t blockSize>
+__global__ void Something(SampleStatistics *statistics, Bounds3f *bounds,
+                          const uint32_t *sampleIndices, uint32_t numBlocks,
+                          uint32_t totalNumSamples, uint32_t *sampleOffsets,
+                          float3 *samplePositions)
 {
-    float3 boundsMin = sampleStatistics->bounds.GetBoundsMin();
-    float3 boundsMax = sampleStatistics->bounds.GetBoundsMax();
-    int3 mean        = sampleStatistics->mean;
-    int3 variance    = sampleStatistics->variance;
+    Bounds3f scaledBounds = *bounds;
+    float3 center         = bounds->GetCenter();
+    scaledBounds.SetBoundsMin(center + (scaledBounds.GetBoundsMin() - center) *
+                                           INTEGER_SAMPLE_STATS_BOUND_SCALE);
+    scaledBounds.SetBoundsMax(center + (scaledBounds.GetBoundsMax() - center) *
+                                           INTEGER_SAMPLE_STATS_BOUND_SCALE);
 
-    printf("bounds: %f %f %f %f %f %f\nmean: %i %i %i var: %i %i %i, %u", boundsMin.x,
-           boundsMin.y, boundsMin.z, boundsMax.x, boundsMax.y, boundsMax.z, mean.x, mean.y,
-           mean.z, variance.x, variance.y, variance.z, sampleStatistics->numSamples);
+    center               = bounds->GetCenter();
+    float3 invHalfExtent = bounds->GetHalfExtent();
+
+    invHalfExtent.x = invHalfExtent.x > 0.f ? 1.f / invHalfExtent.x : 0.f;
+    invHalfExtent.y = invHalfExtent.y > 0.f ? 1.f / invHalfExtent.y : 0.f;
+    invHalfExtent.z = invHalfExtent.z > 0.f ? 1.f / invHalfExtent.z : 0.f;
+
+    uint32_t numElementsLeft  = sampleOffsets[0];
+    uint32_t numElementsRight = sampleOffsets[1];
+    if (blockIdx.x == 0 && threadIdx.x == 0)
+    {
+        printf("%u %u\n", numElementsLeft, numElementsRight);
+    }
+
+    float percentLeft  = float(numElementsLeft) / totalNumSamples;
+    float percentRight = float(numElementsRight) / totalNumSamples;
+
+    uint32_t numBlocksLeft  = uint32_t(numBlocks * percentLeft);
+    uint32_t numBlocksRight = uint32_t(numBlocks * percentRight);
+
+    bool isLeft                        = blockIdx.x < numBlocksLeft;
+    SampleStatistics &blockStatistics  = isLeft ? statistics[1] : statistics[2];
+    const uint32_t *blockSampleIndices = sampleIndices + (isLeft ? 0 : sampleOffsets[0]);
+
+    uint32_t numBlocksInRange = isLeft ? numBlocksLeft : numBlocksRight;
+    uint32_t numElements      = isLeft ? numElementsLeft : numElementsRight;
+    uint32_t blockIndex       = isLeft ? blockIdx.x : blockIdx.x - numBlocksLeft;
+    uint32_t stride           = blockSize * (isLeft ? numBlocksLeft : numBlocksRight);
+
+    if (blockIndex < numBlocksInRange)
+    {
+        // TODO: the shared memory reads have bank conflicts. soa the data
+        BlockReduction<blockSize>(blockStatistics, numElements, blockIndex, stride,
+                                  [&](SampleStatistics &total, uint32_t index) {
+                                      float3 samplePos =
+                                          samplePositions[blockSampleIndices[index]];
+                                      total.AddSample(samplePos, center, invHalfExtent);
+                                  });
+    }
+}
+
+// TODO: for now this is just level 0
+__global__ void BuildKDTree(KDTreeNode *nodes, Bounds3f *bounds,
+                            SampleStatistics *sampleStatistics, uint32_t *sampleIndices,
+                            uint32_t *newSampleIndices, float3 *samplePositions,
+                            uint32_t *sampleOffsets, uint32_t numSamples)
+{
+    __shared__ KDTreeNode node;
+    __shared__ SampleStatistics statistics;
+
+    if (threadIdx.x == 0)
+    {
+        node       = nodes[0];
+        statistics = sampleStatistics[0];
+    }
+    __syncthreads();
+
+    const uint32_t level = 0;
+    if (level < MAX_TREE_DEPTH && statistics.numSamples > MAX_SAMPLES_PER_LEAF)
+    {
+        // float splitDim, splitPos;
+        // statistics.GetSplitDimensionAndPosition(splitDim, splitPos);
+
+        uint32_t splitDim = 0;
+        float splitPos    = Get(bounds->GetCenter(), splitDim);
+
+        // TODO: unify this kernel wth reduce?
+        // per node you need an offset and count into sampleIndices
+
+        PartitionSamples(sampleIndices, newSampleIndices, splitPos, splitDim, numSamples,
+                         &sampleOffsets[0], &sampleOffsets[1], samplePositions);
+    }
+}
+
+__global__ void PrintStatistics(SampleStatistics *stats)
+{
+    for (uint32_t i = 0; i < 3; i++)
+    {
+        SampleStatistics *sampleStatistics = &stats[i];
+        float3 boundsMin                   = sampleStatistics->bounds.GetBoundsMin();
+        float3 boundsMax                   = sampleStatistics->bounds.GetBoundsMax();
+        int3 mean                          = sampleStatistics->mean;
+        int3 variance                      = sampleStatistics->variance;
+
+        printf("bounds: %f %f %f %f %f %f\nmean: %i %i %i var: %i %i %i, %u\n", boundsMin.x,
+               boundsMin.y, boundsMin.z, boundsMax.x, boundsMax.y, boundsMax.z, mean.x, mean.y,
+               mean.z, variance.x, variance.y, variance.z, sampleStatistics->numSamples);
+    }
 }
 
 __global__ void UpdateKDTree(Queue *queue, WorkItem *workItems, uint32_t *sampleIndices0,
@@ -1568,17 +1703,27 @@ struct CUDAArena
 
 void test()
 {
-    uint32_t numVMMs    = 4;
-    uint32_t numSamples = 1u << 22u; // numVMMs * WARP_SIZE;
+    uint32_t numVMMs     = 4;
+    uint32_t numSamples  = 1u << 22u; // numVMMs * WARP_SIZE;
+    uint32_t maxNumNodes = 1u << 10u;
 
     CUDAArena allocator;
     allocator.Init(megabytes(256));
 
     printf("hello world\n");
-    Bounds3f *sampleBounds             = allocator.Alloc<Bounds3f>(1, 4u);
-    SampleStatistics *sampleStatistics = allocator.Alloc<SampleStatistics>(1, 4u);
-    float3 *samplePositions            = allocator.Alloc<float3>(numSamples, 4u);
-    float3 *sampleDirections           = allocator.Alloc<float3>(numSamples, 4);
+    Bounds3f *sampleBounds = allocator.Alloc<Bounds3f>(1, 4u);
+
+    KDTreeNode *nodes                  = allocator.Alloc<KDTreeNode>(maxNumNodes, 4u);
+    SampleStatistics *sampleStatistics = allocator.Alloc<SampleStatistics>(maxNumNodes, 4u);
+
+    uint32_t *sampleOffsets = allocator.Alloc<uint32_t>(maxNumNodes * 2, 4u);
+    cudaMemset(sampleOffsets, 0, sizeof(uint32_t) * maxNumNodes * 2);
+
+    float3 *samplePositions  = allocator.Alloc<float3>(numSamples, 4u);
+    float3 *sampleDirections = allocator.Alloc<float3>(numSamples, 4u);
+
+    uint32_t *sampleIndices    = allocator.Alloc<uint32_t>(numSamples, 4u);
+    uint32_t *newSampleIndices = allocator.Alloc<uint32_t>(numSamples, 4u);
 
     float3 sceneMin = make_float3(0.f);
     float3 sceneMax = make_float3(100.f);
@@ -1586,13 +1731,13 @@ void test()
     const uint32_t blockSize = 256;
 
     int minGridSize, maxBlockSize;
-    cudaOccupancyMaxActiveBlocksPerMultiprocessor(&maxBlockSize, GetSampleBounds<256>, 256, 0);
+    cudaOccupancyMaxActiveBlocksPerMultiprocessor(&maxBlockSize, ReduceSamples<256>, 256, 0);
 
     printf("%i\n", maxBlockSize);
 
-    InitializeSamples<<<(numSamples + 255) / 256, 256>>>(sampleStatistics, sampleBounds,
-                                                         sampleDirections, samplePositions,
-                                                         numSamples, sceneMin, sceneMax);
+    InitializeSamples<<<(numSamples + 255) / 256, 256>>>(
+        sampleStatistics, sampleBounds, sampleDirections, samplePositions, sampleIndices,
+        numSamples, sceneMin, sceneMax);
 
     // testing reduce
     uint32_t numBlocks = (numSamples + 255) / 256;
@@ -1600,6 +1745,13 @@ void test()
         <<<numBlocks, blockSize>>>(sampleBounds, samplePositions, numSamples);
     ReduceSamples<blockSize><<<numBlocks, blockSize>>>(sampleStatistics, sampleBounds,
                                                        samplePositions, numSamples);
+
+    BuildKDTree<<<numBlocks, blockSize>>>(nodes, sampleBounds, sampleStatistics, sampleIndices,
+                                          newSampleIndices, samplePositions, sampleOffsets,
+                                          numSamples);
+    Something<blockSize><<<numBlocks, blockSize>>>(sampleStatistics, sampleBounds,
+                                                   newSampleIndices, numBlocks, numSamples,
+                                                   sampleOffsets, samplePositions);
 
     PrintStatistics<<<1, 1>>>(sampleStatistics);
 
