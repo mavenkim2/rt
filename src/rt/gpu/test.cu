@@ -456,7 +456,7 @@ public:
     __device__ float3 GetBoundsMin() const { return OrderedUintToFloat(boundsMin); }
     __device__ float3 GetBoundsMax() const { return OrderedUintToFloat(boundsMax); }
 
-    __device__ float3 GetCenter()
+    __device__ float3 GetCenter() const
     {
         float3 bMin = GetBoundsMin();
         float3 bMax = GetBoundsMax();
@@ -464,7 +464,7 @@ public:
         return (bMin + bMax) * 0.5f;
     }
 
-    __device__ float3 GetHalfExtent()
+    __device__ float3 GetHalfExtent() const
     {
         float3 bMin = GetBoundsMin();
         float3 bMax = GetBoundsMax();
@@ -474,6 +474,25 @@ public:
 };
 
 typedef Bounds<float3> Bounds3f;
+
+struct LevelInfo
+{
+    uint32_t start;
+    uint32_t count;
+    uint32_t childCount;
+};
+
+struct KDTreeNode
+{
+    float splitPos;
+    uint32_t childIndex_dim;
+
+    uint32_t offset;
+    uint32_t count;
+
+    __device__ uint32_t GetChildIndex() const { return (childIndex_dim << 2) >> 2; }
+    __device__ uint32_t GetSplitDim() const { return childIndex_dim >> 30; }
+};
 
 #define INTEGER_BINS                     float(1 << 18)
 #define INTEGER_SAMPLE_STATS_BOUND_SCALE (1.0f + 2.f / INTEGER_BINS)
@@ -767,6 +786,7 @@ __global__ void InitializeVMMS(VMM *vmms, uint32_t numVMMs)
 }
 
 __global__ void InitializeSamples(SampleStatistics *statistics, Bounds3f *sampleBounds,
+                                  LevelInfo *levelInfo, KDTreeNode *nodes,
                                   float3 *__restrict__ sampleDirections,
                                   SOAFloat3 samplePositions,
                                   uint32_t *__restrict__ sampleIndices, uint32_t numSamples,
@@ -774,7 +794,11 @@ __global__ void InitializeSamples(SampleStatistics *statistics, Bounds3f *sample
 {
     if (threadIdx.x == 0 && blockIdx.x == 0)
     {
-        *sampleBounds = Bounds3f();
+        *sampleBounds           = Bounds3f();
+        nodes[0].count          = numSamples;
+        levelInfo[0].start      = 0;
+        levelInfo[0].count      = 1;
+        levelInfo[0].childCount = 0;
 
         for (uint32_t i = 0; i < 3; i++)
         {
@@ -1392,18 +1416,6 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
     }
 }
 
-// cuda kd tree build
-struct KDTreeNode
-{
-    float splitPos;
-    uint32_t childIndex_dim;
-
-    uint32_t sampleOffset;
-    uint32_t sampleCount;
-
-    __device__ uint32_t GetSplitDim() const { return childIndex_dim >> 30; }
-};
-
 #define PARTITION_THREADS_IN_BLOCK 256
 #define PARTITION_WARPS_IN_BLOCK   (PARTITION_THREADS_IN_BLOCK >> WARP_SHIFT)
 
@@ -1414,7 +1426,8 @@ __device__ void PartitionSamples(uint32_t *sampleIndices, uint32_t *newSampleInd
 {
     const uint32_t wid = threadIdx.x >> WARP_SHIFT;
 
-    uint32_t sampleIndexIndex = threadIdx.x + blockDim.x * blockIdx.x;
+    // uint32_t sampleIndexIndex = threadIdx.x + blockDim.x * blockIdx.x;
+    uint32_t sampleIndexIndex = threadIdx.x;
     if (sampleIndexIndex >= numSamples) return;
 
     uint32_t dim = splitDim;
@@ -1578,36 +1591,13 @@ __device__ void PartitionSamples(uint32_t *sampleIndices, uint32_t *newSampleInd
 // you first find the split position. then you partition. then you recursively call
 // the kernel on the children. in gpu land you push the work to the queue.
 
-struct Queue
-{
-    uint32_t readOffset;
-    uint32_t writeOffset;
-};
-
-struct WorkItem
-{
-    enum class Type
-    {
-        MultiBlock,
-        Block,
-        Warp,
-    };
-
-    Type type;
-
-    uint32_t depth;
-    uint32_t nodeIndex;
-    uint32_t offset;
-    uint32_t count;
-};
-
 template <uint32_t blockSize, typename MergeType, typename AddFunc>
 __device__ void BlockReduction(MergeType &out, uint32_t numElements, uint32_t blockIndex,
                                uint32_t stride, AddFunc &&addFunc)
 {
     static constexpr uint32_t numWarps = blockSize >> WARP_SHIFT;
     static_assert(numWarps <= WARP_SIZE);
-    const uint32_t numElementsPerThread = (numElements + blockSize - 1) / blockSize;
+    // const uint32_t numElementsPerThread = (numElements + blockSize - 1) / blockSize;
 
     uint32_t wId = threadIdx.x >> WARP_SHIFT;
     MergeType total;
@@ -1769,33 +1759,177 @@ __global__ void BuildKDTree(KDTreeNode *nodes, Bounds3f *bounds,
         uint32_t splitDim = 0;
         float splitPos    = Get(bounds->GetCenter(), splitDim);
 
-        // TODO: unify this kernel wth reduce?
-        // per node you need an offset and count into sampleIndices
-
-#if 1
         PartitionSamples(sampleIndices, newSampleIndices, splitPos, splitDim, numSamples,
                          &sampleOffsets[0], &sampleOffsets[1], samplePositions,
                          newSamplePositions);
-#else
+    }
+}
 
-        Bounds3f scaledBounds = *bounds;
-        float3 center         = bounds->GetCenter();
+struct Queue
+{
+    uint32_t readOffset;
+    uint32_t writeOffset;
+};
+
+struct WorkItem
+{
+    uint32_t nodeIndex;
+    uint32_t offset;
+    uint32_t count;
+};
+
+template <typename T>
+inline __device__ bool Dequeue(Queue *queue, T *workItems, T &out)
+{
+    uint32_t readIndex = atomicAdd(&queue->readOffset, 1);
+    if (readIndex < queue->writeOffset)
+    {
+        out = workItems[readIndex];
+        return true;
+    }
+    return false;
+}
+
+__global__ void BeginLevel(LevelInfo *levelInfo)
+{
+    levelInfo->start += levelInfo->count;
+    levelInfo->count      = 0;
+    levelInfo->childCount = 0;
+}
+
+template <uint32_t blockSize>
+__global__ void CreateWorkItems(Queue *queue, WorkItem *workItems, KDTreeNode *nodes,
+                                LevelInfo *info, SampleStatistics *statistics)
+{
+    if (blockIdx.x >= info->count) return;
+
+    // TODO: this is bad and slow for now
+    uint32_t nodeIndex = info->start + blockIdx.x;
+
+    __shared__ KDTreeNode node;
+    __shared__ uint32_t numSamples;
+    __shared__ uint32_t workItemStart;
+
+    if (threadIdx.x == 0)
+    {
+        node       = nodes[nodeIndex];
+        numSamples = statistics[nodeIndex].numSamples;
+    }
+
+    __syncthreads();
+
+    if (numSamples > MAX_SAMPLES_PER_LEAF)
+    {
+        uint32_t numWorkItems = (node.count + blockSize - 1) / blockSize;
+
+        if (threadIdx.x == 0)
+        {
+            workItemStart = atomicAdd(&queue->writeOffset, numWorkItems);
+            nodes[nodeIndex].childIndex_dim =
+                info->start + info->count + atomicAdd(&info->childCount, 2);
+        }
+
+        __syncthreads();
+
+        for (uint32_t i = threadIdx.x; i < numWorkItems; i += blockSize)
+        {
+            WorkItem workItem;
+            workItem.nodeIndex = nodeIndex;
+            workItem.offset    = i * blockSize;
+            workItem.count     = min(node.count - workItem.offset, blockSize);
+
+            workItems[workItemStart + i] = workItem;
+        }
+    }
+}
+
+template <uint32_t blockSize>
+__global__ void CalculateNodeStatistics(Queue *queue, WorkItem *workItems, KDTreeNode *nodes,
+                                        SampleStatistics *statistics,
+                                        SOAFloat3 samplePositions, uint32_t *sampleIndices)
+{
+    __shared__ WorkItem workItem;
+    __shared__ KDTreeNode node;
+
+    for (uint32_t workItemIndex = blockIdx.x; workItemIndex < queue->writeOffset;
+         workItemIndex += gridDim.x)
+    {
+        if (threadIdx.x == 0)
+        {
+            workItem = workItems[workItemIndex];
+            node     = nodes[workItem.nodeIndex];
+        }
+
+        __syncthreads();
+
+        SampleStatistics &blockStatistics  = statistics[workItem.nodeIndex];
+        const uint32_t *blockSampleIndices = sampleIndices + node.offset + workItem.offset;
+
+        Bounds3f scaledBounds = blockStatistics.bounds;
+        float3 center         = scaledBounds.GetCenter();
         scaledBounds.SetBoundsMin(center + (scaledBounds.GetBoundsMin() - center) *
                                                INTEGER_SAMPLE_STATS_BOUND_SCALE);
         scaledBounds.SetBoundsMax(center + (scaledBounds.GetBoundsMax() - center) *
                                                INTEGER_SAMPLE_STATS_BOUND_SCALE);
 
-        center               = bounds->GetCenter();
-        float3 invHalfExtent = bounds->GetHalfExtent();
+        center               = scaledBounds.GetCenter();
+        float3 invHalfExtent = scaledBounds.GetHalfExtent();
 
         invHalfExtent.x = invHalfExtent.x > 0.f ? 1.f / invHalfExtent.x : 0.f;
         invHalfExtent.y = invHalfExtent.y > 0.f ? 1.f / invHalfExtent.y : 0.f;
         invHalfExtent.z = invHalfExtent.z > 0.f ? 1.f / invHalfExtent.z : 0.f;
-        PartitionSamplesAndReduce(sampleStatistics[1], sampleStatistics[2], sampleIndices,
-                                  newSampleIndices, splitPos, splitDim, numSamples,
-                                  &sampleOffsets[0], &sampleOffsets[1], samplePositions,
-                                  center, invHalfExtent);
-#endif
+
+        BlockReduction<blockSize>(blockStatistics, workItem.count, 0, 0,
+                                  [&](SampleStatistics &total, uint32_t index) {
+                                      float3 samplePos =
+                                          samplePositions[blockSampleIndices[index]];
+                                      // float3 samplePos = samplePoses[index];
+                                      total.AddSample(samplePos, center, invHalfExtent);
+                                  });
+    }
+}
+
+__global__ void BuildKDTree2(Queue *queue, WorkItem *workItems, uint32_t level,
+                             LevelInfo *levelInfo, KDTreeNode *nodes,
+                             SampleStatistics *sampleStatistics, uint32_t *sampleIndices,
+                             uint32_t *newSampleIndices, SOAFloat3 samplePositions)
+{
+    __shared__ KDTreeNode node;
+    __shared__ SampleStatistics statistics;
+    __shared__ WorkItem workItem;
+    __shared__ bool notEmpty;
+    __shared__ uint32_t childIndex;
+
+    for (uint32_t workItemIndex = blockIdx.x; workItemIndex < queue->writeOffset;
+         workItemIndex += gridDim.x)
+    {
+        if (threadIdx.x == 0)
+        {
+            workItem   = workItems[workItemIndex];
+            node       = nodes[workItem.nodeIndex];
+            statistics = sampleStatistics[workItem.nodeIndex];
+        }
+        __syncthreads();
+
+        const Bounds3f &nodeBounds = statistics.bounds;
+
+        // if (level < MAX_TREE_DEPTH && statistics.numSamples > MAX_SAMPLES_PER_LEAF)
+        {
+            // TODO: split on sample mean based on variance
+            // float splitDim, splitPos;
+            // statistics.GetSplitDimensionAndPosition(splitDim, splitPos);
+            uint32_t splitDim = 0;
+            float splitPos    = Get(nodeBounds.GetCenter(), splitDim);
+
+            uint32_t *blockSampleIndices = sampleIndices + node.offset + workItem.offset;
+            uint32_t *blockOutputIndices = sampleIndices + node.offset;
+
+            uint32_t childIndex = node.GetChildIndex();
+
+            PartitionSamples(blockSampleIndices, blockOutputIndices, splitPos, splitDim,
+                             node.count, &nodes[childIndex].count,
+                             &nodes[childIndex + 1].count, samplePositions, samplePositions);
+        }
     }
 }
 
@@ -1812,38 +1946,6 @@ __global__ void PrintStatistics(SampleStatistics *stats)
         printf("bounds: %f %f %f %f %f %f\nmean: %i %i %i var: %i %i %i, %u\n", boundsMin.x,
                boundsMin.y, boundsMin.z, boundsMax.x, boundsMax.y, boundsMax.z, mean.x, mean.y,
                mean.z, variance.x, variance.y, variance.z, sampleStatistics->numSamples);
-    }
-}
-
-__global__ void UpdateKDTree(Queue *queue, WorkItem *workItems, uint32_t *sampleIndices0,
-                             uint32_t *sampleIndices1, float *samplesX, float *samplesY,
-                             float *samplesZ)
-{
-    __shared__ WorkItem workItem;
-
-    for (;;)
-    {
-        uint32_t readOffset = atomicAdd(&queue->readOffset, 1);
-        WorkItem item       = workItems[readOffset];
-
-        __syncthreads();
-
-        switch (item.type)
-        {
-            case WorkItem::Type::MultiBlock:
-            {
-                // uint32_t *sampleIndices    = (depth & 1) ? sampleIndices1 : sampleIndices0;
-                // uint32_t *newSampleIndices = (depth & 1) ? sampleIndices0 : sampleIndices1;
-                // PartitionSamplesMultiBlock(sampleIndices, newSampleIndices, KDTreeNode &
-                // node,
-                //                            item.count, uint32_t *sampleOffset, float
-                //                            *samplesX, float *samplesY, float *samplesZ);
-            }
-            break;
-            default:
-            {
-            }
-        }
     }
 }
 
@@ -1888,7 +1990,9 @@ void test()
     cudaFree(0);
     uint32_t numVMMs     = 4;
     uint32_t numSamples  = 1u << 22u; // numVMMs * WARP_SIZE;
-    uint32_t maxNumNodes = 1u << 10u;
+    uint32_t maxNumNodes = 1u << 16u;
+
+    const uint32_t blockSize = 256;
 
     CUDAArena allocator;
     allocator.Init(megabytes(256));
@@ -1900,6 +2004,8 @@ void test()
     SampleStatistics *sampleStatistics = allocator.Alloc<SampleStatistics>(maxNumNodes, 4u);
 
     uint32_t *sampleOffsets = allocator.Alloc<uint32_t>(maxNumNodes * 2, 4u);
+
+    cudaMemset(nodes, 0, sizeof(uint32_t) * maxNumNodes * 2);
     cudaMemset(sampleOffsets, 0, sizeof(uint32_t) * maxNumNodes * 2);
 
     float *samplePosX = allocator.Alloc<float>(numSamples, 4u);
@@ -1918,10 +2024,12 @@ void test()
     uint32_t *sampleIndices    = allocator.Alloc<uint32_t>(numSamples, 4u);
     uint32_t *newSampleIndices = allocator.Alloc<uint32_t>(numSamples, 4u);
 
+    LevelInfo *levelInfo = allocator.Alloc<LevelInfo>(1, 4u);
+    Queue *queue         = allocator.Alloc<Queue>(1, 4u);
+    WorkItem *workItems  = allocator.Alloc<WorkItem>(2 * numSamples / blockSize, 4u);
+
     float3 sceneMin = make_float3(0.f);
     float3 sceneMax = make_float3(100.f);
-
-    const uint32_t blockSize = 256;
 
     int minGridSize, maxBlockSize;
     cudaOccupancyMaxActiveBlocksPerMultiprocessor(&maxBlockSize, ReduceSamples<256>, 256, 0);
@@ -1936,8 +2044,8 @@ void test()
 
     nvtxRangePush("start");
     InitializeSamples<<<(numSamples + 255) / 256, 256>>>(
-        sampleStatistics, sampleBounds, sampleDirections, samplePositions, sampleIndices,
-        numSamples, sceneMin, sceneMax);
+        sampleStatistics, sampleBounds, levelInfo, nodes, sampleDirections, samplePositions,
+        sampleIndices, numSamples, sceneMin, sceneMax);
 
     // testing reduce
     uint32_t numBlocks = (numSamples + 255) / 256;
@@ -1947,12 +2055,34 @@ void test()
                                                        samplePositions, numSamples);
 
     cudaEventRecord(start);
-    BuildKDTree<<<numBlocks, blockSize>>>(nodes, sampleBounds, sampleStatistics, sampleIndices,
-                                          newSampleIndices, samplePositions, sampleOffsets,
-                                          numSamples, newSamplePositions);
-    Something<blockSize><<<numBlocks, blockSize>>>(sampleStatistics, sampleBounds,
-                                                   newSampleIndices, numBlocks, numSamples,
-                                                   sampleOffsets, samplePositions);
+    // BuildKDTree<<<numBlocks, blockSize>>>(nodes, sampleBounds, sampleStatistics,
+    // sampleIndices,
+    //                                       newSampleIndices, samplePositions, sampleOffsets,
+    //                                       numSamples, newSamplePositions);
+    // Something<blockSize><<<numBlocks, blockSize>>>(sampleStatistics, sampleBounds,
+    //                                                newSampleIndices, numBlocks, numSamples,
+    //                                                sampleOffsets, samplePositions);
+
+    // TODO: save reduce into node 0
+    // calculate child indices before hand
+
+    for (uint32_t level = 0; level < MAX_TREE_DEPTH; level++)
+    {
+        uint32_t *s0 = (level & 1) ? newSampleIndices : sampleIndices;
+        uint32_t *s1 = (level & 1) ? sampleIndices : newSampleIndices;
+
+        // need to reset queue
+
+        CreateWorkItems<blockSize>
+            <<<numBlocks, blockSize>>>(queue, workItems, nodes, levelInfo, sampleStatistics);
+        BeginLevel<<<1, 1>>>(levelInfo);
+
+        CalculateNodeStatistics<blockSize><<<numBlocks, blockSize>>>(
+            queue, workItems, nodes, sampleStatistics, samplePositions, s1);
+
+        BuildKDTree2<<<numBlocks, blockSize>>>(queue, workItems, level, levelInfo, nodes,
+                                               sampleStatistics, s0, s1, samplePositions);
+    }
 
     cudaEventRecord(stop);
     nvtxRangePop();
