@@ -6,6 +6,9 @@
 #include "../thread_context.h"
 #include <cuda_runtime.h>
 
+#include "nvtx3/nvToolsExt.h"
+#include "nvtx3/nvToolsExtCuda.h"
+
 #define PI             3.14159265358979323846f
 #define MAX_COMPONENTS 32
 #define WARP_SIZE      32
@@ -366,6 +369,51 @@ struct Bounds
     __device__ void AtomicMerge(const Bounds &other) {}
 };
 
+struct SOAFloat3Ref
+{
+    float *x, *y, *z;
+    const uint32_t index;
+
+    __device__ SOAFloat3Ref &operator=(const float3 &val)
+    {
+        x[index] = val.x;
+        y[index] = val.y;
+        z[index] = val.z;
+        return *this;
+    }
+
+    __device__ operator float3() const { return make_float3(x[index], y[index], z[index]); }
+
+    __device__ SOAFloat3Ref &operator=(const SOAFloat3Ref &other)
+    {
+        float3 val = (float3)other;
+        return (*this = val);
+    }
+};
+
+struct SOAFloat3
+{
+    float *x;
+    float *y;
+    float *z;
+
+    __device__ SOAFloat3Ref operator[](uint32_t index) { return {x, y, z, index}; }
+
+    __device__ float3 operator[](uint32_t index) const
+    {
+        return make_float3(x[index], y[index], z[index]);
+    }
+
+    __device__ SOAFloat3 operator+(uint32_t offset)
+    {
+        SOAFloat3 other;
+        other.x = x + offset;
+        other.y = y + offset;
+        other.z = z + offset;
+        return other;
+    }
+};
+
 template <>
 struct Bounds<float3>
 {
@@ -457,6 +505,14 @@ struct SampleStatistics
     }
 
     __device__ void WarpReduce()
+    {
+        bounds.WarpReduce();
+        mean       = WarpReduceSum(mean);
+        variance   = WarpReduceSum(variance);
+        numSamples = WarpReduceSum(numSamples);
+    }
+
+    __device__ void WarpReduce2(uint32_t mask)
     {
         bounds.WarpReduce();
         mean       = WarpReduceSum(mean);
@@ -712,7 +768,7 @@ __global__ void InitializeVMMS(VMM *vmms, uint32_t numVMMs)
 
 __global__ void InitializeSamples(SampleStatistics *statistics, Bounds3f *sampleBounds,
                                   float3 *__restrict__ sampleDirections,
-                                  float3 *__restrict__ samplePositions,
+                                  SOAFloat3 samplePositions,
                                   uint32_t *__restrict__ sampleIndices, uint32_t numSamples,
                                   float3 sceneMin, float3 sceneMax)
 {
@@ -742,6 +798,7 @@ __global__ void InitializeSamples(SampleStatistics *statistics, Bounds3f *sample
         // {
         //     printf("%f %f %f\n", p.x, p.y, p.z);
         // }
+
         samplePositions[sampleIndex] = p;
     }
 }
@@ -1353,7 +1410,7 @@ struct KDTreeNode
 __device__ void PartitionSamples(uint32_t *sampleIndices, uint32_t *newSampleIndices,
                                  float splitPos, uint32_t splitDim, uint32_t numSamples,
                                  uint32_t *sampleLeftOffset, uint32_t *sampleRightOffset,
-                                 float3 *samplePositions)
+                                 SOAFloat3 samplePositions, SOAFloat3 newSamplePositions)
 {
     const uint32_t wid = threadIdx.x >> WARP_SHIFT;
 
@@ -1363,7 +1420,14 @@ __device__ void PartitionSamples(uint32_t *sampleIndices, uint32_t *newSampleInd
     uint32_t dim = splitDim;
 
     uint32_t sampleIndex = sampleIndices[sampleIndexIndex];
-    bool isLeft          = Get(samplePositions[sampleIndex], dim) < splitPos;
+    // uint32_t sampleIndex = sampleIndexIndex;
+    // float3 samplePos = samplePositions[sampleIndex];
+    // bool isLeft        = Get(samplePos, dim) < splitPos;
+
+    float *array =
+        dim == 0 ? samplePositions.x : (dim == 1 ? samplePositions.y : samplePositions.z);
+    float samplePosDim = array[sampleIndex];
+    bool isLeft        = samplePosDim < splitPos;
 
     __shared__ uint32_t numLefts[PARTITION_WARPS_IN_BLOCK];
     __shared__ uint32_t numRights[PARTITION_WARPS_IN_BLOCK];
@@ -1409,14 +1473,107 @@ __device__ void PartitionSamples(uint32_t *sampleIndices, uint32_t *newSampleInd
     uint32_t rOffset =
         rightOffset + numRights[wid] + __popc(rightMask & ((1u << threadInWarp) - 1u));
 
-    uint32_t offset          = (isLeft ? lOffset : numSamples - 1 - rOffset);
-    newSampleIndices[offset] = sampleIndex;
+    uint32_t offset = (isLeft ? lOffset : numSamples - 1 - rOffset);
 
-    // if (blockIdx.x == 0)
-    // {
-    //     printf("%u %u %u\n", threadIdx.x, offset, sampleIndex);
-    // }
+    newSampleIndices[offset] = sampleIndex;
+    // newSamplePositions[offset] = samplePos;
 }
+
+// __device__ void PartitionSamplesAndReduce(SampleStatistics &left, SampleStatistics &right,
+//                                           uint32_t *sampleIndices, uint32_t
+//                                           *newSampleIndices, float splitPos, uint32_t
+//                                           splitDim, uint32_t numSamples, uint32_t
+//                                           *sampleLeftOffset, uint32_t *sampleRightOffset,
+//                                           float3 *samplePositions, float3 center, float3
+//                                           invHalfExtent)
+// {
+//     const uint32_t wid = threadIdx.x >> WARP_SHIFT;
+//
+//     uint32_t sampleIndexIndex = threadIdx.x + blockDim.x * blockIdx.x;
+//     if (sampleIndexIndex >= numSamples) return;
+//
+//     uint32_t dim = splitDim;
+//
+//     uint32_t sampleIndex  = sampleIndices[sampleIndexIndex];
+//     float3 samplePosition = samplePositions[sampleIndex];
+//     bool isLeft           = Get(samplePosition, dim) < splitPos;
+//
+//     SampleStatistics stats[2];
+//     stats[!isLeft].AddSample(samplePosition, center, invHalfExtent);
+//
+//     __shared__ uint32_t numLefts[PARTITION_WARPS_IN_BLOCK];
+//     __shared__ uint32_t numRights[PARTITION_WARPS_IN_BLOCK];
+//
+//     // __shared__ SampleStatistics totalsLeft[PARTITION_WARPS_IN_BLOCK];
+//     // __shared__ SampleStatistics totalsRight[PARTITION_WARPS_IN_BLOCK];
+//
+//     uint32_t mask      = __activemask();
+//     uint32_t leftMask  = __ballot_sync(mask, isLeft);
+//     uint32_t rightMask = __ballot_sync(mask, !isLeft);
+//
+//     stats[0].WarpReduce();
+//     stats[1].WarpReduce();
+//
+//     if ((threadIdx.x & (WARP_SIZE - 1)) == 0)
+//     {
+//         numLefts[wid]  = __popc(leftMask);
+//         numRights[wid] = __popc(rightMask);
+//
+//         left.AtomicMerge(stats[0]);
+//         right.AtomicMerge(stats[1]);
+//
+//         // totalsLeft[wid]  = stats[0];
+//         // totalsRight[wid] = stats[1];
+//     }
+//
+//     __syncthreads();
+//
+//     __shared__ uint32_t leftOffset;
+//     __shared__ uint32_t rightOffset;
+//
+//     if (wid == 0)
+//     {
+//         // SampleStatistics finalTotalLeft  = threadIdx.x < PARTITION_WARPS_IN_BLOCK
+//         //                                        ? totalsLeft[threadIdx.x]
+//         //                                        : SampleStatistics();
+//         // SampleStatistics finalTotalRight = threadIdx.x < PARTITION_WARPS_IN_BLOCK
+//         //                                        ? totalsRight[threadIdx.x]
+//         //                                        : SampleStatistics();
+//         //
+//         // finalTotalLeft.WarpReduce();
+//         // finalTotalRight.WarpReduce();
+//
+//         if (threadIdx.x == 0)
+//         {
+//
+//             uint32_t totalLeft  = 0;
+//             uint32_t totalRight = 0;
+//             for (uint32_t i = 0; i < PARTITION_WARPS_IN_BLOCK; i++)
+//             {
+//                 uint32_t numLeft = numLefts[i];
+//                 numLefts[i]      = totalLeft;
+//                 totalLeft += numLeft;
+//
+//                 uint32_t numRight = numRights[i];
+//                 numRights[i]      = totalRight;
+//                 totalRight += numRight;
+//             }
+//             leftOffset  = atomicAdd(sampleLeftOffset, totalLeft);
+//             rightOffset = atomicAdd(sampleRightOffset, totalRight);
+//         }
+//     }
+//
+//     __syncthreads();
+//
+//     uint32_t threadInWarp = threadIdx.x & 31u;
+//     uint32_t lOffset =
+//         leftOffset + numLefts[wid] + __popc(leftMask & ((1u << threadInWarp) - 1u));
+//     uint32_t rOffset =
+//         rightOffset + numRights[wid] + __popc(rightMask & ((1u << threadInWarp) - 1u));
+//
+//     uint32_t offset          = (isLeft ? lOffset : numSamples - 1 - rOffset);
+//     newSampleIndices[offset] = sampleIndex;
+// }
 
 // you first find the split position. then you partition. then you recursively call
 // the kernel on the children. in gpu land you push the work to the queue.
@@ -1492,19 +1649,19 @@ __device__ void BlockReductionGridStride(MergeType &out, uint32_t numElements,
 }
 
 template <uint32_t blockSize>
-__global__ void GetSampleBounds(Bounds3f *sampleBounds, float3 *samplePositions,
-                                uint32_t numSamples)
+__global__ void GetSampleBounds(Bounds3f *sampleBounds, float *sampleX, float *sampleY,
+                                float *sampleZ, uint32_t numSamples)
 {
-    BlockReductionGridStride<blockSize>(*sampleBounds, numSamples,
-                                        [&](Bounds3f &bounds, uint32_t index) {
-                                            float3 samplePos = samplePositions[index];
-                                            bounds.Extend(samplePos);
-                                        });
+    BlockReductionGridStride<blockSize>(
+        *sampleBounds, numSamples, [&](Bounds3f &bounds, uint32_t index) {
+            float3 samplePos = make_float3(sampleX[index], sampleY[index], sampleZ[index]);
+            bounds.Extend(samplePos);
+        });
 }
 
 template <uint32_t blockSize>
 __global__ void ReduceSamples(SampleStatistics *statistics, Bounds3f *bounds,
-                              float3 *samplePositions, uint32_t numSamples)
+                              SOAFloat3 samplePositions, uint32_t numSamples)
 {
     Bounds3f scaledBounds = *bounds;
     float3 center         = bounds->GetCenter();
@@ -1534,7 +1691,7 @@ template <uint32_t blockSize>
 __global__ void Something(SampleStatistics *statistics, Bounds3f *bounds,
                           const uint32_t *sampleIndices, uint32_t numBlocks,
                           uint32_t totalNumSamples, uint32_t *sampleOffsets,
-                          float3 *samplePositions)
+                          SOAFloat3 samplePositions)
 {
     Bounds3f scaledBounds = *bounds;
     float3 center         = bounds->GetCenter();
@@ -1566,6 +1723,7 @@ __global__ void Something(SampleStatistics *statistics, Bounds3f *bounds,
     bool isLeft                        = blockIdx.x < numBlocksLeft;
     SampleStatistics &blockStatistics  = isLeft ? statistics[1] : statistics[2];
     const uint32_t *blockSampleIndices = sampleIndices + (isLeft ? 0 : sampleOffsets[0]);
+    // const SOAFloat3 samplePoses = samplePositions + (isLeft ? 0 : sampleOffsets[0]);
 
     uint32_t numBlocksInRange = isLeft ? numBlocksLeft : numBlocksRight;
     uint32_t numElements      = isLeft ? numElementsLeft : numElementsRight;
@@ -1579,6 +1737,7 @@ __global__ void Something(SampleStatistics *statistics, Bounds3f *bounds,
                                   [&](SampleStatistics &total, uint32_t index) {
                                       float3 samplePos =
                                           samplePositions[blockSampleIndices[index]];
+                                      // float3 samplePos = samplePoses[index];
                                       total.AddSample(samplePos, center, invHalfExtent);
                                   });
     }
@@ -1587,8 +1746,9 @@ __global__ void Something(SampleStatistics *statistics, Bounds3f *bounds,
 // TODO: for now this is just level 0
 __global__ void BuildKDTree(KDTreeNode *nodes, Bounds3f *bounds,
                             SampleStatistics *sampleStatistics, uint32_t *sampleIndices,
-                            uint32_t *newSampleIndices, float3 *samplePositions,
-                            uint32_t *sampleOffsets, uint32_t numSamples)
+                            uint32_t *newSampleIndices, SOAFloat3 samplePositions,
+                            uint32_t *sampleOffsets, uint32_t numSamples,
+                            SOAFloat3 newSamplePositions)
 {
     __shared__ KDTreeNode node;
     __shared__ SampleStatistics statistics;
@@ -1612,8 +1772,30 @@ __global__ void BuildKDTree(KDTreeNode *nodes, Bounds3f *bounds,
         // TODO: unify this kernel wth reduce?
         // per node you need an offset and count into sampleIndices
 
+#if 1
         PartitionSamples(sampleIndices, newSampleIndices, splitPos, splitDim, numSamples,
-                         &sampleOffsets[0], &sampleOffsets[1], samplePositions);
+                         &sampleOffsets[0], &sampleOffsets[1], samplePositions,
+                         newSamplePositions);
+#else
+
+        Bounds3f scaledBounds = *bounds;
+        float3 center         = bounds->GetCenter();
+        scaledBounds.SetBoundsMin(center + (scaledBounds.GetBoundsMin() - center) *
+                                               INTEGER_SAMPLE_STATS_BOUND_SCALE);
+        scaledBounds.SetBoundsMax(center + (scaledBounds.GetBoundsMax() - center) *
+                                               INTEGER_SAMPLE_STATS_BOUND_SCALE);
+
+        center               = bounds->GetCenter();
+        float3 invHalfExtent = bounds->GetHalfExtent();
+
+        invHalfExtent.x = invHalfExtent.x > 0.f ? 1.f / invHalfExtent.x : 0.f;
+        invHalfExtent.y = invHalfExtent.y > 0.f ? 1.f / invHalfExtent.y : 0.f;
+        invHalfExtent.z = invHalfExtent.z > 0.f ? 1.f / invHalfExtent.z : 0.f;
+        PartitionSamplesAndReduce(sampleStatistics[1], sampleStatistics[2], sampleIndices,
+                                  newSampleIndices, splitPos, splitDim, numSamples,
+                                  &sampleOffsets[0], &sampleOffsets[1], samplePositions,
+                                  center, invHalfExtent);
+#endif
     }
 }
 
@@ -1703,6 +1885,7 @@ struct CUDAArena
 
 void test()
 {
+    cudaFree(0);
     uint32_t numVMMs     = 4;
     uint32_t numSamples  = 1u << 22u; // numVMMs * WARP_SIZE;
     uint32_t maxNumNodes = 1u << 10u;
@@ -1719,7 +1902,17 @@ void test()
     uint32_t *sampleOffsets = allocator.Alloc<uint32_t>(maxNumNodes * 2, 4u);
     cudaMemset(sampleOffsets, 0, sizeof(uint32_t) * maxNumNodes * 2);
 
-    float3 *samplePositions  = allocator.Alloc<float3>(numSamples, 4u);
+    float *samplePosX = allocator.Alloc<float>(numSamples, 4u);
+    float *samplePosY = allocator.Alloc<float>(numSamples, 4u);
+    float *samplePosZ = allocator.Alloc<float>(numSamples, 4u);
+
+    float *sampleNewPosX = allocator.Alloc<float>(numSamples, 4u);
+    float *sampleNewPosY = allocator.Alloc<float>(numSamples, 4u);
+    float *sampleNewPosZ = allocator.Alloc<float>(numSamples, 4u);
+
+    SOAFloat3 samplePositions    = {samplePosX, samplePosY, samplePosZ};
+    SOAFloat3 newSamplePositions = {sampleNewPosX, sampleNewPosY, sampleNewPosZ};
+
     float3 *sampleDirections = allocator.Alloc<float3>(numSamples, 4u);
 
     uint32_t *sampleIndices    = allocator.Alloc<uint32_t>(numSamples, 4u);
@@ -1735,24 +1928,34 @@ void test()
 
     printf("%i\n", maxBlockSize);
 
+    cudaEvent_t start;
+    cudaEvent_t stop;
+
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+    nvtxRangePush("start");
     InitializeSamples<<<(numSamples + 255) / 256, 256>>>(
         sampleStatistics, sampleBounds, sampleDirections, samplePositions, sampleIndices,
         numSamples, sceneMin, sceneMax);
 
     // testing reduce
     uint32_t numBlocks = (numSamples + 255) / 256;
-    GetSampleBounds<blockSize>
-        <<<numBlocks, blockSize>>>(sampleBounds, samplePositions, numSamples);
+    GetSampleBounds<blockSize><<<numBlocks, blockSize>>>(sampleBounds, samplePosX, samplePosY,
+                                                         samplePosZ, numSamples);
     ReduceSamples<blockSize><<<numBlocks, blockSize>>>(sampleStatistics, sampleBounds,
                                                        samplePositions, numSamples);
 
+    cudaEventRecord(start);
     BuildKDTree<<<numBlocks, blockSize>>>(nodes, sampleBounds, sampleStatistics, sampleIndices,
                                           newSampleIndices, samplePositions, sampleOffsets,
-                                          numSamples);
+                                          numSamples, newSamplePositions);
     Something<blockSize><<<numBlocks, blockSize>>>(sampleStatistics, sampleBounds,
                                                    newSampleIndices, numBlocks, numSamples,
                                                    sampleOffsets, samplePositions);
 
+    cudaEventRecord(stop);
+    nvtxRangePop();
     PrintStatistics<<<1, 1>>>(sampleStatistics);
 
 #if 0
@@ -1779,6 +1982,9 @@ void test()
     // CPU execution is asynchronous, so we must wait for the GPU to finish
     // before the program exits (otherwise the printfs might get cut off).
     cudaDeviceSynchronize();
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    printf("GPU Time: %f ms\n", milliseconds);
 }
 
 } // namespace rt

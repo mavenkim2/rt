@@ -428,9 +428,12 @@ if (CMAKE_CUDA_COMPILER)
     #message(STATUS "CUDA Compiler: ${CMAKE_CUDA_COMPILER}")
     message(STATUS "CUDA Architecture: ${CMAKE_CUDA_ARCHITECTURES}")
     set(CMAKE_CUDA_ARCHITECTURES "native")
+    # set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -lineinfo")
     add_executable(rt_cuda_exe
         ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/gpu/test.cu
     )
+
+    target_compile_options(rt_cuda_exe PRIVATE "-lineinfo")
     set_target_properties(rt_cuda_exe PROPERTIES
         CUDA_ARCHITECTURES native
         CMAKE_CUDA_STANDARD 17
