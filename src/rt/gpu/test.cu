@@ -5,6 +5,7 @@
 #include "helper_math.h"
 #include "../thread_context.h"
 #include <cuda_runtime.h>
+#include <type_traits>
 
 #include "nvtx3/nvToolsExt.h"
 #include "nvtx3/nvToolsExtCuda.h"
@@ -30,6 +31,13 @@ __device__ void atomicAdd(int3 *a, int3 b)
     atomicAdd(&a->z, b.z);
 }
 
+__device__ void atomicAdd(uint3 *a, uint3 b)
+{
+    atomicAdd(&a->x, b.x);
+    atomicAdd(&a->y, b.y);
+    atomicAdd(&a->z, b.z);
+}
+
 __device__ void atomicMin(uint3 *a, uint3 b)
 {
     atomicMin(&a->x, b.x);
@@ -38,6 +46,42 @@ __device__ void atomicMin(uint3 *a, uint3 b)
 }
 
 __device__ void atomicMax(uint3 *a, uint3 b)
+{
+    atomicMax(&a->x, b.x);
+    atomicMax(&a->y, b.y);
+    atomicMax(&a->z, b.z);
+}
+
+__device__ float atomicMin(float *a, float value)
+{
+    float old = *a, assumed;
+    if (old <= value) return old;
+    do
+    {
+        assumed = old;
+        old     = atomicCAS((unsigned int *)a, __float_as_int(assumed), __float_as_int(value));
+    } while (old != assumed);
+}
+
+__device__ float atomicMax(float *a, float value)
+{
+    float old = *a, assumed;
+    if (old >= value) return old;
+    do
+    {
+        assumed = old;
+        old     = atomicCAS((unsigned int *)a, __float_as_int(assumed), __float_as_int(value));
+    } while (old != assumed);
+}
+
+__device__ void atomicMin(float3 *a, float3 b)
+{
+    atomicMin(&a->x, b.x);
+    atomicMin(&a->y, b.y);
+    atomicMin(&a->z, b.z);
+}
+
+__device__ void atomicMax(float3 *a, float3 b)
 {
     atomicMax(&a->x, b.x);
     atomicMax(&a->y, b.y);
@@ -234,17 +278,25 @@ __device__ int3 WarpReduceSum(int3 val)
     return val;
 }
 
+template <>
+__device__ uint3 WarpReduceSum(uint3 val)
+{
+    val.x = WarpReduceSum(val.x);
+    val.y = WarpReduceSum(val.y);
+    val.z = WarpReduceSum(val.z);
+    return val;
+}
+
 template <typename T>
 __device__ T WarpReduceMin(T val)
 {
-    T minVal = val;
 #pragma unroll
     for (int offset = (WARP_SIZE >> 1); offset > 0; offset >>= 1)
     {
         T temp = __shfl_down_sync(0xffffffff, val, offset);
-        minVal = min(minVal, temp);
+        val    = min(val, temp);
     }
-    return minVal;
+    return val;
 }
 
 template <>
@@ -268,14 +320,13 @@ __device__ uint3 WarpReduceMin(uint3 val)
 template <typename T>
 __device__ T WarpReduceMax(T val)
 {
-    T maxVal = val;
 #pragma unroll
     for (int offset = (WARP_SIZE >> 1); offset > 0; offset >>= 1)
     {
         T temp = __shfl_down_sync(0xffffffff, val, offset);
-        maxVal = max(maxVal, temp);
+        val    = max(val, temp);
     }
-    return maxVal;
+    return val;
 }
 
 template <>
@@ -431,6 +482,15 @@ public:
         boundsMax = make_uint3(neg_inf);
     }
 
+    __device__ void Clear()
+    {
+        const uint pos_inf = 0xff800000;
+        const uint neg_inf = ~0xff800000;
+
+        boundsMin = make_uint3(pos_inf);
+        boundsMax = make_uint3(neg_inf);
+    }
+
     __device__ void Extend(float3 value)
     {
         uint3 val = FloatToOrderedUint(value);
@@ -516,6 +576,14 @@ struct SampleStatistics
     __device__ SampleStatistics()
         : numSamples(0), bounds(), mean(make_int3(0)), variance(make_int3(0))
     {
+    }
+
+    __device__ void Clear()
+    {
+        numSamples = 0;
+        bounds.Clear();
+        mean     = make_int3(0);
+        variance = make_int3(0);
     }
 
     __device__ void AddSample(float3 pos, float3 center, float3 invHalfExtent)
@@ -1514,8 +1582,8 @@ __device__ void PartitionSamples(uint32_t *sampleIndices, uint32_t *newSampleInd
 // the kernel on the children. in gpu land you push the work to the queue.
 
 template <uint32_t blockSize, typename MergeType, typename AddFunc>
-__device__ void BlockReduction(MergeType &out, uint32_t numElements, uint32_t blockIndex,
-                               uint32_t stride, AddFunc &&addFunc)
+__device__ void BlockReduction(MergeType *totals, MergeType &out, uint32_t numElements,
+                               uint32_t blockIndex, uint32_t stride, AddFunc &&addFunc)
 {
     static constexpr uint32_t numWarps = blockSize >> WARP_SHIFT;
     static_assert(numWarps <= WARP_SIZE);
@@ -1523,14 +1591,8 @@ __device__ void BlockReduction(MergeType &out, uint32_t numElements, uint32_t bl
 
     uint32_t wId = threadIdx.x >> WARP_SHIFT;
 
-    __shared__ MergeType totals[numWarps];
-    // if (threadIdx.x < numWarps)
-    // {
-    //     totals[threadIdx.x] = MergeType();
-    // }
-    // __syncthreads();
-
-    MergeType total = MergeType();
+    MergeType total;
+    total.Clear();
 
     uint32_t i = threadIdx.x + blockIndex * blockSize;
     while (i < numElements)
@@ -1557,21 +1619,33 @@ __device__ void BlockReduction(MergeType &out, uint32_t numElements, uint32_t bl
             out.AtomicMerge(finalTotal);
         }
     }
+
+    // MergeType finalTotal = threadIdx.x < numWarps ? totals[threadIdx.x] : MergeType();
+    // finalTotal.WarpReduce();
+    // if (threadIdx.x == 0)
+    // {
+    //     out.AtomicMerge(finalTotal);
+    // }
+    // return finalTotal;
 }
 
 template <uint32_t blockSize, typename MergeType, typename AddFunc>
-__device__ void BlockReductionGridStride(MergeType &out, uint32_t numElements,
-                                         AddFunc &&addFunc)
+__device__ void BlockReductionGridStride(MergeType *totals, MergeType &out,
+                                         uint32_t numElements, AddFunc &&addFunc)
 {
-    BlockReduction<blockSize>(out, numElements, blockIdx.x, blockSize * gridDim.x, addFunc);
+    BlockReduction<blockSize>(totals, out, numElements, blockIdx.x, blockSize * gridDim.x,
+                              addFunc);
 }
 
 template <uint32_t blockSize>
 __global__ void GetSampleBounds(Bounds3f *sampleBounds, float *sampleX, float *sampleY,
                                 float *sampleZ, uint32_t numSamples)
 {
+    static constexpr uint32_t numWarps = blockSize >> WARP_SHIFT;
+    __shared__ Bounds3f totals[numWarps];
+
     BlockReductionGridStride<blockSize>(
-        *sampleBounds, numSamples, [&](Bounds3f &bounds, uint32_t index) {
+        totals, *sampleBounds, numSamples, [&](Bounds3f &bounds, uint32_t index) {
             float3 samplePos = make_float3(sampleX[index], sampleY[index], sampleZ[index]);
             bounds.Extend(samplePos);
         });
@@ -1581,6 +1655,9 @@ template <uint32_t blockSize>
 __global__ void ReduceSamples(SampleStatistics *statistics, Bounds3f *bounds,
                               SOAFloat3 samplePositions, uint32_t numSamples)
 {
+    static constexpr uint32_t numWarps = blockSize >> WARP_SHIFT;
+    __shared__ SampleStatistics totals[numWarps];
+
     Bounds3f scaledBounds = *bounds;
     float3 center         = bounds->GetCenter();
     scaledBounds.SetBoundsMin(center + (scaledBounds.GetBoundsMin() - center) *
@@ -1596,7 +1673,7 @@ __global__ void ReduceSamples(SampleStatistics *statistics, Bounds3f *bounds,
     invHalfExtent.z = invHalfExtent.z > 0.f ? 1.f / invHalfExtent.z : 0.f;
 
     // TODO: the shared memory reads have bank conflicts. soa the data
-    BlockReductionGridStride<blockSize>(*statistics, numSamples,
+    BlockReductionGridStride<blockSize>(totals, *statistics, numSamples,
                                         [&](SampleStatistics &total, uint32_t index) {
                                             float3 samplePos = samplePositions[index];
                                             // total.AddSample(samplePositions[sampleIndices[index]],
@@ -1747,8 +1824,11 @@ __global__ void CalculateNodeStatistics(Queue *queue, WorkItem *workItems, KDTre
                                         SampleStatistics *statistics,
                                         SOAFloat3 samplePositions, uint32_t *sampleIndices)
 {
+    static constexpr uint32_t numWarps = blockSize >> WARP_SHIFT;
+
     __shared__ WorkItem workItem;
     __shared__ KDTreeNode node;
+    __shared__ SampleStatistics totals[numWarps];
 
     for (uint32_t workItemIndex = blockIdx.x; workItemIndex < queue->writeOffset;
          workItemIndex += gridDim.x)
@@ -1779,10 +1859,11 @@ __global__ void CalculateNodeStatistics(Queue *queue, WorkItem *workItems, KDTre
         invHalfExtent.y = invHalfExtent.y > 0.f ? 1.f / invHalfExtent.y : 0.f;
         invHalfExtent.z = invHalfExtent.z > 0.f ? 1.f / invHalfExtent.z : 0.f;
 
-        BlockReduction<blockSize>(blockStatistics, workItem.count, 0, blockSize,
+        BlockReduction<blockSize>(totals, blockStatistics, workItem.count, 0, blockSize,
                                   [&](SampleStatistics &total, uint32_t index) {
                                       float3 samplePos =
                                           samplePositions[blockSampleIndices[index]];
+
                                       total.AddSample(samplePos, center, invHalfExtent);
                                   });
     }
@@ -1884,11 +1965,11 @@ __global__ void PrintStatistics(SampleStatistics *stats, KDTreeNode *nodes, Queu
         printf("why? %u %u %u %u %u %u\n", boundsMinUint.x, boundsMinUint.y, boundsMinUint.z,
                boundsMaxUint.x, boundsMaxUint.y, boundsMaxUint.z);
 
-        printf(
-            "off count: %u %u bounds: %f %f %f %f %f %f\nmean: %i %i %i var: %i %i %i, %u\n\n",
-            node->offset, node->count, boundsMin.x, boundsMin.y, boundsMin.z, boundsMax.x,
-            boundsMax.y, boundsMax.z, mean.x, mean.y, mean.z, variance.x, variance.y,
-            variance.z, sampleStatistics->numSamples);
+        printf("off count: %u %u,  bounds: %f %f %f %f %f %f\nmean: %i %i %i "
+               "var: %i %i %i, %u\n\n",
+               node->offset, node->count, boundsMin.x, boundsMin.y, boundsMin.z, boundsMax.x,
+               boundsMax.y, boundsMax.z, mean.x, mean.y, mean.z, variance.x, variance.y,
+               variance.z, sampleStatistics->numSamples);
     }
 }
 
@@ -2001,12 +2082,12 @@ void test()
                                           newSamplePositions);
 
     // uint32_t level = 1;
+    // TODO: we aren't calculating stats for leaf nodes?
     for (uint32_t level = 1; level < MAX_TREE_DEPTH; level++)
     {
         uint32_t *s0 = (level & 1) ? newSampleIndices : sampleIndices;
         uint32_t *s1 = (level & 1) ? sampleIndices : newSampleIndices;
 
-        // reset queue
         GetChildNodeOffset<<<(maxNumNodes + WARP_SIZE - 1) / WARP_SIZE, WARP_SIZE>>>(
             levelInfo, nodes, level);
         BeginLevel<<<1, 1>>>(levelInfo, queue);
