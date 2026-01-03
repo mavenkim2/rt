@@ -108,6 +108,10 @@ inline __host__ __device__ float3 make_float3(uint3 a)
 {
     return make_float3(float(a.x), float(a.y), float(a.z));
 }
+inline __host__ __device__ float3 make_float3(longlong3 a)
+{
+    return make_float3(float(a.x), float(a.y), float(a.z));
+}
 
 inline __host__ __device__ int3 make_int3(int s) { return make_int3(s, s, s); }
 inline __host__ __device__ int3 make_int3(int2 a) { return make_int3(a.x, a.y, 0); }
@@ -179,6 +183,11 @@ inline __host__ __device__ uint4 make_uint4(int4 a)
 inline __host__ __device__ uint4 make_uint4(uint2 a, uint b, uint c)
 {
     return make_uint4(a.x, a.y, b, c);
+}
+
+inline __host__ __device__ longlong3 make_longlong3(float3 f)
+{
+    return make_longlong3(long long(f.x), long long(f.y), long long(f.z));
 }
 
 ///
@@ -435,6 +444,18 @@ inline __host__ __device__ void operator+=(uint4 &a, uint b)
     a.y += b;
     a.z += b;
     a.w += b;
+}
+
+inline __host__ __device__ longlong3 operator+(longlong3 a, longlong3 b)
+{
+    return make_longlong3(a.x + b.x, a.y + b.y, a.z + b.z);
+}
+
+inline __host__ __device__ void operator+=(longlong3 &a, longlong3 b)
+{
+    a.x += b.x;
+    a.y += b.y;
+    a.z += b.z;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

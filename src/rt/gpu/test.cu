@@ -1,3 +1,14 @@
+// Based on code from OpenPGL (https://github.com/OpenPathGuidingLibrary/openpgl)
+// Copyright 2020 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+//
+// Modifications
+// Copyright 2026 Maven Kim
+// SPDX-License-Identifier: Apache-2.0
+//
+// This file contains algorithms and core logic derived from OpenPGL,
+// restructured and adapted for CUDA execution.
+
 #include <assert.h>
 #include <cfloat>
 #include <stdio.h>
@@ -24,11 +35,22 @@ __device__ void atomicAdd(float3 *a, float3 b)
     atomicAdd(&a->z, b.z);
 }
 
-__device__ void atomicAdd(int3 *a, int3 b)
+__device__ int3 atomicAdd(int3 *a, int3 b)
 {
-    atomicAdd(&a->x, b.x);
-    atomicAdd(&a->y, b.y);
-    atomicAdd(&a->z, b.z);
+    int3 result;
+    result.x = atomicAdd(&a->x, b.x);
+    result.y = atomicAdd(&a->y, b.y);
+    result.z = atomicAdd(&a->z, b.z);
+    return result;
+}
+
+__device__ longlong3 atomicAdd(longlong3 *a, longlong3 b)
+{
+    longlong3 result;
+    result.x = (long long)atomicAdd((unsigned long long *)&a->x, (unsigned long long)b.x);
+    result.y = (long long)atomicAdd((unsigned long long *)&a->y, (unsigned long long)b.y);
+    result.z = (long long)atomicAdd((unsigned long long *)&a->z, (unsigned long long)b.z);
+    return result;
 }
 
 __device__ void atomicAdd(uint3 *a, uint3 b)
@@ -46,42 +68,6 @@ __device__ void atomicMin(uint3 *a, uint3 b)
 }
 
 __device__ void atomicMax(uint3 *a, uint3 b)
-{
-    atomicMax(&a->x, b.x);
-    atomicMax(&a->y, b.y);
-    atomicMax(&a->z, b.z);
-}
-
-__device__ float atomicMin(float *a, float value)
-{
-    float old = *a, assumed;
-    if (old <= value) return old;
-    do
-    {
-        assumed = old;
-        old     = atomicCAS((unsigned int *)a, __float_as_int(assumed), __float_as_int(value));
-    } while (old != assumed);
-}
-
-__device__ float atomicMax(float *a, float value)
-{
-    float old = *a, assumed;
-    if (old >= value) return old;
-    do
-    {
-        assumed = old;
-        old     = atomicCAS((unsigned int *)a, __float_as_int(assumed), __float_as_int(value));
-    } while (old != assumed);
-}
-
-__device__ void atomicMin(float3 *a, float3 b)
-{
-    atomicMin(&a->x, b.x);
-    atomicMin(&a->y, b.y);
-    atomicMin(&a->z, b.z);
-}
-
-__device__ void atomicMax(float3 *a, float3 b)
 {
     atomicMax(&a->x, b.x);
     atomicMax(&a->y, b.y);
@@ -271,6 +257,15 @@ __device__ float3 WarpReduceSum(float3 val)
 
 template <>
 __device__ int3 WarpReduceSum(int3 val)
+{
+    val.x = WarpReduceSum(val.x);
+    val.y = WarpReduceSum(val.y);
+    val.z = WarpReduceSum(val.z);
+    return val;
+}
+
+template <>
+__device__ longlong3 WarpReduceSum(longlong3 val)
 {
     val.x = WarpReduceSum(val.x);
     val.y = WarpReduceSum(val.y);
@@ -557,7 +552,17 @@ struct KDTreeNode
     uint32_t count;
 
     __device__ uint32_t GetChildIndex() const { return (childIndex_dim << 2) >> 2; }
+    __device__ void SetChildIndex(uint32_t childIndex)
+    {
+        assert(childIndex < (1u << 30u));
+        childIndex_dim |= childIndex;
+    }
     __device__ uint32_t GetSplitDim() const { return childIndex_dim >> 30; }
+    __device__ void SetSplitDim(uint32_t dim)
+    {
+        assert(dim < 3);
+        childIndex_dim |= dim << 30;
+    }
     __device__ bool HasChild() const { return childIndex_dim != ~0u; }
 };
 
@@ -569,12 +574,16 @@ struct KDTreeNode
 struct SampleStatistics
 {
     Bounds3f bounds;
-    int3 mean;
-    int3 variance;
+    // int3 mean;
+    // int3 variance;
+    longlong3 mean;
+    longlong3 variance;
+
     uint32_t numSamples;
 
     __device__ SampleStatistics()
-        : numSamples(0), bounds(), mean(make_int3(0)), variance(make_int3(0))
+        : numSamples(0), bounds(), mean(make_longlong3(0, 0, 0)),
+          variance(make_longlong3(0, 0, 0))
     {
     }
 
@@ -582,18 +591,19 @@ struct SampleStatistics
     {
         numSamples = 0;
         bounds.Clear();
-        mean     = make_int3(0);
-        variance = make_int3(0);
+        mean     = make_longlong3(0, 0, 0);
+        variance = make_longlong3(0, 0, 0);
     }
 
     __device__ void AddSample(float3 pos, float3 center, float3 invHalfExtent)
     {
         numSamples++;
-        float3 tmpSample   = (pos - center) * invHalfExtent;
+        float3 tmpSample = (pos - center) * invHalfExtent;
+
         float3 tmpVariance = ((tmpSample * tmpSample) * INTEGER_BINS);
 
-        mean += make_int3(tmpSample * INTEGER_BINS);
-        variance += make_int3(tmpVariance);
+        mean += make_longlong3(tmpSample * INTEGER_BINS);
+        variance += make_longlong3(tmpVariance);
 
         bounds.Extend(pos);
     }
@@ -614,38 +624,113 @@ struct SampleStatistics
         atomicAdd(&numSamples, other.numSamples);
     }
 
-    void GetSplitDimensionAndPosition(uint32_t &splitDim, float &splitPos)
+    __device__ void ConvertToFloat(float3 center, float3 halfExtent, float3 &outMean,
+                                   float3 &outVariance)
     {
-        auto maxDimension = [](const float3 &v) -> uint32_t {
-            return v.x > v.y ? (v.x > v.z ? 0 : 2) : (v.y > v.z ? 1 : 2);
-        };
+        longlong3 intMean = mean;
+        longlong3 intVar  = variance;
 
-        float invNumSamples      = 1.f / float(numSamples);
-        float3 sampleMean        = (make_float3(mean) * invNumSamples) / INTEGER_BINS;
-        float3 sampleVariance    = make_float3(0.f);
-        float3 sampleBoundExtend = make_float3(0.f);
+        float invNumSamples = 1.f / numSamples;
+        float3 sampleMean   = make_float3(intMean) * invNumSamples;
+        sampleMean /= INTEGER_BINS;
 
-        if (sampleVariance.x == sampleVariance.y && sampleVariance.y == sampleVariance.z)
+        float3 sampleMeanBin = sampleMean;
+        sampleMean           = sampleMean * halfExtent + center;
+
+        float3 lowerCollectedSampleBound = bounds.GetBoundsMin();
+        float3 upperCollectedSampleBound = bounds.GetBoundsMax();
+
+        float3 collectedSampleBoundExtend =
+            (upperCollectedSampleBound - lowerCollectedSampleBound);
+        float3 halfCollectedSampleBoundExtend =
+            (upperCollectedSampleBound - lowerCollectedSampleBound) * 0.5f;
+        float3 halfBinSize = make_float3(0.5f / INTEGER_BINS) * halfExtent;
+
+        sampleMean.x = sampleMean.x <= lowerCollectedSampleBound.x
+                           ? lowerCollectedSampleBound.x +
+                                 min(halfCollectedSampleBoundExtend.x, halfBinSize.x)
+                           : sampleMean.x;
+        sampleMean.y = sampleMean.y <= lowerCollectedSampleBound.y
+                           ? lowerCollectedSampleBound.y +
+                                 min(halfCollectedSampleBoundExtend.y, halfBinSize.y)
+                           : sampleMean.y;
+        sampleMean.z = sampleMean.z <= lowerCollectedSampleBound.z
+                           ? lowerCollectedSampleBound.z +
+                                 min(halfCollectedSampleBoundExtend.z, halfBinSize.z)
+                           : sampleMean.z;
+        sampleMean.x = sampleMean.x >= upperCollectedSampleBound.x
+                           ? upperCollectedSampleBound.x -
+                                 min(halfCollectedSampleBoundExtend.x, halfBinSize.x)
+                           : sampleMean.x;
+        sampleMean.y = sampleMean.y >= upperCollectedSampleBound.y
+                           ? upperCollectedSampleBound.y -
+                                 min(halfCollectedSampleBoundExtend.y, halfBinSize.y)
+                           : sampleMean.y;
+        sampleMean.z = sampleMean.z >= upperCollectedSampleBound.z
+                           ? upperCollectedSampleBound.z -
+                                 min(halfCollectedSampleBoundExtend.z, halfBinSize.z)
+                           : sampleMean.z;
+
+        float3 sampleVariance =
+            (make_float3(intVar.x, intVar.y, intVar.z) / (INTEGER_BINS)) * invNumSamples;
+        sampleVariance -= sampleMeanBin * sampleMeanBin;
+        sampleVariance = make_float3(max(0.f, sampleVariance.x), max(0.f, sampleVariance.y),
+                                     max(0.f, sampleVariance.z));
+
+        sampleVariance = sampleVariance * (halfExtent * halfExtent);
+        sampleVariance.x =
+            min(collectedSampleBoundExtend.x * collectedSampleBoundExtend.x, sampleVariance.x);
+        sampleVariance.y =
+            min(collectedSampleBoundExtend.y * collectedSampleBoundExtend.y, sampleVariance.y);
+        sampleVariance.z =
+            min(collectedSampleBoundExtend.z * collectedSampleBoundExtend.z, sampleVariance.z);
+
+        sampleVariance.x =
+            upperCollectedSampleBound.x - lowerCollectedSampleBound.x < 2.f / INTEGER_BINS
+                ? 0.f
+                : sampleVariance.x;
+        sampleVariance.y =
+            upperCollectedSampleBound.y - lowerCollectedSampleBound.y < 2.f / INTEGER_BINS
+                ? 0.f
+                : sampleVariance.y;
+        sampleVariance.z =
+            upperCollectedSampleBound.z - lowerCollectedSampleBound.z < 2.f / INTEGER_BINS
+                ? 0.f
+                : sampleVariance.z;
+
+        outVariance = sampleVariance;
+        outMean     = sampleMean;
+    }
+};
+
+inline __device__ void GetSplitDimensionAndPosition(float3 sampleMean, float3 sampleVariance,
+                                                    float3 sampleBoundExtend,
+                                                    uint32_t &splitDim, float &splitPos)
+{
+    auto maxDimension = [](const float3 &v) -> uint32_t {
+        return v.x > v.y ? (v.x > v.z ? 0 : 2) : (v.y > v.z ? 1 : 2);
+    };
+
+    if (sampleVariance.x == sampleVariance.y && sampleVariance.y == sampleVariance.z)
+    {
+        if (sampleBoundExtend.x == sampleBoundExtend.y &&
+            sampleBoundExtend.y == sampleBoundExtend.z)
         {
-            if (sampleBoundExtend.x == sampleBoundExtend.y &&
-                sampleBoundExtend.y == sampleBoundExtend.z)
-            {
-                splitDim = (splitDim + 1) % 3;
-                splitPos = Get(sampleMean, splitDim);
-            }
-            else
-            {
-                splitDim = maxDimension(sampleBoundExtend);
-                splitPos = Get(sampleMean, splitDim);
-            }
+            splitDim = (splitDim + 1) % 3;
+            splitPos = Get(sampleMean, splitDim);
         }
         else
         {
-            splitDim = maxDimension(sampleVariance);
+            splitDim = maxDimension(sampleBoundExtend);
             splitPos = Get(sampleMean, splitDim);
         }
     }
-};
+    else
+    {
+        splitDim = maxDimension(sampleVariance);
+        splitPos = Get(sampleMean, splitDim);
+    }
+}
 
 inline __device__ void BuildOrthonormalBasis(const float3 &n, float3 &t0, float3 &t1)
 {
@@ -1676,10 +1761,60 @@ __global__ void ReduceSamples(SampleStatistics *statistics, Bounds3f *bounds,
     BlockReductionGridStride<blockSize>(totals, *statistics, numSamples,
                                         [&](SampleStatistics &total, uint32_t index) {
                                             float3 samplePos = samplePositions[index];
-                                            // total.AddSample(samplePositions[sampleIndices[index]],
-                                            // center, invHalfExtent);
                                             total.AddSample(samplePos, center, invHalfExtent);
                                         });
+}
+
+__global__ void CalculateSplitLocations(LevelInfo *info, KDTreeNode *nodes,
+                                        SampleStatistics *statistics, Bounds3f *bounds = 0)
+{
+    uint32_t threadIndex = threadIdx.x + blockDim.x * blockIdx.x;
+    if (threadIndex >= info->count) return;
+
+    int nodeIndex    = info->start + threadIndex;
+    KDTreeNode *node = &nodes[nodeIndex];
+
+    assert(nodeIndex != 0 || (nodeIndex == 0 && bounds));
+    if (node->HasChild())
+    {
+        Bounds3f scaledBounds =
+            nodeIndex == 0 ? *bounds : statistics[node->parentIndex].bounds;
+        float3 center = scaledBounds.GetCenter();
+        scaledBounds.SetBoundsMin(center + (scaledBounds.GetBoundsMin() - center) *
+                                               INTEGER_SAMPLE_STATS_BOUND_SCALE);
+        scaledBounds.SetBoundsMax(center + (scaledBounds.GetBoundsMax() - center) *
+                                               INTEGER_SAMPLE_STATS_BOUND_SCALE);
+
+        center            = scaledBounds.GetCenter();
+        float3 halfExtent = scaledBounds.GetHalfExtent();
+
+        float3 sampleMean, sampleVariance;
+        statistics[nodeIndex].ConvertToFloat(center, halfExtent, sampleMean, sampleVariance);
+
+        uint32_t splitDim;
+        float splitPos;
+        GetSplitDimensionAndPosition(sampleMean, sampleVariance, 2.f * halfExtent, splitDim,
+                                     splitPos);
+
+        node->SetSplitDim(splitDim);
+        node->splitPos = splitPos;
+
+        assert(!isnan(sampleMean.x) && !isnan(sampleMean.y) && !isnan(sampleMean.z));
+        assert(!isnan(sampleVariance.x) && !isnan(sampleVariance.y) &&
+               !isnan(sampleVariance.z));
+
+        assert(isfinite(sampleMean.x) && isfinite(sampleMean.y) && isfinite(sampleMean.z));
+        assert(isfinite(sampleVariance.x) && isfinite(sampleVariance.y) &&
+               isfinite(sampleVariance.z));
+
+        if (nodeIndex < 3)
+        {
+            longlong3 vr = statistics[nodeIndex].variance;
+            printf("%lld %lld %lld, node: %u, %f %u\n %f %f %f %f %f %f\n", vr.x, vr.y, vr.z,
+                   nodeIndex, splitPos, splitDim, sampleMean.x, sampleMean.y, sampleMean.z,
+                   sampleVariance.x, sampleVariance.y, sampleVariance.z);
+        }
+    }
 }
 
 __global__ void BuildKDTree(KDTreeNode *nodes, Bounds3f *bounds,
@@ -1701,11 +1836,8 @@ __global__ void BuildKDTree(KDTreeNode *nodes, Bounds3f *bounds,
 
     if (statistics.numSamples > MAX_SAMPLES_PER_LEAF)
     {
-        // float splitDim, splitPos;
-        // statistics.GetSplitDimensionAndPosition(splitDim, splitPos);
-
-        uint32_t splitDim   = 0;
-        float splitPos      = Get(bounds->GetCenter(), splitDim);
+        uint32_t splitDim   = node.GetSplitDim();
+        float splitPos      = node.splitPos;
         uint32_t childIndex = node.GetChildIndex();
 
         uint32_t *blockSampleIndices = sampleIndices + blockIdx.x * blockDim.x;
@@ -1788,8 +1920,8 @@ __global__ void CreateWorkItems(Queue *reduceQueue, WorkItem *reduceWorkItems,
 
         if (split)
         {
-            partitionStart      = atomicAdd(&partitionQueue->writeOffset, numWorkItems);
-            node.childIndex_dim = info->start + info->count + atomicAdd(&info->childCount, 2);
+            partitionStart = atomicAdd(&partitionQueue->writeOffset, numWorkItems);
+            node.SetChildIndex(info->start + info->count + atomicAdd(&info->childCount, 2));
         }
         else
         {
@@ -1891,12 +2023,8 @@ __global__ void BuildKDTree2(Queue *queue, WorkItem *workItems, uint32_t level,
 
         const Bounds3f &nodeBounds = statistics.bounds;
 
-        // TODO: split on sample mean based on variance
-        // float splitDim, splitPos;
-        // statistics.GetSplitDimensionAndPosition(splitDim, splitPos);
-
-        uint32_t splitDim = 0;
-        float splitPos    = Get(nodeBounds.GetCenter(), splitDim);
+        uint32_t splitDim = node.GetSplitDim();
+        float splitPos    = node.splitPos;
 
         uint32_t *blockSampleIndices = sampleIndices + node.offset + workItem.offset;
         uint32_t *blockOutputIndices = newSampleIndices + node.offset;
@@ -1951,8 +2079,8 @@ __global__ void PrintStatistics(SampleStatistics *stats, KDTreeNode *nodes)
         SampleStatistics *sampleStatistics = &stats[i];
         float3 boundsMin                   = sampleStatistics->bounds.GetBoundsMin();
         float3 boundsMax                   = sampleStatistics->bounds.GetBoundsMax();
-        int3 mean                          = sampleStatistics->mean;
-        int3 variance                      = sampleStatistics->variance;
+        longlong3 mean                     = sampleStatistics->mean;
+        longlong3 variance                 = sampleStatistics->variance;
 
         uint3 boundsMinUint = sampleStatistics->bounds.GetBoundsMinUint();
         uint3 boundsMaxUint = sampleStatistics->bounds.GetBoundsMaxUint();
@@ -1960,8 +2088,8 @@ __global__ void PrintStatistics(SampleStatistics *stats, KDTreeNode *nodes)
         printf("why? %u %u %u %u %u %u\n", boundsMinUint.x, boundsMinUint.y, boundsMinUint.z,
                boundsMaxUint.x, boundsMaxUint.y, boundsMaxUint.z);
 
-        printf("off count: %u %u,  bounds: %f %f %f %f %f %f\nmean: %i %i %i "
-               "var: %i %i %i, %u\n\n",
+        printf("off count: %u %u,  bounds: %f %f %f %f %f %f\n mean: %lld %lld %lld "
+               "var: %lld %lld %lld, %u\n\n",
                node->offset, node->count, boundsMin.x, boundsMin.y, boundsMin.z, boundsMax.x,
                boundsMax.y, boundsMax.z, mean.x, mean.y, mean.z, variance.x, variance.y,
                variance.z, sampleStatistics->numSamples);
@@ -2075,24 +2203,24 @@ void test()
 
     cudaEventRecord(start);
 
+    CalculateSplitLocations<<<1, 1>>>(levelInfo, nodes, sampleStatistics, sampleBounds);
     BuildKDTree<<<numBlocks, blockSize>>>(nodes, sampleBounds, sampleStatistics, sampleIndices,
                                           newSampleIndices, samplePositions, numSamples,
                                           newSamplePositions);
 
     // what do i need to do
-    // - calculate statistics for leaf nodes
     // - update kd tree logic
     // - split based on sample statistics instead of bounds
+    // - make build deterministic.
 
     // uint32_t level = 1;
-    // TODO: we aren't calculating stats for leaf nodes?
+    const uint32_t nodeBlocks = (maxNumNodes + WARP_SIZE - 1) / WARP_SIZE;
     for (uint32_t level = 1; level < MAX_TREE_DEPTH; level++)
     {
         uint32_t *s0 = (level & 1) ? newSampleIndices : sampleIndices;
         uint32_t *s1 = (level & 1) ? sampleIndices : newSampleIndices;
 
-        GetChildNodeOffset<<<(maxNumNodes + WARP_SIZE - 1) / WARP_SIZE, WARP_SIZE>>>(
-            levelInfo, nodes, level);
+        GetChildNodeOffset<<<nodeBlocks, WARP_SIZE>>>(levelInfo, nodes, level);
         BeginLevel<<<1, 1>>>(levelInfo, reduceQueue, partitionQueue);
 
         CreateWorkItems<blockSize>
@@ -2101,6 +2229,8 @@ void test()
 
         CalculateNodeStatistics<blockSize><<<numBlocks, blockSize>>>(
             reduceQueue, reductionWorkItems, nodes, sampleStatistics, samplePositions, s0);
+
+        CalculateSplitLocations<<<nodeBlocks, WARP_SIZE>>>(levelInfo, nodes, sampleStatistics);
 
         BuildKDTree2<<<numBlocks, blockSize>>>(partitionQueue, partitionWorkItems, level,
                                                levelInfo, nodes, sampleStatistics, s0, s1,
