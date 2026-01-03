@@ -1594,7 +1594,7 @@ __device__ void PartitionSamples(uint32_t *sampleIndices, uint32_t *newSampleInd
                                  float splitPos, uint32_t splitDim, uint32_t numSamples,
                                  uint32_t *sampleLeftOffset, uint32_t *sampleRightOffset,
                                  SOAFloat3 samplePositions, SOAFloat3 newSamplePositions,
-                                 PartitionSharedState &state)
+                                 PartitionSharedState &state, bool active)
 {
     uint32_t *numLefts    = state.numLefts;
     uint32_t *numRights   = state.numRights;
@@ -1609,19 +1609,20 @@ __device__ void PartitionSamples(uint32_t *sampleIndices, uint32_t *newSampleInd
 
     uint32_t dim = splitDim;
 
-    uint32_t sampleIndex = sampleIndices[sampleIndexIndex];
+    uint32_t sampleIndex = active ? sampleIndices[sampleIndexIndex] : 0u;
     // uint32_t sampleIndex = sampleIndexIndex;
     // float3 samplePos = samplePositions[sampleIndex];
     // bool isLeft        = Get(samplePos, dim) < splitPos;
 
     float *array =
         dim == 0 ? samplePositions.x : (dim == 1 ? samplePositions.y : samplePositions.z);
-    float samplePosDim = array[sampleIndex];
-    bool isLeft        = samplePosDim < splitPos;
+    float samplePosDim = active ? array[sampleIndex] : 0.f;
+    bool isLeft        = active && samplePosDim < splitPos;
+    bool isRight       = active && samplePosDim >= splitPos;
 
     uint32_t mask      = __activemask();
     uint32_t leftMask  = __ballot_sync(mask, isLeft);
-    uint32_t rightMask = __ballot_sync(mask, !isLeft);
+    uint32_t rightMask = __ballot_sync(mask, isRight);
 
     if ((threadIdx.x & (WARP_SIZE - 1)) == 0)
     {
@@ -1659,7 +1660,10 @@ __device__ void PartitionSamples(uint32_t *sampleIndices, uint32_t *newSampleInd
 
     uint32_t offset = (isLeft ? lOffset : numSamples - 1 - rOffset);
 
-    newSampleIndices[offset] = sampleIndex;
+    if (active)
+    {
+        newSampleIndices[offset] = sampleIndex;
+    }
     // newSamplePositions[offset] = samplePos;
 }
 
@@ -1842,12 +1846,13 @@ __global__ void BuildKDTree(KDTreeNode *nodes, Bounds3f *bounds,
 
         uint32_t *blockSampleIndices = sampleIndices + blockIdx.x * blockDim.x;
 
-        if (blockIdx.x * blockDim.x < numSamples)
+        // if (blockIdx.x * blockDim.x < numSamples)
+        bool active = blockIdx.x * blockDim.x < numSamples;
         {
             PartitionSamples(blockSampleIndices, newSampleIndices, splitPos, splitDim,
                              numSamples, &nodes[childIndex].count,
                              &nodes[childIndex + 1].count, samplePositions, newSamplePositions,
-                             partitionState);
+                             partitionState, active);
         }
     }
 }
@@ -1867,8 +1872,8 @@ struct WorkItem
 
 __global__ void BeginLevel(LevelInfo *levelInfo, Queue *queue, Queue *queue2)
 {
-    // printf("level %u %u %u\n", levelInfo->start, levelInfo->count, levelInfo->childCount);
-    printf("queue: %u\n", queue->writeOffset);
+    printf("level %u %u %u\n", levelInfo->start, levelInfo->count, levelInfo->childCount);
+    // printf("queue: %u\n", queue->writeOffset);
 
     levelInfo->start += levelInfo->count;
     levelInfo->count      = levelInfo->childCount;
@@ -1885,6 +1890,32 @@ __global__ void Pass(uint32_t *sampleIndices, uint32_t *newSampleIndices, uint32
     if (blockIdx.x == 0)
     {
         printf("%u %u\n", sampleIndices[threadIdx.x], newSampleIndices[threadIdx.x]);
+    }
+}
+
+__global__ void CalculateChildIndices(LevelInfo *info, KDTreeNode *nodes)
+{
+
+    for (uint32_t nodeIndex = info->start; nodeIndex < info->start + info->count; nodeIndex++)
+    {
+        KDTreeNode &node = nodes[nodeIndex];
+
+        bool split = node.count > MAX_SAMPLES_PER_LEAF;
+
+        {
+            // stats[nodeIndex] = SampleStatistics();
+            if (split)
+            {
+                assert(info->start == 1 || node.parentIndex != 0);
+                node.SetChildIndex(info->start + info->count + info->childCount);
+                // atomicAdd(&info->childCount, 2));
+                info->childCount += 2;
+            }
+            else
+            {
+                node.childIndex_dim = ~0u;
+            }
+        }
     }
 }
 
@@ -1916,16 +1947,16 @@ __global__ void CreateWorkItems(Queue *reduceQueue, WorkItem *reduceWorkItems,
     {
         reduceStart      = atomicAdd(&reduceQueue->writeOffset, numWorkItems);
         stats[nodeIndex] = SampleStatistics();
-        KDTreeNode &node = nodes[nodeIndex];
+        // KDTreeNode &node = nodes[nodeIndex];
 
         if (split)
         {
             partitionStart = atomicAdd(&partitionQueue->writeOffset, numWorkItems);
-            node.SetChildIndex(info->start + info->count + atomicAdd(&info->childCount, 2));
+            // node.SetChildIndex(info->start + info->count + atomicAdd(&info->childCount, 2));
         }
         else
         {
-            node.childIndex_dim = ~0u;
+            // node.childIndex_dim = ~0u;
         }
     }
 
@@ -1994,6 +2025,8 @@ __global__ void CalculateNodeStatistics(Queue *queue, WorkItem *workItems, KDTre
 
                                       total.AddSample(samplePos, center, invHalfExtent);
                                   });
+
+        __syncthreads();
     }
 }
 
@@ -2011,10 +2044,9 @@ __global__ void BuildKDTree2(Queue *queue, WorkItem *workItems, uint32_t level,
     for (uint32_t workItemIndex = blockIdx.x; workItemIndex < queue->writeOffset;
          workItemIndex += gridDim.x)
     {
-        partitionState.Clear();
-
         if (threadIdx.x == 0)
         {
+            partitionState.Clear();
             workItem   = workItems[workItemIndex];
             node       = nodes[workItem.nodeIndex];
             statistics = sampleStatistics[workItem.nodeIndex];
@@ -2031,19 +2063,22 @@ __global__ void BuildKDTree2(Queue *queue, WorkItem *workItems, uint32_t level,
 
         uint32_t childIndex = node.GetChildIndex();
 
-        if (threadIdx.x < workItem.count)
+        // if (threadIdx.x < workItem.count)
+        bool active = threadIdx.x < workItem.count;
         {
             PartitionSamples(blockSampleIndices, blockOutputIndices, splitPos, splitDim,
                              node.count, &nodes[childIndex].count,
                              &nodes[childIndex + 1].count, samplePositions, samplePositions,
-                             partitionState);
+                             partitionState, active);
         }
+
+        __syncthreads();
     }
 }
 
 __global__ void GetChildNodeOffset(LevelInfo *levelInfo, KDTreeNode *nodes, uint32_t level)
 {
-    uint32_t threadIndex = threadIdx.x;
+    uint32_t threadIndex = threadIdx.x + blockIdx.x * blockDim.x;
 
     if (threadIndex >= levelInfo->count) return;
 
@@ -2071,29 +2106,44 @@ __global__ void GetChildNodeOffset(LevelInfo *levelInfo, KDTreeNode *nodes, uint
     }
 }
 
-__global__ void PrintStatistics(SampleStatistics *stats, KDTreeNode *nodes)
+__global__ void PrintStatistics(SampleStatistics *stats, KDTreeNode *nodes, LevelInfo *info)
 {
-    for (uint32_t i = 0; i < 7; i++)
+    for (uint32_t i = 0; i < info->start + info->count; i++)
     {
-        KDTreeNode *node                   = &nodes[i];
-        SampleStatistics *sampleStatistics = &stats[i];
-        float3 boundsMin                   = sampleStatistics->bounds.GetBoundsMin();
-        float3 boundsMax                   = sampleStatistics->bounds.GetBoundsMax();
-        longlong3 mean                     = sampleStatistics->mean;
-        longlong3 variance                 = sampleStatistics->variance;
+        // KDTreeNode &node = nodes[i];
+        // printf("node: %u %u %f\n", i, node.GetSplitDim(), node.splitPos);
 
-        uint3 boundsMinUint = sampleStatistics->bounds.GetBoundsMinUint();
-        uint3 boundsMaxUint = sampleStatistics->bounds.GetBoundsMaxUint();
-
-        printf("why? %u %u %u %u %u %u\n", boundsMinUint.x, boundsMinUint.y, boundsMinUint.z,
-               boundsMaxUint.x, boundsMaxUint.y, boundsMaxUint.z);
-
-        printf("off count: %u %u,  bounds: %f %f %f %f %f %f\n mean: %lld %lld %lld "
-               "var: %lld %lld %lld, %u\n\n",
-               node->offset, node->count, boundsMin.x, boundsMin.y, boundsMin.z, boundsMax.x,
-               boundsMax.y, boundsMax.z, mean.x, mean.y, mean.z, variance.x, variance.y,
-               variance.z, sampleStatistics->numSamples);
+        SampleStatistics &s = stats[i];
+        float3 bmin         = s.bounds.GetBoundsMin();
+        longlong3 mean      = s.mean;
+        // printf("node: %u, %u, %lld %lld %lld\n", i, s.numSamples, mean.x, mean.y, mean.z);
+        printf("node: %u, %u, %f %f %f\n", i, s.numSamples, bmin.x, bmin.y, bmin.z);
     }
+    // for (uint32_t i = 191; i < 192; i++)
+    // {
+    //     KDTreeNode *node                   = &nodes[i];
+    //     SampleStatistics *sampleStatistics = &stats[i];
+    //     float3 boundsMin                   = sampleStatistics->bounds.GetBoundsMin();
+    //     float3 boundsMax                   = sampleStatistics->bounds.GetBoundsMax();
+    //     longlong3 mean                     = sampleStatistics->mean;
+    //     longlong3 variance                 = sampleStatistics->variance;
+    //
+    //     uint3 boundsMinUint = sampleStatistics->bounds.GetBoundsMinUint();
+    //     uint3 boundsMaxUint = sampleStatistics->bounds.GetBoundsMaxUint();
+    //
+    //     printf("par: %u %u %f\n", node->parentIndex, nodes[node->parentIndex].GetSplitDim(),
+    //            nodes[node->parentIndex].splitPos);
+    //     printf("node: %u %u %f\n", i, node->GetSplitDim(), node->splitPos);
+    //     printf("why? %u %u %u %u %u %u\n", boundsMinUint.x, boundsMinUint.y,
+    //     boundsMinUint.z,
+    //            boundsMaxUint.x, boundsMaxUint.y, boundsMaxUint.z);
+    //
+    //     printf("off count: %u %u,  bounds: %f %f %f %f %f %f\n mean: %lld %lld %lld "
+    //            "var: %lld %lld %lld, %u\n\n",
+    //            node->offset, node->count, boundsMin.x, boundsMin.y, boundsMin.z,
+    //            boundsMax.x, boundsMax.y, boundsMax.z, mean.x, mean.y, mean.z, variance.x,
+    //            variance.y, variance.z, sampleStatistics->numSamples);
+    // }
 }
 
 struct CUDAArena
@@ -2148,7 +2198,7 @@ void test()
     Bounds3f *sampleBounds = allocator.Alloc<Bounds3f>(1, 4u);
 
     KDTreeNode *nodes                  = allocator.Alloc<KDTreeNode>(maxNumNodes, 4u);
-    SampleStatistics *sampleStatistics = allocator.Alloc<SampleStatistics>(maxNumNodes, 4u);
+    SampleStatistics *sampleStatistics = allocator.Alloc<SampleStatistics>(maxNumNodes, 8u);
 
     cudaMemset(nodes, 0, sizeof(uint32_t) * maxNumNodes * 2);
 
@@ -2210,7 +2260,6 @@ void test()
 
     // what do i need to do
     // - update kd tree logic
-    // - split based on sample statistics instead of bounds
     // - make build deterministic.
 
     // uint32_t level = 1;
@@ -2223,6 +2272,7 @@ void test()
         GetChildNodeOffset<<<nodeBlocks, WARP_SIZE>>>(levelInfo, nodes, level);
         BeginLevel<<<1, 1>>>(levelInfo, reduceQueue, partitionQueue);
 
+        CalculateChildIndices<<<1, 1>>>(levelInfo, nodes);
         CreateWorkItems<blockSize>
             <<<numBlocks, blockSize>>>(reduceQueue, reductionWorkItems, partitionQueue,
                                        partitionWorkItems, nodes, levelInfo, sampleStatistics);
@@ -2240,7 +2290,7 @@ void test()
 
     cudaEventRecord(stop);
     nvtxRangePop();
-    PrintStatistics<<<1, 1>>>(sampleStatistics, nodes);
+    PrintStatistics<<<1, 1>>>(sampleStatistics, nodes, levelInfo);
 
 #if 0
     VMM *vmms                 = allocator.Alloc<VMM>(numVMMs, 4);
