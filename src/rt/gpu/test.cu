@@ -460,6 +460,59 @@ struct SOAFloat3
     }
 };
 
+struct SampleData
+{
+    float3 pos;
+    float3 dir;
+    float weight;
+    float pdf;
+};
+
+struct SOASampleDataRef
+{
+    SOAFloat3Ref pos;
+    SOAFloat3Ref dir;
+    float *weights;
+    float *pdfs;
+    const uint32_t index;
+
+    __device__ SOASampleDataRef &operator=(const SampleData &val)
+    {
+        pos            = val.pos;
+        dir            = val.dir;
+        weights[index] = val.weight;
+        pdfs[index]    = val.pdf;
+        return *this;
+    }
+
+    // __device__ operator float3() const { return make_float3(x[index], y[index], z[index]); }
+    //
+    // __device__ SOASampleDataRef &operator=(const SOAFloat3Ref &other)
+    // {
+    //     float3 val = (float3)other;
+    //     return (*this = val);
+    // }
+};
+
+struct SOASampleData
+{
+    SOAFloat3 pos;
+    SOAFloat3 dir;
+
+    float *weights;
+    float *pdfs;
+
+    __device__ SOASampleDataRef operator[](uint32_t index)
+    {
+        return {pos[index], dir[index], weights, pdfs, index};
+    }
+
+    __device__ SampleData operator[](uint32_t index) const
+    {
+        return {pos[index], dir[index], weights[index], pdfs[index]};
+    }
+};
+
 template <>
 struct Bounds<float3>
 {
@@ -564,6 +617,7 @@ struct KDTreeNode
         childIndex_dim |= dim << 30;
     }
     __device__ bool HasChild() const { return childIndex_dim != ~0u; }
+    __device__ bool IsChild() const { return (childIndex_dim >> 30u) == 3u; }
 };
 
 #define INTEGER_BINS                     float(1 << 18)
@@ -1781,14 +1835,6 @@ __global__ void CalculateSplitLocations(LevelInfo *info, KDTreeNode *nodes,
         assert(isfinite(sampleMean.x) && isfinite(sampleMean.y) && isfinite(sampleMean.z));
         assert(isfinite(sampleVariance.x) && isfinite(sampleVariance.y) &&
                isfinite(sampleVariance.z));
-
-        if (nodeIndex < 3)
-        {
-            longlong3 vr = statistics[nodeIndex].variance;
-            printf("%lld %lld %lld, node: %u, %f %u\n %f %f %f %f %f %f\n", vr.x, vr.y, vr.z,
-                   nodeIndex, splitPos, splitDim, sampleMean.x, sampleMean.y, sampleMean.z,
-                   sampleVariance.x, sampleVariance.y, sampleVariance.z);
-        }
     }
 }
 
@@ -1807,7 +1853,7 @@ struct WorkItem
 
 __global__ void BeginLevel(LevelInfo *levelInfo, Queue *queue, Queue *queue2)
 {
-    printf("level %u %u %u\n", levelInfo->start, levelInfo->count, levelInfo->childCount);
+    // printf("level %u %u %u\n", levelInfo->start, levelInfo->count, levelInfo->childCount);
     // printf("queue: %u\n", queue->writeOffset);
 
     levelInfo->start += levelInfo->count;
@@ -1968,9 +2014,9 @@ __global__ void CalculateNodeStatistics(Queue *queue, WorkItem *workItems, KDTre
     }
 }
 
-__global__ void BuildKDTree2(Queue *queue, WorkItem *workItems, uint32_t level,
-                             LevelInfo *levelInfo, KDTreeNode *nodes, uint32_t *sampleIndices,
-                             uint32_t *newSampleIndices, SOAFloat3 samplePositions)
+__global__ void BuildKDTree(Queue *queue, WorkItem *workItems, uint32_t level,
+                            LevelInfo *levelInfo, KDTreeNode *nodes, uint32_t *sampleIndices,
+                            uint32_t *newSampleIndices, SOAFloat3 samplePositions)
 {
     __shared__ KDTreeNode node;
     __shared__ WorkItem workItem;
@@ -2036,6 +2082,24 @@ __global__ void GetChildNodeOffset(LevelInfo *levelInfo, KDTreeNode *nodes, uint
 
         left->parentIndex  = parentIndex;
         right->parentIndex = parentIndex;
+    }
+}
+
+__global__ void WriteSamplesToSOA(LevelInfo *levelInfo, uint32_t *sampleIndices,
+                                  uint32_t *newSampleIndices, KDTreeNode *nodes,
+                                  SampleData *sampleData, SOASampleData soaSampleData)
+{
+    KDTreeNode &node = nodes[blockIdx.x];
+
+    if (!node.IsChild()) return;
+
+    uint32_t depth    = 0;
+    uint32_t *indices = (depth & 1) ? newSampleIndices : sampleIndices;
+
+    for (uint32_t index = threadIdx.x; index < node.count; index += blockDim.x)
+    {
+        uint32_t sampleIndex            = indices[node.offset + index];
+        sampleData[node.offset + index] = sampleData[sampleIndex];
     }
 }
 
@@ -2212,14 +2276,20 @@ void test()
         CalculateSplitLocations<<<nodeBlocks, WARP_SIZE>>>(levelInfo, nodes, sampleStatistics,
                                                            sampleBounds);
 
-        BuildKDTree2<<<numBlocks, blockSize>>>(partitionQueue, partitionWorkItems, level,
-                                               levelInfo, nodes, s0, s1, samplePositions);
+        BuildKDTree<<<numBlocks, blockSize>>>(partitionQueue, partitionWorkItems, level,
+                                              levelInfo, nodes, s0, s1, samplePositions);
         // Pass<<<1, blockSize>>>(s0, s1, level);
+    }
+
+    // TODO: reuse temporary buffers from kd tree build
+
+    // VMM update
+    {
     }
 
     cudaEventRecord(stop);
     nvtxRangePop();
-    PrintStatistics<<<1, 1>>>(sampleStatistics, nodes, levelInfo);
+    // PrintStatistics<<<1, 1>>>(sampleStatistics, nodes, levelInfo);
 
 #if 0
     VMM *vmms                 = allocator.Alloc<VMM>(numVMMs, 4);
