@@ -998,6 +998,15 @@ struct WorkItem
     uint32_t count;
 };
 
+struct VMMMapState
+{
+    int numWorkItems;
+    uint32_t numSamples;
+    uint32_t sampleOffset;
+    float previousLogLikelihood;
+    uint32_t iteration;
+};
+
 __global__ void InitializeSamples(SampleStatistics *statistics, Bounds3f *sampleBounds,
                                   LevelInfo *levelInfo, KDTreeNode *nodes, SampleData *samples,
                                   SOAFloat3 sampleDirections, SOAFloat3 samplePositions,
@@ -1087,11 +1096,11 @@ inline __device__ float SoftAssignment(const VMM &vmm, float3 sampleDirection,
 }
 
 template <bool masked = false>
-inline __device__ void UpdateMixtureParameters(VMM &sharedVMM, VMMStatistics &sharedStatistics,
-                                               VMMStatistics &previousStatistics,
-                                               SOAFloat3 sampleDirections,
-                                               float &sumSampleWeights, uint32_t sampleOffset,
-                                               uint32_t sampleCount, uint32_t mask = 0)
+inline __device__ void
+UpdateMixtureParameters(VMM &sharedVMM, VMMStatistics &sharedStatistics,
+                        VMMStatistics &previousStatistics, SOAFloat3 sampleDirections,
+                        float *sampleWeights, float &sumSampleWeights, uint32_t sampleOffset,
+                        uint32_t sampleCount, uint32_t mask = 0, bool doPrint = false)
 {
     assert(!masked || (masked && mask != 0));
 
@@ -1109,7 +1118,11 @@ inline __device__ void UpdateMixtureParameters(VMM &sharedVMM, VMMStatistics &sh
     const uint32_t threadIndex = threadIdx.x;
     for (uint32_t iteration = 0; iteration < maxNumIterations; iteration++)
     {
-        if (threadIndex < sharedVMM.numComponents)
+        // if (threadIndex == 0 && doPrint)
+        // {
+        //     printf("wtf");
+        // }
+        if (threadIndex < MAX_COMPONENTS)
         {
             sharedStatistics.sumWeights[threadIndex]            = 0.f;
             sharedStatistics.sumWeightedDirections[threadIndex] = make_float3(0.f);
@@ -1126,16 +1139,17 @@ inline __device__ void UpdateMixtureParameters(VMM &sharedVMM, VMMStatistics &sh
             bool hasData           = sampleIndex < sampleCount;
             float V                = 0.f;
             float3 sampleDirection = make_float3(0.f);
+            float sampleWeight     = 1.f;
 
             if (hasData)
             {
                 sampleDirection = sampleDirections[sampleIndex + sampleOffset];
+                sampleWeight    = sampleWeights[sampleIndex + sampleOffset];
                 V = SoftAssignment(sharedVMM, sampleDirection, statistics.sumWeights);
             }
 
-            hasData            = V > 0.f;
-            float invV         = hasData ? 1.f / V : 0.f;
-            float sampleWeight = 1.f;
+            hasData    = V > 0.f;
+            float invV = hasData ? 1.f / V : 0.f;
 
             statistics.weightedLogLikelihood = hasData ? sampleWeight * log(V) : 0.f;
 
@@ -1181,12 +1195,18 @@ inline __device__ void UpdateMixtureParameters(VMM &sharedVMM, VMMStatistics &sh
             if (threadIndex == 0) sumSampleWeights = normWeight;
 
             normWeight = normWeight > FLT_EPSILON ? float(sampleCount) / normWeight : 0.f;
+            if (iteration == 0 && doPrint)
+            {
+                printf("weight: %u %f %f\n", threadIndex, sharedVMM.kappas[threadIndex],
+                       sharedStatistics.sumWeights[threadIndex]);
+            }
             sharedStatistics.sumWeights[threadIndex] *= normWeight;
 
             // Update weights
-            const uint32_t totalNumSamples = sampleCount + previousStatistics.numSamples;
-            float weight                   = sharedStatistics.sumWeights[threadIndex] +
-                           previousStatistics.sumWeights[threadIndex];
+            const uint32_t totalNumSamples = sampleCount; // + previousStatistics.numSamples;
+            float weight =
+                sharedStatistics
+                    .sumWeights[threadIndex]; // + previousStatistics.sumWeights[threadIndex];
             weight = threadIndex >= sharedVMM.numComponents
                          ? 0.f
                          : (weightPrior + weight) /
@@ -1213,22 +1233,23 @@ inline __device__ void UpdateMixtureParameters(VMM &sharedVMM, VMMStatistics &sh
             // Update kappas and directions
             if (!masked || threadIsEnabled)
             {
-                const float currentEstimationWeight  = float(sampleCount) / totalNumSamples;
-                const float previousEstimationWeight = 1.f - currentEstimationWeight;
+                const float currentEstimationWeight = float(sampleCount) / totalNumSamples;
+                // const float previousEstimationWeight = 1.f - currentEstimationWeight;
 
                 float3 currentMeanDirection =
                     sharedStatistics.sumWeights[threadIndex] > 0.f
                         ? sharedStatistics.sumWeightedDirections[threadIndex] /
                               sharedStatistics.sumWeights[threadIndex]
                         : make_float3(0.f);
-                float3 previousMeanDirection =
-                    previousStatistics.sumWeights[threadIndex] > 0.f
-                        ? previousStatistics.sumWeightedDirections[threadIndex] /
-                              previousStatistics.sumWeights[threadIndex]
-                        : make_float3(0.f);
+                // float3 previousMeanDirection =
+                //     previousStatistics.sumWeights[threadIndex] > 0.f
+                //         ? previousStatistics.sumWeightedDirections[threadIndex] /
+                //               previousStatistics.sumWeights[threadIndex]
+                //         : make_float3(0.f);
 
-                float3 meanDirection = currentMeanDirection * currentEstimationWeight +
-                                       previousMeanDirection * previousEstimationWeight;
+                float3 meanDirection = currentMeanDirection *
+                                       currentEstimationWeight; // + previousMeanDirection *
+                                                                // previousEstimationWeight;
 
                 float meanCosine = length(meanDirection);
 
@@ -1262,6 +1283,11 @@ inline __device__ void UpdateMixtureParameters(VMM &sharedVMM, VMMStatistics &sh
 
             if (relLogLikelihoodDifference < convergenceThreshold) break;
             previousLogLikelihood = logLikelihood;
+
+            // if (iteration >= 4 && threadIndex == 0)
+            // {
+            //     printf("previousLogLikelihood: %f, %u\n", previousLogLikelihood, iteration);
+            // }
         }
     }
 }
@@ -1274,12 +1300,10 @@ inline __device__ void UpdateMixtureParameters(VMM &sharedVMM, VMMStatistics &sh
 // - proper criteria for splitting/merging
 // - make sure to test performance of atomics vs block reduce, different block sizes
 
-__global__ void UpdateMixture(const VMM *__restrict__ vmms,
-                              VMMStatistics *__restrict__ previousStatisticsArray,
-                              const SOASampleData samples,
-                              const uint32_t *__restrict__ leafNodeIndices,
-                              const uint32_t *__restrict__ numLeafNodes,
-                              const KDTreeNode *__restrict__ nodes)
+__global__ void
+UpdateMixture(VMM *__restrict__ vmms, VMMStatistics *__restrict__ previousStatisticsArray,
+              const SOASampleData samples, const uint32_t *__restrict__ leafNodeIndices,
+              const uint32_t *__restrict__ numLeafNodes, const KDTreeNode *__restrict__ nodes)
 {
     __shared__ VMMStatistics sharedStatistics;
     __shared__ VMMStatistics previousStatistics;
@@ -1309,9 +1333,6 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
         sharedStatistics.weightedLogLikelihood   = 0.f;
         previousStatistics.weightedLogLikelihood = 0.f;
         previousStatistics.numSamples            = 0;
-
-        // TODO: not everytime
-        sharedVMM.Initialize();
     }
 
     __syncthreads();
@@ -1323,7 +1344,13 @@ __global__ void UpdateMixture(const VMM *__restrict__ vmms,
     const uint32_t numSampleBatches = (sampleCount + blockDim.x - 1) / blockDim.x;
 
     UpdateMixtureParameters(sharedVMM, sharedStatistics, previousStatistics, samples.dir,
-                            sumSampleWeights, offset, sampleCount);
+                            samples.weights, sumSampleWeights, offset, sampleCount, 0,
+                            node.vmmIndex == 0);
+
+    if (threadIndex == 0)
+    {
+        vmms[node.vmmIndex] = sharedVMM;
+    }
 
 #if 0
     // Splitting
@@ -1699,20 +1726,24 @@ __global__ void CreateVMMWorkItems(const uint32_t *leafNodeIndices,
     }
 }
 
-__global__ void UpdateMixturePersistent(Queue *queue, WorkItem *workItems,
-                                        const VMM *__restrict__ vmms,
-                                        // VMMStatistics *__restrict__ previousStatisticsArray,
-                                        VMMStatistics *__restrict__ currentStatistics,
-                                        const SOASampleData samples,
-                                        const uint32_t *__restrict__ leafNodeIndices,
-                                        const uint32_t *__restrict__ numLeafNodes,
-                                        const KDTreeNode *__restrict__ nodes)
+#if 0
+template <uint32_t blockSize>
+__global__ void UpdateMixturePersistent(
+    Queue *queue, WorkItem *workItems, VMM *__restrict__ vmms,
+    // VMMStatistics *__restrict__ previousStatisticsArray,
+    VMMStatistics *__restrict__ currentStatistics, const SOASampleData samples,
+    const uint32_t *__restrict__ leafNodeIndices, uint32_t *__restrict__ numLeafNodes,
+    const KDTreeNode *__restrict__ nodes, VMMMapState *__restrict__ vmmMapStates,
+    uint32_t queueMax)
 {
     __shared__ VMMStatistics previousStatistics;
     __shared__ VMM sharedVMM;
     __shared__ float sumSampleWeights;
     __shared__ WorkItem workItem;
     __shared__ uint32_t workItemIndex;
+    __shared__ uint32_t workItemOffset;
+    __shared__ bool doUpdate;
+    __shared__ bool processed;
 
     const uint32_t threadIndex = threadIdx.x;
 
@@ -1742,6 +1773,7 @@ __global__ void UpdateMixturePersistent(Queue *queue, WorkItem *workItems,
     const float splittingThreshold = 0.5f;
 
     constexpr bool masked = true;
+    uint32_t mask         = ~0u;
 
     const uint32_t maxNumIterations     = 100;
     const float weightPrior             = 0.01f;
@@ -1753,99 +1785,131 @@ __global__ void UpdateMixturePersistent(Queue *queue, WorkItem *workItems,
 
     float previousLogLikelihood = 0.f;
 
+    if (threadIndex == 0)
+    {
+        processed = true;
+    }
+    __syncthreads();
+
     for (;;)
     {
-        if (threadIdx.x == 0)
+        if (threadIndex == 0)
         {
-            uint32_t workItemIndex = atomicAdd(&queue->readOffset, 1);
-            if (workItemIndex < queue->writeOffset)
+            if (processed)
             {
-                workItem  = workItems[workItemIndex];
-                sharedVMM = vmms[workItem.nodeIndex];
+                workItemIndex = atomicAdd(&queue->readOffset, 1);
+                processed     = false;
             }
+            // volatile???
+            volatile WorkItem *w = &workItems[workItemIndex];
+            workItem             = *(WorkItem *)w;
+            volatile VMM *v      = &vmms[workItem.nodeIndex];
+            sharedVMM            = *(VMM *)v;
+            // if (workItemIndex < queue->writeOffset)
+            // {
+            // }
         }
 
         __syncthreads();
 
-        if (workItemIndex >= queue->writeOffset) break;
-
-        VMMStatistics &vmmStatistics = currentStatistics[workItem.nodeIndex];
-        bool isExpectation           = true;
-
-        // Weighted Expectation
-        // for (uint32_t batch = 0; batch < numSampleBatches; batch++)
-        if (isExpectation)
+        if (workItem.count == 0)
         {
-            VMMStatistics statistics;
-            uint32_t sampleIndex = threadIdx.x + workItem.offset;
-            bool hasData         = threadIdx.x < workItem.count;
-
-            float V                = 0.f;
-            float3 sampleDirection = make_float3(0.f);
-            float sampleWeight     = 1.f;
-
-            if (hasData)
+            __threadfence();
+            if (*(volatile uint32_t *)numLeafNodes == 0)
             {
-                sampleDirection = samples.dir[sampleIndex];
-                sampleWeight    = samples.weights[sampleIndex];
-                V = SoftAssignment(sharedVMM, sampleDirection, statistics.sumWeights);
+                break;
             }
-
-            hasData    = V > 0.f;
-            float invV = hasData ? 1.f / V : 0.f;
-
-            statistics.weightedLogLikelihood = hasData ? sampleWeight * log(V) : 0.f;
-
-            for (uint32_t i = 0; i < sharedVMM.numComponents; i++)
-            {
-                statistics.sumWeights[i] = hasData ? statistics.sumWeights[i] * invV : 0.f;
-
-                float softAssignmentWeight = sampleWeight * statistics.sumWeights[i];
-                float3 sumWeightedDirection =
-                    sampleDirection * sampleWeight * statistics.sumWeights[i];
-
-                float sumWeights             = WarpReduceSum(softAssignmentWeight);
-                float3 sumWeightedDirections = WarpReduceSum(sumWeightedDirection);
-
-                if ((threadIndex & (WARP_SIZE - 1)) == 0)
-                {
-                    atomicAdd(&vmmStatistics.sumWeights[i], sumWeights);
-                    atomicAdd(&vmmStatistics.sumWeightedDirections[i], sumWeightedDirections);
-                }
-            }
-
-            float weightedLogLikelihood = WarpReduceSum(statistics.weightedLogLikelihood);
-            if ((threadIndex & (WARP_SIZE - 1)) == 0)
-            {
-                // printf("log like: %f\n", weightedLogLikelihood);
-                atomicAdd(&vmmStatistics.weightedLogLikelihood, weightedLogLikelihood);
-            }
-
-            __syncthreads();
+            continue;
         }
 
-#if 0
-        // Weighted MAP Update
-        if (threadIndex < MAX_COMPONENTS)
+        volatile VMMStatistics *vVmmStatistics = &currentStatistics[workItem.nodeIndex];
+        VMMStatistics &vmmStatistics           = *(VMMStatistics *)vVmmStatistics;
+
+        // Weighted Expectation
+        VMMStatistics statistics;
+        uint32_t sampleIndex = threadIdx.x + workItem.offset;
+        bool hasData         = threadIdx.x < workItem.count;
+
+        float V                = 0.f;
+        float3 sampleDirection = make_float3(0.f);
+        float sampleWeight     = 1.f;
+
+        if (hasData)
         {
-            // NOTE: if MAX_COMPONENTS > 32, this no longer works
+            sampleDirection = samples.dir[sampleIndex];
+            sampleWeight    = samples.weights[sampleIndex];
+            V = SoftAssignment(sharedVMM, sampleDirection, statistics.sumWeights);
+        }
+
+        hasData    = V > 0.f;
+        float invV = hasData ? 1.f / V : 0.f;
+
+        statistics.weightedLogLikelihood = hasData ? sampleWeight * log(V) : 0.f;
+
+        for (uint32_t i = 0; i < sharedVMM.numComponents; i++)
+        {
+            statistics.sumWeights[i] = hasData ? statistics.sumWeights[i] * invV : 0.f;
+
+            float softAssignmentWeight = sampleWeight * statistics.sumWeights[i];
+            float3 sumWeightedDirection =
+                sampleDirection * sampleWeight * statistics.sumWeights[i];
+
+            float sumWeights             = WarpReduceSum(softAssignmentWeight);
+            float3 sumWeightedDirections = WarpReduceSum(sumWeightedDirection);
+
+            if ((threadIndex & (WARP_SIZE - 1)) == 0)
+            {
+                atomicAdd(&vmmStatistics.sumWeights[i], sumWeights);
+                atomicAdd(&vmmStatistics.sumWeightedDirections[i], sumWeightedDirections);
+            }
+        }
+
+        float weightedLogLikelihood = WarpReduceSum(statistics.weightedLogLikelihood);
+        if ((threadIndex & (WARP_SIZE - 1)) == 0)
+        {
+            // printf("log like: %f\n", weightedLogLikelihood);
+            atomicAdd(&vmmStatistics.weightedLogLikelihood, weightedLogLikelihood);
+        }
+
+        if (threadIdx.x == 0)
+        {
+            __threadfence();
+            uint32_t index = atomicSub(&vmmMapStates[workItem.nodeIndex].numWorkItems, 1);
+            assert(index >= 1);
+            doUpdate = index == 1;
+        }
+
+        __syncthreads();
+
+        // Weighted MAP Update
+        if (doUpdate && threadIndex < MAX_COMPONENTS)
+        {
             // Normalize
-            float componentWeight = sharedStatistics.sumWeights[threadIndex];
+            volatile VMM *vVMM                     = &vmms[workItem.nodeIndex];
+            volatile VMMStatistics *vVmmStatistics = &currentStatistics[workItem.nodeIndex];
+
+            VMM &vmm                     = *(VMM *)vVMM;
+            VMMStatistics &vmmStatistics = *(VMMStatistics *)vVmmStatistics;
+
+            float componentWeight = vmmStatistics.sumWeights[threadIndex];
             float normWeight      = WarpReduceSumBroadcast(componentWeight);
 
             if (threadIndex == 0) sumSampleWeights = normWeight;
 
+            // TODO:
+            uint32_t sampleCount = vmmMapStates[workItem.nodeIndex].numSamples;
             normWeight = normWeight > FLT_EPSILON ? float(sampleCount) / normWeight : 0.f;
-            sharedStatistics.sumWeights[threadIndex] *= normWeight;
+            vmmStatistics.sumWeights[threadIndex] *= normWeight;
 
             // Update weights
-            const uint32_t totalNumSamples = sampleCount + previousStatistics.numSamples;
-            float weight                   = sharedStatistics.sumWeights[threadIndex] +
-                           previousStatistics.sumWeights[threadIndex];
-            weight = threadIndex >= sharedVMM.numComponents
-                         ? 0.f
-                         : (weightPrior + weight) /
-                               (weightPrior * sharedVMM.numComponents + sampleCount);
+            const uint32_t totalNumSamples = sampleCount; // + previousStatistics.numSamples;
+            float weight =
+                vmmStatistics
+                    .sumWeights[threadIndex]; // + previousStatistics.sumWeights[threadIndex];
+            weight =
+                threadIndex >= vmm.numComponents
+                    ? 0.f
+                    : (weightPrior + weight) / (weightPrior * vmm.numComponents + sampleCount);
 
             const bool threadIsEnabled = mask & (1u << threadIndex);
 
@@ -1854,7 +1918,7 @@ __global__ void UpdateMixturePersistent(Queue *queue, WorkItem *workItems,
 
             if (!masked || threadIsEnabled)
             {
-                sharedVMM.weights[threadIndex] = weight;
+                vmm.weights[threadIndex] = weight;
             }
 
             if constexpr (masked)
@@ -1862,7 +1926,7 @@ __global__ void UpdateMixturePersistent(Queue *queue, WorkItem *workItems,
                 // Makes sure weights always sum to one
                 float invSumWeights = 1.f / WarpReduceSumBroadcast(sumMaskedWeights);
                 invSumWeights *= 1.f - WarpReduceSumBroadcast(sumUnmaskedWeights);
-                sharedVMM.weights[threadIndex] *= invSumWeights;
+                vmm.weights[threadIndex] *= invSumWeights;
             }
 
             // Update kappas and directions
@@ -1872,54 +1936,144 @@ __global__ void UpdateMixturePersistent(Queue *queue, WorkItem *workItems,
                 const float previousEstimationWeight = 1.f - currentEstimationWeight;
 
                 float3 currentMeanDirection =
-                    sharedStatistics.sumWeights[threadIndex] > 0.f
-                        ? sharedStatistics.sumWeightedDirections[threadIndex] /
-                              sharedStatistics.sumWeights[threadIndex]
+                    vmmStatistics.sumWeights[threadIndex] > 0.f
+                        ? vmmStatistics.sumWeightedDirections[threadIndex] /
+                              vmmStatistics.sumWeights[threadIndex]
                         : make_float3(0.f);
-                float3 previousMeanDirection =
-                    previousStatistics.sumWeights[threadIndex] > 0.f
-                        ? previousStatistics.sumWeightedDirections[threadIndex] /
-                              previousStatistics.sumWeights[threadIndex]
-                        : make_float3(0.f);
+                // float3 previousMeanDirection =
+                //     previousStatistics.sumWeights[threadIndex] > 0.f
+                //         ? previousStatistics.sumWeightedDirections[threadIndex] /
+                //               previousStatistics.sumWeights[threadIndex]
+                //         : make_float3(0.f);
 
-                float3 meanDirection = currentMeanDirection * currentEstimationWeight +
-                                       previousMeanDirection * previousEstimationWeight;
+                float3 meanDirection = currentMeanDirection * currentEstimationWeight;
+                // + previousMeanDirection * previousEstimationWeight;
 
                 float meanCosine = length(meanDirection);
 
                 // TODO: make sure uninitialized components have correct default state?
                 if (meanCosine > 0.f)
                 {
-                    sharedVMM.WriteDirection(threadIndex, meanDirection / meanCosine);
+                    vmm.WriteDirection(threadIndex, meanDirection / meanCosine);
                 }
 
-                float partialNumSamples = totalNumSamples * sharedVMM.weights[threadIndex];
+                float partialNumSamples = totalNumSamples * vmm.weights[threadIndex];
 
                 meanCosine = (meanCosinePrior * meanCosinePriorStrength +
                               meanCosine * partialNumSamples) /
                              (meanCosinePriorStrength + partialNumSamples);
-                meanCosine                    = min(meanCosine, maxMeanCosine);
-                float kappa                   = threadIndex < sharedVMM.numComponents
-                                                    ? MeanCosineToKappa(meanCosine)
-                                                    : 0.f;
-                sharedVMM.kappas[threadIndex] = kappa;
+                meanCosine = min(meanCosine, maxMeanCosine);
+                float kappa =
+                    threadIndex < vmm.numComponents ? MeanCosineToKappa(meanCosine) : 0.f;
+                vmm.kappas[threadIndex] = kappa;
             }
+
+            if (threadIndex == 0)
+            {
+                volatile VMMMapState &state = vmmMapStates[workItem.nodeIndex];
+                uint32_t iteration          = state.iteration;
+                if (iteration > 0)
+                {
+                    float previousLogLikelihood =
+                        vmmMapStates[workItem.nodeIndex].previousLogLikelihood;
+                    float logLikelihood = vmmStatistics.weightedLogLikelihood;
+                    float relLogLikelihoodDifference =
+                        fabs(logLikelihood - previousLogLikelihood) /
+                        fabs(previousLogLikelihood);
+
+                    if (iteration + 1 >= maxNumIterations ||
+                        relLogLikelihoodDifference < convergenceThreshold)
+                    {
+                        atomicSub(numLeafNodes, 1);
+                        doUpdate = false;
+                    }
+                    else
+                    {
+                        state.previousLogLikelihood = logLikelihood;
+                        state.iteration++;
+                    }
+                }
+                else
+                {
+                    float logLikelihood         = vmmStatistics.weightedLogLikelihood;
+                    state.previousLogLikelihood = logLikelihood;
+                    state.iteration++;
+                }
+            }
+            __threadfence();
         }
+
+        if (threadIndex == 0)
+        {
+            processed = true;
+        }
+
         __syncthreads();
 
-        // Convergence check
-        if (iteration > 0)
+        if (doUpdate)
         {
-            float logLikelihood = sharedStatistics.weightedLogLikelihood;
-            float relLogLikelihoodDifference =
-                fabs(logLikelihood - previousLogLikelihood) / fabs(previousLogLikelihood);
+            // TODO: volatile?
+            volatile VMMMapState &state = vmmMapStates[workItem.nodeIndex];
+            VMMStatistics &statistics   = currentStatistics[workItem.nodeIndex];
+            uint32_t numWorkItems       = (state.numSamples + blockSize - 1) / blockSize;
+            if (threadIdx.x == 0)
+            {
+                state.numWorkItems = numWorkItems;
+                workItemOffset     = atomicAdd(&queue->writeOffset, numWorkItems);
 
-            if (relLogLikelihoodDifference < convergenceThreshold) break;
-            previousLogLikelihood = logLikelihood;
+                if (state.iteration >= 4)
+                {
+                    printf("%f %u %u %u %u\n", state.previousLogLikelihood, workItemOffset,
+                           queue->readOffset, numWorkItems, state.iteration);
+                }
+                if (state.previousLogLikelihood < -30000.f)
+                {
+                    printf("help me: %f\n", state.previousLogLikelihood);
+                }
+
+                if (!(workItemOffset + numWorkItems <= queueMax))
+                {
+                    assert(0);
+                }
+            }
+
+            if (threadIndex < MAX_COMPONENTS)
+            {
+                statistics.sumWeights[threadIndex]            = 0.f;
+                statistics.sumWeightedDirections[threadIndex] = make_float3(0.f);
+            }
+
+            if (threadIndex == 0)
+            {
+                statistics.numSamples            = 0;
+                statistics.weightedLogLikelihood = 0.f;
+            }
+
+            __syncthreads();
+            __threadfence();
+
+            for (uint32_t i = threadIdx.x; i < numWorkItems; i += blockDim.x)
+            {
+                WorkItem newWorkItem;
+                newWorkItem.nodeIndex         = workItem.nodeIndex;
+                newWorkItem.offset            = state.sampleOffset + blockSize * i;
+                newWorkItem.count             = 0;
+                workItems[workItemOffset + i] = newWorkItem;
+            }
+
+            __threadfence();
+
+            for (uint32_t i = threadIdx.x; i < numWorkItems; i += blockDim.x)
+            {
+                workItems[workItemOffset + i].count =
+                    min(blockSize, state.numSamples - blockSize * i);
+            }
+
+            __threadfence();
         }
-#endif
     }
 }
+#endif
 
 #define PARTITION_THREADS_IN_BLOCK 256
 #define PARTITION_WARPS_IN_BLOCK   (PARTITION_THREADS_IN_BLOCK >> WARP_SHIFT)
@@ -2364,19 +2518,32 @@ __global__ void GetChildNodeOffset(LevelInfo *levelInfo, KDTreeNode *nodes, uint
     }
 }
 
+template <uint32_t blockSize>
 __global__ void FindLeafNodes(LevelInfo *levelInfo, KDTreeNode *nodes, uint32_t *nodeIndices,
-                              uint32_t *numLeafNodes)
+                              uint32_t *numLeafNodes, VMMMapState *states, VMM *vmms)
 {
-    uint32_t threadIndex = threadIdx.x + blockIdx.x * blockDim.x;
-    if (threadIndex >= levelInfo->start) return;
-    KDTreeNode &node = nodes[threadIndex];
+    // uint32_t threadIndex = threadIdx.x + blockIdx.x * blockDim.x;
+    // if (threadIndex >= levelInfo->start) return;
+    // KDTreeNode &node = nodes[threadIndex];
 
-    if (node.IsChild())
+    for (uint32_t threadIndex = 0; threadIndex < levelInfo->start; threadIndex++)
     {
-        uint32_t index     = atomicAdd(numLeafNodes, 1);
-        node.vmmIndex      = index;
-        nodeIndices[index] = threadIndex;
+        KDTreeNode &node = nodes[threadIndex];
+        if (node.IsChild())
+        {
+            uint32_t index     = (*numLeafNodes)++; // atomicAdd(numLeafNodes, 1);
+            node.vmmIndex      = index;
+            nodeIndices[index] = threadIndex;
+
+            states[index].numWorkItems          = (node.count + blockSize - 1) / blockSize;
+            states[index].numSamples            = node.count;
+            states[index].previousLogLikelihood = 0.f;
+            states[index].iteration             = 0;
+
+            vmms[index].Initialize();
+        }
     }
+    printf("%u\n", *numLeafNodes);
 }
 
 __global__ void
@@ -2402,22 +2569,32 @@ WriteSamplesToSOA(const uint32_t *__restrict__ numLeafNodes,
 }
 
 __global__ void PrintStatistics(SampleStatistics *stats, KDTreeNode *nodes, LevelInfo *info,
-                                uint32_t *test)
+                                uint32_t *test, VMM *vmm, VMMMapState *states)
 {
-    // printf("num: %u\n", *test);
-    for (uint32_t i = 0; i < info->start + info->count; i++)
+    uint32_t t = 0;
+    VMM &v     = vmm[t];
+    for (uint32_t i = 0; i < v.numComponents; i++)
     {
-        // KDTreeNode &node = nodes[i];
-        // printf("node: %u %u %f\n", i, node.GetSplitDim(), node.splitPos);
-
-        SampleStatistics &s = stats[i];
-        float3 bmin         = s.bounds.GetBoundsMin();
-        longlong3 mean      = s.mean;
-        // printf("node: %u, %u, %lld %lld %lld\n", i, s.numSamples, mean.x, mean.y,
-        // mean.z);
-        printf("node: %u, %u, %u, %f %f %f\n", i, nodes[i].count, s.numSamples, bmin.x, bmin.y,
-               bmin.z);
+        printf("%f ", v.weights[i]);
     }
+    printf("\n");
+    printf("iters: %u\n", states[t].iteration);
+
+    // printf("num: %u\n", *test);
+    // for (uint32_t i = 0; i < info->start + info->count; i++)
+    // {
+    //     // KDTreeNode &node = nodes[i];
+    //     // printf("node: %u %u %f\n", i, node.GetSplitDim(), node.splitPos);
+    //
+    //     SampleStatistics &s = stats[i];
+    //     float3 bmin         = s.bounds.GetBoundsMin();
+    //     longlong3 mean      = s.mean;
+    //     // printf("node: %u, %u, %lld %lld %lld\n", i, s.numSamples, mean.x, mean.y,
+    //     // mean.z);
+    //     printf("node: %u, %u, %u, %f %f %f\n", i, nodes[i].count, s.numSamples, bmin.x,
+    //     bmin.y,
+    //            bmin.z);
+    // }
     // for (uint32_t i = 191; i < 192; i++)
     // {
     //     KDTreeNode *node                   = &nodes[i];
@@ -2492,8 +2669,8 @@ void test()
     cudaGetDeviceProperties(&props, device);
 
     int numBlocksPerSM;
-    cudaOccupancyMaxActiveBlocksPerMultiprocessor(&numBlocksPerSM, UpdateMixturePersistent,
-                                                  blockSize, 0);
+    cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &numBlocksPerSM, UpdateMixturePersistent<blockSize>, blockSize, 0);
 
     int maxGridSize = props.multiProcessorCount * numBlocksPerSM;
     printf("blocks, grid: %i %i\n", numBlocksPerSM, maxGridSize);
@@ -2512,7 +2689,8 @@ void test()
     VMM *vmms                          = allocator.Alloc<VMM>(maxNumNodes, 4u);
     VMMStatistics *vmmStatistics       = allocator.Alloc<VMMStatistics>(maxNumNodes, 4);
 
-    cudaMemset(nodes, 0, sizeof(uint32_t) * maxNumNodes * 2);
+    cudaMemset(nodes, 0, sizeof(KDTreeNode) * maxNumNodes);
+    cudaMemset(vmmStatistics, 0, sizeof(VMMStatistics) * maxNumNodes);
 
     SampleData *samples = allocator.Alloc<SampleData>(numSamples, 4u);
 
@@ -2543,6 +2721,10 @@ void test()
     WorkItem *reductionWorkItems = allocator.Alloc<WorkItem>(2 * numSamples / blockSize, 4u);
     WorkItem *partitionWorkItems = allocator.Alloc<WorkItem>(2 * numSamples / blockSize, 4u);
     WorkItem *vmmWorkItems       = allocator.Alloc<WorkItem>(numSamples, 4u);
+
+    cudaMemset(vmmWorkItems, 0, sizeof(WorkItem) * numSamples);
+
+    VMMMapState *vmmMapStates = allocator.Alloc<VMMMapState>(maxNumNodes, 4u);
 
     float3 sceneMin = make_float3(0.f);
     float3 sceneMax = make_float3(100.f);
@@ -2619,22 +2801,25 @@ void test()
     cudaEventCreate(&vmmStop);
     cudaEventRecord(vmmStart);
 
-    FindLeafNodes<<<nodeBlocks, WARP_SIZE>>>(levelInfo, nodes, leafNodeIndices, numLeafNodes);
+    FindLeafNodes<blockSize>
+        <<<1, 1>>>(levelInfo, nodes, leafNodeIndices, numLeafNodes, vmmMapStates, vmms);
     WriteSamplesToSOA<<<nodeBlocks, WARP_SIZE>>>(numLeafNodes, leafNodeIndices, sampleIndices,
                                                  newSampleIndices, nodes, samples,
                                                  soaSampleData);
 
     CreateVMMWorkItems<blockSize><<<(maxNumNodes + blockSize - 1) / blockSize, blockSize>>>(
         leafNodeIndices, numLeafNodes, nodes, vmmWorkItems, vmmQueue);
-    UpdateMixturePersistent<<<maxGridSize, blockSize>>>(vmmQueue, vmmWorkItems, vmms,
-                                                        vmmStatistics, soaSampleData,
-                                                        leafNodeIndices, numLeafNodes, nodes);
-    // UpdateMixture<<<(maxNumNodes + blockSize - 1) / blockSize, blockSize>>>(
-    //     vmms, vmmStatistics, soaSampleData, leafNodeIndices, numLeafNodes, nodes);
+
+    // UpdateMixturePersistent<blockSize><<<maxGridSize, blockSize>>>(
+    //     vmmQueue, vmmWorkItems, vmms, vmmStatistics, soaSampleData, leafNodeIndices,
+    //     numLeafNodes, nodes, vmmMapStates, numSamples);
+    UpdateMixture<<<(maxNumNodes + blockSize - 1) / blockSize, blockSize>>>(
+        vmms, vmmStatistics, soaSampleData, leafNodeIndices, numLeafNodes, nodes);
 
     nvtxRangePop();
     cudaEventRecord(vmmStop);
-    // PrintStatistics<<<1, 1>>>(sampleStatistics, nodes, levelInfo, numLeafNodes);
+    PrintStatistics<<<1, 1>>>(sampleStatistics, nodes, levelInfo, numLeafNodes, vmms,
+                              vmmMapStates);
 
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess)
