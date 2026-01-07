@@ -964,6 +964,31 @@ struct VMMStatistics
     float3 sumWeightedDirections[MAX_COMPONENTS];
 
     uint32_t numSamples;
+
+    __device__ void SetComponent(uint32_t componentIndex, float sumWeight,
+                                 float3 sumWeightedDirection)
+    {
+        assert(componentIndex < MAX_COMPONENTS);
+        sumWeights[componentIndex]            = sumWeight;
+        sumWeightedDirections[componentIndex] = sumWeightedDirection;
+    }
+};
+
+struct SplitStatistics
+{
+    float3 covarianceTotals[MAX_COMPONENTS];
+    float chiSquareTotals[MAX_COMPONENTS];
+    float sumWeights[MAX_COMPONENTS];
+    uint32_t numSamples[MAX_COMPONENTS];
+
+    __device__ void SetComponent(uint32_t componentIndex, float3 covarianceTotal,
+                                 float chiSquareTotal, float sumWeight, uint32_t num)
+    {
+        covarianceTotals[componentIndex] = covarianceTotal;
+        chiSquareTotals[componentIndex]  = chiSquareTotal;
+        sumWeights[componentIndex]       = sumWeight;
+        numSamples[componentIndex]       = num;
+    }
 };
 
 __device__ float CalculateVMFNormalization(float kappa)
@@ -1297,9 +1322,7 @@ UpdateMixtureParameters(VMM &sharedVMM, VMMStatistics &sharedStatistics,
 // - handle unassigned components in MAP update
 // - make sure to update statistics and rewrite to memory
 // - make sure to get chi square statistics fromm previous update
-// - make sure to load sample weights and pdfs for chi square splitting
 // - proper criteria for splitting/merging
-// - make sure to test performance of atomics vs block reduce, different block sizes
 
 __global__ void
 UpdateMixture(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStatistics,
@@ -1350,6 +1373,7 @@ UpdateMixture(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStatist
     {
         vmms[node.vmmIndex]                               = sharedVMM;
         currentStatistics[node.vmmIndex].sumSampleWeights = sumSampleWeights;
+        currentStatistics[node.vmmIndex].numSamples       = sampleCount;
     }
 
 #if 0
@@ -1488,24 +1512,22 @@ UpdateMixture(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStatist
 #endif
 }
 
-__global__ void SplitComponents(VMM *__restrict__ vmms,
-                                VMMStatistics *__restrict__ currentStatistics,
-                                const SOASampleData samples,
-                                const uint32_t *__restrict__ leafNodeIndices,
-                                const uint32_t *__restrict__ numLeafNodes,
-                                const KDTreeNode *__restrict__ nodes)
+__global__ void UpdateSplitStatistics(VMM *__restrict__ vmms,
+                                      VMMStatistics *__restrict__ currentStatistics,
+                                      SplitStatistics *__restrict__ splitStatistics,
+                                      const SOASampleData samples,
+                                      const uint32_t *__restrict__ leafNodeIndices,
+                                      const uint32_t *__restrict__ numLeafNodes,
+                                      const KDTreeNode *__restrict__ nodes)
 {
-    // Splitting
-    __shared__ float3 sharedCovarianceTotals[MAX_COMPONENTS];
     __shared__ float sharedChiSquareTotals[MAX_COMPONENTS];
-    __shared__ float sharedSumWeights[MAX_COMPONENTS];
 
     const uint32_t threadIndex = threadIdx.x;
+    const uint32_t wid         = threadIndex >> WARP_SHIFT;
 
     if (blockIdx.x >= *numLeafNodes) return;
 
-    uint32_t vmmIndex      = leafNodeIndices[blockIdx.x];
-    const KDTreeNode &node = nodes[vmmIndex];
+    const KDTreeNode &node = nodes[leafNodeIndices[blockIdx.x]];
     uint32_t sampleCount   = node.count;
     uint32_t offset        = node.offset;
 
@@ -1516,19 +1538,14 @@ __global__ void SplitComponents(VMM *__restrict__ vmms,
     uint32_t numUsedSamples         = 0;
     const uint32_t numSampleBatches = (sampleCount + blockDim.x - 1) / blockDim.x;
 
-    const float splittingThreshold = 0.5f;
-    const float maxKappa           = 32000.f;
-    const float maxMeanCosine      = KappaToMeanCosine(maxKappa);
-
-    VMM &sharedVMM = vmms[node.vmmIndex];
-    // TODO IMPORTANT: these totals need to include totals from previous
-    // update passes
+    const float maxKappa        = 32000.f;
+    const float maxMeanCosine   = KappaToMeanCosine(maxKappa);
+    VMM &sharedVMM              = vmms[node.vmmIndex];
+    SplitStatistics &splitStats = splitStatistics[node.vmmIndex];
 
     if (threadIndex < MAX_COMPONENTS)
     {
-        sharedCovarianceTotals[threadIndex] = make_float3(0.f);
-        sharedChiSquareTotals[threadIndex]  = 0.f;
-        sharedSumWeights[threadIndex]       = 0.f;
+        sharedChiSquareTotals[threadIndex] = 0.f;
     }
 
     __syncthreads();
@@ -1590,53 +1607,91 @@ __global__ void SplitComponents(VMM *__restrict__ vmms,
             float covXY = assignedWeight * localDirection.x * localDirection.y;
             float3 cov  = make_float3(covXX, covYY, covXY);
 
-            // TODO IMPORTANT: save as above
             chiSquareEstimate = WarpReduceSum(chiSquareEstimate);
             cov               = WarpReduceSum(cov);
             assignedWeight    = WarpReduceSum(assignedWeight);
 
+            assert(isfinite(cov.x) && !isnan(cov.x));
+            assert(isfinite(cov.y) && !isnan(cov.y));
+            assert(isfinite(cov.z) && !isnan(cov.z));
+            assert(isfinite(chiSquareEstimate) && !isnan(chiSquareEstimate));
+
             if ((threadIndex & (WARP_SIZE - 1)) == 0)
             {
+                // atomicAdd(&splitStats.chiSquareTotals[componentIndex], chiSquareEstimate);
                 atomicAdd(&sharedChiSquareTotals[componentIndex], chiSquareEstimate);
-                atomicAdd(&sharedCovarianceTotals[componentIndex], cov);
-                atomicAdd(&sharedSumWeights[componentIndex], assignedWeight);
+                atomicAdd(&splitStats.covarianceTotals[componentIndex], cov);
+                atomicAdd(&splitStats.sumWeights[componentIndex], assignedWeight);
             }
         }
     }
 
     __syncthreads();
 
-    // if (blockIdx.x == 0 && threadIndex < MAX_COMPONENTS)
-    // {
-    //     printf("%u %f, %f %f %f, %f\n", threadIndex, sharedChiSquareTotals[threadIndex],
-    //            sharedCovarianceTotals[threadIndex].x, sharedCovarianceTotals[threadIndex].y,
-    //            sharedCovarianceTotals[threadIndex].z, sharedSumWeights[threadIndex]);
-    // }
+    if (threadIndex < MAX_COMPONENTS)
+    {
+        // TODO: floating point precision issues?
+        float chi                = sharedChiSquareTotals[threadIndex];
+        uint32_t totalNumSamples = sampleCount + splitStats.numSamples[threadIndex];
+        splitStats.chiSquareTotals[threadIndex] +=
+            (chi - splitStats.chiSquareTotals[threadIndex] * sampleCount) / totalNumSamples;
+        // if (chi != 0.f)
+        // {
+        //     printf("chi: %f %f\n", chi, splitStats.chiSquareTotals[threadIndex]);
+        // }
+        splitStats.numSamples[threadIndex] = totalNumSamples;
+    }
+}
 
-#if 1
+__global__ void SplitComponents(VMM *__restrict__ vmms,
+                                VMMStatistics *__restrict__ currentStatistics,
+                                SplitStatistics *__restrict__ splitStatistics,
+                                const SOASampleData samples,
+                                const uint32_t *__restrict__ leafNodeIndices,
+                                const uint32_t *__restrict__ numLeafNodes,
+                                const KDTreeNode *__restrict__ nodes)
+{
+    const float splittingThreshold = 0.5f;
+    const float maxKappa           = 32000.f;
+    const float maxMeanCosine      = KappaToMeanCosine(maxKappa);
+    static_assert(MAX_COMPONENTS <= WARP_SIZE);
+
+    if (blockIdx.x >= *numLeafNodes) return;
+
+    uint32_t nodeIndex     = leafNodeIndices[blockIdx.x];
+    const KDTreeNode &node = nodes[nodeIndex];
+    uint32_t sampleCount   = node.count;
+    uint32_t offset        = node.offset;
+
+    const uint32_t threadIndex = threadIdx.x;
+
+    VMM &vmm                     = vmms[node.vmmIndex];
+    SplitStatistics &splitStats  = splitStatistics[node.vmmIndex];
+    VMMStatistics &vmmStatistics = currentStatistics[node.vmmIndex];
+
     __shared__ uint32_t sharedSplitMask;
     // Split components
     if (threadIndex < MAX_COMPONENTS)
     {
-        numUsedSamples = WarpReduceSum(numUsedSamples);
-        numUsedSamples = WarpReadLaneFirst(numUsedSamples);
+        // numUsedSamples = WarpReduceSum(numUsedSamples);
+        // numUsedSamples = WarpReadLaneFirst(numUsedSamples);
 
-        float chiSquareEstimate               = sharedChiSquareTotals[threadIndex];
+        float chiSquareEstimate               = splitStats.chiSquareTotals[threadIndex];
         uint32_t rank                         = 0;
-        const uint32_t numAvailableComponents = MAX_COMPONENTS - sharedVMM.numComponents;
+        const uint32_t numAvailableComponents = MAX_COMPONENTS - vmm.numComponents;
         for (uint32_t i = 0; i < MAX_COMPONENTS; i++)
         {
-            float chiSquare    = sharedChiSquareTotals[i];
+            float chiSquare    = splitStats.chiSquareTotals[i];
             uint32_t increment = chiSquare > chiSquareEstimate ||
                                  (chiSquare == chiSquareEstimate && i < threadIndex);
             rank += increment;
         }
 
-        bool split = sharedChiSquareTotals[threadIndex] > splittingThreshold &&
+        bool split = splitStats.chiSquareTotals[threadIndex] > splittingThreshold &&
                      rank < numAvailableComponents;
 
         uint32_t splitMask     = __ballot_sync(0xffffffff, split);
-        uint32_t numComponents = sharedVMM.numComponents;
+        uint32_t numComponents = vmm.numComponents;
         uint32_t newComponentIndex =
             numComponents + __popc(splitMask & ((1u << threadIndex) - 1));
 
@@ -1646,8 +1701,8 @@ __global__ void SplitComponents(VMM *__restrict__ vmms,
         {
             assert(newComponentIndex < MAX_COMPONENTS);
 
-            float sumWeights = sharedSumWeights[componentIndex];
-            float3 cov       = sharedCovarianceTotals[componentIndex] / sumWeights;
+            float sumWeights = splitStats.sumWeights[componentIndex];
+            float3 cov       = splitStats.covarianceTotals[componentIndex] / sumWeights;
 
             float negB          = cov.x + cov.y;
             float discriminant  = sqrt((cov.x - cov.y) * (cov.x - cov.y) - 4 * cov.z * cov.z);
@@ -1664,7 +1719,7 @@ __global__ void SplitComponents(VMM *__restrict__ vmms,
                 float2 meanDir0 = temp;
                 float2 meanDir1 = -temp;
 
-                float3 meanDirection = sharedVMM.ReadDirection(componentIndex);
+                float3 meanDirection = vmm.ReadDirection(componentIndex);
 
                 float3 basis0, basis1;
                 BuildOrthonormalBasis(meanDirection, basis0, basis1);
@@ -1677,44 +1732,48 @@ __global__ void SplitComponents(VMM *__restrict__ vmms,
                 float3 meanDirection1 = basis0 * meanDir3D1.x + basis1 * meanDir3D1.y +
                                         meanDirection * meanDir3D1.z;
 
-                float meanCosine  = KappaToMeanCosine(sharedVMM.kappas[componentIndex]);
+                float meanCosine  = KappaToMeanCosine(vmm.kappas[componentIndex]);
                 float meanCosine0 = meanCosine / abs(dot(meanDirection0, meanDirection));
                 meanCosine0       = min(meanCosine0, maxMeanCosine);
 
                 float kappa  = MeanCosineToKappa(meanCosine0);
-                float weight = sharedVMM.weights[componentIndex] * 0.5f;
+                float weight = vmm.weights[componentIndex] * 0.5f;
 
-                sharedVMM.UpdateComponent(componentIndex, kappa, meanDirection0, weight);
-                sharedVMM.UpdateComponent(newComponentIndex, kappa, meanDirection1, weight);
+                vmm.UpdateComponent(componentIndex, kappa, meanDirection0, weight);
+                vmm.UpdateComponent(newComponentIndex, kappa, meanDirection1, weight);
 
-                // TODO: update and split statistics
+                splitStats.SetComponent(componentIndex, make_float3(0.f), 0.f, 0.f, 0);
+                splitStats.SetComponent(newComponentIndex, make_float3(0.f), 0.f, 0.f, 0);
+
+                float sumStatsWeights = vmmStatistics.sumWeights[componentIndex] / 2.f;
+                vmmStatistics.SetComponent(componentIndex, sumStatsWeights,
+                                           meanDirection0 * meanCosine0 * sumStatsWeights);
+                vmmStatistics.SetComponent(newComponentIndex, sumStatsWeights,
+                                           meanDirection1 * meanCosine0 * sumStatsWeights);
             }
         }
 
         if (threadIndex == 0)
         {
             uint32_t newNumComponents = __popc(splitMask);
-            assert(sharedVMM.numComponents + newNumComponents <= MAX_COMPONENTS);
+            assert(vmm.numComponents + newNumComponents <= MAX_COMPONENTS);
 
-            uint32_t maskExtend = ((1u << newNumComponents) - 1u) << sharedVMM.numComponents;
+            uint32_t maskExtend = ((1u << newNumComponents) - 1u) << vmm.numComponents;
 
-            sharedVMM.numComponents += newNumComponents;
+            vmm.numComponents += newNumComponents;
             sharedSplitMask = splitMask | maskExtend;
         }
     }
-#endif
 
-#if 0
     __syncthreads();
 
     // Update split components
-    if (sharedSplitMask)
-    {
-        UpdateMixtureParameters<true>(sharedVMM, sharedStatistics, previousStatistics,
-                                      samples.dir, samples.weights, sumSampleWeights, offset,
-                                      sampleCount, sharedSplitMask);
-    }
-#endif
+    // if (sharedSplitMask)
+    // {
+    //     UpdateMixtureParameters<true>(sharedVMM, sharedStatistics, previousStatistics,
+    //                                   samples.dir, samples.weights, sumSampleWeights,
+    //                                   offset, sampleCount, sharedSplitMask);
+    // }
 }
 
 template <uint32_t blockSize>
@@ -2596,16 +2655,17 @@ WriteSamplesToSOA(const uint32_t *__restrict__ numLeafNodes,
 }
 
 __global__ void PrintStatistics(SampleStatistics *stats, KDTreeNode *nodes, LevelInfo *info,
-                                uint32_t *test, VMM *vmm, VMMMapState *states)
+                                uint32_t *test, VMM *vmm, VMMMapState *states,
+                                SplitStatistics *splitStats)
 {
     uint32_t t = 0;
-    VMM &v     = vmm[t];
-    for (uint32_t i = 0; i < v.numComponents; i++)
+
+    for (uint32_t i = 0; i < MAX_COMPONENTS; i++)
     {
-        printf("%f ", v.weights[i]);
+        printf("%f ", splitStats[0].chiSquareTotals[i]);
     }
+
     printf("\n");
-    printf("iters: %u\n", states[t].iteration);
 
     // printf("num: %u\n", *test);
     // for (uint32_t i = 0; i < info->start + info->count; i++)
@@ -2715,9 +2775,11 @@ void test()
     SampleStatistics *sampleStatistics = allocator.Alloc<SampleStatistics>(maxNumNodes, 8u);
     VMM *vmms                          = allocator.Alloc<VMM>(maxNumNodes, 4u);
     VMMStatistics *vmmStatistics       = allocator.Alloc<VMMStatistics>(maxNumNodes, 4);
+    SplitStatistics *splitStatistics   = allocator.Alloc<SplitStatistics>(maxNumNodes, 4);
 
     cudaMemset(nodes, 0, sizeof(KDTreeNode) * maxNumNodes);
     cudaMemset(vmmStatistics, 0, sizeof(VMMStatistics) * maxNumNodes);
+    cudaMemset(splitStatistics, 0, sizeof(SplitStatistics) * maxNumNodes);
 
     SampleData *samples = allocator.Alloc<SampleData>(numSamples, 4u);
 
@@ -2728,7 +2790,7 @@ void test()
     float *samplePosY = allocator.Alloc<float>(numSamples, 4u);
     float *samplePosZ = allocator.Alloc<float>(numSamples, 4u);
 
-    float *sampleDirX    = allocator.Alloc<float>(numSamples, 4u);
+    float *sampleDirX    = allocator.Alloc<float>(numSamples, 32u);
     float *sampleDirY    = allocator.Alloc<float>(numSamples, 4u);
     float *sampleDirZ    = allocator.Alloc<float>(numSamples, 4u);
     float *sampleWeights = allocator.Alloc<float>(numSamples, 4u);
@@ -2842,13 +2904,17 @@ void test()
     //     numLeafNodes, nodes, vmmMapStates, numSamples);
     UpdateMixture<<<(maxNumNodes + blockSize - 1) / blockSize, blockSize>>>(
         vmms, vmmStatistics, soaSampleData, leafNodeIndices, numLeafNodes, nodes);
-    SplitComponents<<<(maxNumNodes + blockSize - 1) / blockSize, blockSize>>>(
-        vmms, vmmStatistics, soaSampleData, leafNodeIndices, numLeafNodes, nodes);
+    UpdateSplitStatistics<<<numBlocks, blockSize>>>(vmms, vmmStatistics, splitStatistics,
+                                                    soaSampleData, leafNodeIndices,
+                                                    numLeafNodes, nodes);
+    SplitComponents<<<(maxNumNodes + WARP_SIZE - 1) / WARP_SIZE, WARP_SIZE>>>(
+        vmms, vmmStatistics, splitStatistics, soaSampleData, leafNodeIndices, numLeafNodes,
+        nodes);
 
     nvtxRangePop();
     cudaEventRecord(vmmStop);
     PrintStatistics<<<1, 1>>>(sampleStatistics, nodes, levelInfo, numLeafNodes, vmms,
-                              vmmMapStates);
+                              vmmMapStates, splitStatistics);
 
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess)
