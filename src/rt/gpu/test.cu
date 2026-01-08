@@ -625,6 +625,8 @@ struct KDTreeNode
 #define INTEGER_SAMPLE_STATS_BOUND_SCALE (1.0f + 2.f / INTEGER_BINS)
 #define MAX_TREE_DEPTH                   32
 #define MAX_SAMPLES_PER_LEAF             32000
+#define MIN_SPLIT_SAMPLES                (MAX_SAMPLES_PER_LEAF / 8u)
+#define MIN_MERGE_SAMPLES                (MAX_SAMPLES_PER_LEAF / 4u)
 
 struct SampleStatistics
 {
@@ -964,6 +966,9 @@ struct VMMStatistics
 
     // TODO: decay?
     uint32_t numSamples;
+
+    uint32_t numSamplesAfterLastSplit;
+    uint32_t numSamplesAfterLastMerge;
 
     __device__ void SetComponent(uint32_t componentIndex, float sumWeight,
                                  float3 sumWeightedDirection)
@@ -1413,9 +1418,11 @@ UpdateMixtureHelper(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentS
 
         if (threadIndex == 0)
         {
-            vmms[vmmIndex]                               = sharedVMM;
-            currentStatistics[vmmIndex].sumSampleWeights = sumSampleWeights;
-            currentStatistics[vmmIndex].numSamples       = sampleCount;
+            vmms[vmmIndex]                      = sharedVMM;
+            previousStatistics.sumSampleWeights = sumSampleWeights;
+            previousStatistics.numSamples       = sampleCount;
+            previousStatistics.numSamplesAfterLastSplit += sampleCount;
+            previousStatistics.numSamplesAfterLastMerge += sampleCount;
         }
     }
     else
@@ -1423,160 +1430,25 @@ UpdateMixtureHelper(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentS
         UpdateMixtureParameters<true>(
             sharedVMM, sharedStatistics, previousStatistics, samples.dir, samples.weights,
             sumSampleWeights, weightedLogLikelihood, offset, sampleCount, sharedSplitMask);
-        // __syncthreads();
-        //
-        // VMM &vmm = vmms[vmmIndex];
-        // if (threadIndex < MAX_COMPONENTS)
-        // {
-        //     const bool threadIsEnabled = sharedSplitMask & (1u << threadIndex);
-        //     if (threadIsEnabled)
-        //     {
-        //         vmm.kappas[threadIndex] = sharedVMM.kappas[threadIndex];
-        //         vmm.WriteDirection(threadIndex, sharedVMM.ReadDirection(threadIndex));
-        //         vmm.weights[threadIndex] = sharedVMM.weights[threadIndex];
-        //
-        //         previousStatistics.sumWeights[threadIndex] =
-        //             sharedStatistics.sumWeights[threadIndex];
-        //         previousStatistics.sumWeightedDirections[threadIndex] =
-        //             sharedStatistics.sumWeightedDirections[threadIndex];
-        //     }
-        // }
-    }
-
-#if 0
-
-    // Reuse shared memory
-    float *mergeKappas      = sharedSumWeights;
-    float *mergeProducts    = sharedChiSquareTotals;
-    float3 *mergeDirections = sharedCovarianceTotals;
-
-    // Merging
-    {
-        const uint32_t numComponents = sharedVMM.numComponents;
-
-        const uint32_t numPairs        = (numComponents * numComponents - numComponents) / 2;
-        const uint32_t numMergeBatches = (numPairs + blockDim.x - 1) / blockDim.x;
-
-        if (threadIndex < sharedVMM.numComponents)
-        {
-            float kappa = sharedVMM.kappas[threadIndex];
-            if (blockIdx.x == 0)
-            {
-                printf("weight: %f\n", sharedVMM.weights[threadIndex]);
-                printf("%u, thread: %u, %f\n", numComponents, threadIndex, kappa);
-                float3 dir = sharedVMM.ReadDirection(threadIndex);
-                printf("%f %f %f\n", dir.x, dir.y, dir.z);
-            }
-            float normalization  = CalculateVMFNormalization(kappa);
-            float3 meanDirection = sharedVMM.ReadDirection(threadIndex);
-
-            float productKappa, productNormalization;
-            float3 productMeanDirection;
-            float scale = VMFProduct(kappa, normalization, meanDirection, kappa, normalization,
-                                     meanDirection, productKappa, productNormalization,
-                                     productMeanDirection);
-
-            mergeKappas[threadIndex]     = productKappa;
-            mergeProducts[threadIndex]   = scale;
-            mergeDirections[threadIndex] = productMeanDirection;
-        }
-
         __syncthreads();
 
-        // TODO: I'm pretty sure they don't combine components that were just split?
-        for (uint32_t batch = 0; batch < numMergeBatches; batch++)
+        VMM &vmm = vmms[vmmIndex];
+        if (threadIndex < MAX_COMPONENTS)
         {
-            // X 0 1 2  3  4   5  6  7
-            // X X 8 9  10 11 12 13 14
-            // X X X 15 16 17 18 19 20
-
-            // TODO: instead of recomputing the chi square estimate for
-            // every merge iteration, cache in shared memory and update only the pairs
-            // for the components that have changed
-
-            // Calculate the merge cost for the requisite pair
-            uint32_t indexInBatch = batch * blockDim.x + threadIndex;
-            float a               = 1 + (numComponents - 1) * 2;
-            uint32_t row          = 1 + uint32_t(a - sqrt(a * a - 8.f * indexInBatch)) / 2;
-
-            uint32_t newIndexInBatch = indexInBatch + row * (row + 1) / 2;
-
-            const uint32_t componentIndex0 = newIndexInBatch / numComponents;
-            const uint32_t componentIndex1 = newIndexInBatch % numComponents;
-
-            float chiSquareIJ = FLT_MAX;
-
-            if (indexInBatch < numPairs)
+            const bool threadIsEnabled = sharedSplitMask & (1u << threadIndex);
+            if (threadIsEnabled)
             {
-                float kappa0          = sharedVMM.kappas[componentIndex0];
-                float normalization0  = CalculateVMFNormalization(kappa0);
-                float kappa1          = sharedVMM.kappas[componentIndex1];
-                float normalization1  = CalculateVMFNormalization(kappa1);
-                float weight0         = sharedVMM.weights[componentIndex0];
-                float weight1         = sharedVMM.weights[componentIndex1];
-                float3 meanDirection0 = sharedVMM.ReadDirection(componentIndex0);
-                float3 meanDirection1 = sharedVMM.ReadDirection(componentIndex1);
+                vmm.kappas[threadIndex] = sharedVMM.kappas[threadIndex];
+                vmm.WriteDirection(threadIndex, sharedVMM.ReadDirection(threadIndex));
+                vmm.weights[threadIndex] = sharedVMM.weights[threadIndex];
 
-                float kappa00         = mergeKappas[componentIndex0];
-                float normalization00 = CalculateVMFNormalization(kappa00);
-                float scale00         = mergeProducts[componentIndex0];
-                float3 dir00          = mergeDirections[componentIndex0];
-
-                float kappa11         = mergeKappas[componentIndex1];
-                float normalization11 = CalculateVMFNormalization(kappa11);
-                float scale11         = mergeProducts[componentIndex1];
-                float3 dir11          = mergeDirections[componentIndex1];
-
-                float weight         = weight0 + weight1;
-                float3 meanDirection = weight0 * KappaToMeanCosine(kappa0) * meanDirection0 +
-                                       weight1 * KappaToMeanCosine(kappa1) * meanDirection1;
-                meanDirection /= weight;
-                float meanCosine = dot(meanDirection, meanDirection);
-                float kappa      = 0.f;
-
-                if (meanCosine > 0.f)
-                {
-                    meanCosine = sqrt(meanCosine);
-                    kappa      = MeanCosineToKappa(meanCosine);
-                    meanDirection /= meanCosine;
-                }
-                else
-                {
-                    meanDirection = meanDirection0;
-                }
-
-                float normalization = CalculateVMFNormalization(kappa);
-
-                float kappa01, normalization01;
-                float3 dir01;
-                float scale01 =
-                    VMFProduct(kappa0, normalization0, meanDirection0, kappa1, normalization1,
-                               meanDirection1, kappa01, normalization01, dir01);
-
-                chiSquareIJ = 0.f;
-                chiSquareIJ +=
-                    (weight0 * weight0 / weight) *
-                    (scale00 * VMFIntegratedDivision(dir00, kappa00, normalization00,
-                                                     -meanDirection, kappa, normalization));
-                chiSquareIJ +=
-                    (weight1 * weight1 / weight) *
-                    (scale11 * VMFIntegratedDivision(dir11, kappa11, normalization11,
-                                                     -meanDirection, kappa, normalization));
-                chiSquareIJ +=
-                    2.0f * (weight0 * weight1 / weight) *
-                    (scale01 * VMFIntegratedDivision(dir01, kappa01, normalization01,
-                                                     -meanDirection, kappa, normalization));
-                chiSquareIJ -= weight;
-
-                if (blockIdx.x == 0)
-                {
-                    // printf("%u, thread: %u, %u %u %f\n", numComponents, threadIndex,
-                    //        componentIndex0, componentIndex1, chiSquareIJ);
-                }
+                previousStatistics.sumWeights[threadIndex] =
+                    sharedStatistics.sumWeights[threadIndex];
+                previousStatistics.sumWeightedDirections[threadIndex] =
+                    sharedStatistics.sumWeightedDirections[threadIndex];
             }
         }
     }
-#endif
 }
 
 __global__ void
@@ -1755,6 +1627,8 @@ SplitComponents(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStati
     SplitStatistics &splitStats  = splitStatistics[vmmIndex];
     VMMStatistics &vmmStatistics = currentStatistics[vmmIndex];
 
+    if (vmmStatistics.numSamplesAfterLastSplit < MIN_SPLIT_SAMPLES) return;
+
     __shared__ uint32_t sharedSplitMask;
     // Split components
     if (threadIndex < MAX_COMPONENTS)
@@ -1844,7 +1718,8 @@ SplitComponents(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStati
             uint32_t maskExtend = ((1u << newNumComponents) - 1u) << vmm.numComponents;
 
             vmm.numComponents += newNumComponents;
-            sharedSplitMask = splitMask | maskExtend;
+            vmmStatistics.numSamplesAfterLastSplit = 0;
+            sharedSplitMask                        = splitMask | maskExtend;
         }
     }
 
@@ -1861,6 +1736,186 @@ SplitComponents(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStati
 
         uint32_t workItemIndex   = atomicAdd(&queue->writeOffset, 1);
         workItems[workItemIndex] = workItem;
+    }
+}
+
+__global__ void MergeComponents(VMM *__restrict__ vmms,
+                                VMMStatistics *__restrict__ currentStatistics,
+                                SplitStatistics *__restrict__ splitStatistics,
+                                const SOASampleData samples,
+                                const uint32_t *__restrict__ leafNodeIndices,
+                                const uint32_t *__restrict__ numLeafNodes,
+                                const KDTreeNode *__restrict__ nodes)
+{
+    const float mergeThreshold = 0.025f;
+    __shared__ float mergeKappas[MAX_COMPONENTS];
+    __shared__ float mergeProducts[MAX_COMPONENTS];
+    __shared__ float3 mergeDirections[MAX_COMPONENTS];
+    __shared__ VMM sharedVMM;
+
+    __shared__ uint2 componentsToMerge;
+    __shared__ float minMergeCost;
+
+    if (blockIdx.x >= *numLeafNodes) return;
+
+    uint32_t threadIndex         = threadIdx.x;
+    uint32_t nodeIndex           = leafNodeIndices[blockIdx.x];
+    const KDTreeNode &node       = nodes[nodeIndex];
+    uint32_t vmmIndex            = node.vmmIndex;
+    uint32_t sampleCount         = node.count;
+    uint32_t offset              = node.offset;
+    VMMStatistics &vmmStatistics = currentStatistics[vmmIndex];
+
+    if (threadIndex == 0)
+    {
+        sharedVMM    = vmms[vmmIndex];
+        minMergeCost = FLT_MAX;
+    }
+    __syncthreads();
+
+    if (vmmStatistics.numSamplesAfterLastMerge < MIN_MERGE_SAMPLES) return;
+
+    // Merging
+    for (;;)
+    {
+        const uint32_t numComponents = sharedVMM.numComponents;
+
+        const uint32_t numPairs        = (numComponents * numComponents - numComponents) / 2;
+        const uint32_t numMergeBatches = (numPairs + blockDim.x - 1) / blockDim.x;
+
+        if (threadIndex < sharedVMM.numComponents)
+        {
+            float kappa = sharedVMM.kappas[threadIndex];
+            // if (blockIdx.x == 0)
+            // {
+            //     printf("weight: %f\n", sharedVMM.weights[threadIndex]);
+            //     printf("%u, thread: %u, %f\n", numComponents, threadIndex, kappa);
+            //     float3 dir = sharedVMM.ReadDirection(threadIndex);
+            //     printf("%f %f %f\n", dir.x, dir.y, dir.z);
+            // }
+            float normalization  = CalculateVMFNormalization(kappa);
+            float3 meanDirection = sharedVMM.ReadDirection(threadIndex);
+
+            float productKappa, productNormalization;
+            float3 productMeanDirection;
+            float scale = VMFProduct(kappa, normalization, meanDirection, kappa, normalization,
+                                     meanDirection, productKappa, productNormalization,
+                                     productMeanDirection);
+
+            mergeKappas[threadIndex]     = productKappa;
+            mergeProducts[threadIndex]   = scale;
+            mergeDirections[threadIndex] = productMeanDirection;
+        }
+
+        __syncthreads();
+
+        // TODO: I'm pretty sure they don't combine components that were just split?
+        for (uint32_t batch = 0; batch < numMergeBatches; batch++)
+        {
+            // X 0 1 2  3  4   5  6  7
+            // X X 8 9  10 11 12 13 14
+            // X X X 15 16 17 18 19 20
+
+            // Calculate the merge cost for the requisite pair
+            uint32_t indexInBatch = batch * blockDim.x + threadIndex;
+            float a               = 1 + (numComponents - 1) * 2;
+            uint32_t row          = 1 + uint32_t(a - sqrt(a * a - 8.f * indexInBatch)) / 2;
+
+            uint32_t newIndexInBatch = indexInBatch + row * (row + 1) / 2;
+
+            const uint32_t componentIndex0 = newIndexInBatch / numComponents;
+            const uint32_t componentIndex1 = newIndexInBatch % numComponents;
+
+            float chiSquareIJ = FLT_MAX;
+
+            if (indexInBatch < numPairs)
+            {
+                float kappa0          = sharedVMM.kappas[componentIndex0];
+                float normalization0  = CalculateVMFNormalization(kappa0);
+                float kappa1          = sharedVMM.kappas[componentIndex1];
+                float normalization1  = CalculateVMFNormalization(kappa1);
+                float weight0         = sharedVMM.weights[componentIndex0];
+                float weight1         = sharedVMM.weights[componentIndex1];
+                float3 meanDirection0 = sharedVMM.ReadDirection(componentIndex0);
+                float3 meanDirection1 = sharedVMM.ReadDirection(componentIndex1);
+
+                float kappa00         = mergeKappas[componentIndex0];
+                float normalization00 = CalculateVMFNormalization(kappa00);
+                float scale00         = mergeProducts[componentIndex0];
+                float3 dir00          = mergeDirections[componentIndex0];
+
+                float kappa11         = mergeKappas[componentIndex1];
+                float normalization11 = CalculateVMFNormalization(kappa11);
+                float scale11         = mergeProducts[componentIndex1];
+                float3 dir11          = mergeDirections[componentIndex1];
+
+                float weight         = weight0 + weight1;
+                float3 meanDirection = weight0 * KappaToMeanCosine(kappa0) * meanDirection0 +
+                                       weight1 * KappaToMeanCosine(kappa1) * meanDirection1;
+                meanDirection /= weight;
+                float meanCosine = dot(meanDirection, meanDirection);
+                float kappa      = 0.f;
+
+                if (meanCosine > 0.f)
+                {
+                    meanCosine = sqrt(meanCosine);
+                    kappa      = MeanCosineToKappa(meanCosine);
+                    meanDirection /= meanCosine;
+                }
+                else
+                {
+                    meanDirection = meanDirection0;
+                }
+
+                float normalization = CalculateVMFNormalization(kappa);
+
+                float kappa01, normalization01;
+                float3 dir01;
+                float scale01 =
+                    VMFProduct(kappa0, normalization0, meanDirection0, kappa1, normalization1,
+                               meanDirection1, kappa01, normalization01, dir01);
+
+                chiSquareIJ = 0.f;
+                chiSquareIJ +=
+                    (weight0 * weight0 / weight) *
+                    (scale00 * VMFIntegratedDivision(dir00, kappa00, normalization00,
+                                                     -meanDirection, kappa, normalization));
+                chiSquareIJ +=
+                    (weight1 * weight1 / weight) *
+                    (scale11 * VMFIntegratedDivision(dir11, kappa11, normalization11,
+                                                     -meanDirection, kappa, normalization));
+                chiSquareIJ +=
+                    2.0f * (weight0 * weight1 / weight) *
+                    (scale01 * VMFIntegratedDivision(dir01, kappa01, normalization01,
+                                                     -meanDirection, kappa, normalization));
+                chiSquareIJ -= weight;
+
+                if (blockIdx.x == 0)
+                {
+                    // printf("%u, thread: %u, %u %u %f\n", numComponents, threadIndex,
+                    //        componentIndex0, componentIndex1, chiSquareIJ);
+                }
+            }
+
+            float minChi = WarpReduceMin(chiSquareIJ);
+            minChi       = WarpReadLaneFirst(minChi);
+            if (minChi == chiSquareIJ && minChi < minMergeCost)
+            {
+                minMergeCost        = minChi;
+                componentsToMerge.x = componentIndex0;
+                componentsToMerge.y = componentIndex1;
+            }
+            __syncthreads();
+        }
+
+        if (minMergeCost < mergeThreshold)
+        {
+            printf("good: %f %u %u\n", minMergeCost, componentsToMerge.x, componentsToMerge.y);
+        }
+        else
+        {
+            break;
+        }
     }
 }
 
@@ -2613,6 +2668,9 @@ void test()
     PartialUpdateMixture<<<256, blockSize>>>(vmms, vmmStatistics, soaSampleData,
                                              leafNodeIndices, numLeafNodes, nodes, vmmQueue,
                                              vmmWorkItems);
+
+    MergeComponents<<<256, blockSize>>>(vmms, vmmStatistics, splitStatistics, soaSampleData,
+                                        leafNodeIndices, numLeafNodes, nodes);
 
     nvtxRangePop();
     cudaEventRecord(vmmStop);
