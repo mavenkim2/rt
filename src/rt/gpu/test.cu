@@ -813,6 +813,25 @@ inline __device__ float3 Map2DTo3D(float2 vec2D)
     return vec3D;
 }
 
+inline __device__ float2 Map3DTo2D(float3 vec3D)
+{
+    float2 vec2D = make_float2(0.f);
+
+    float cosTheta = fmaxf(-1.0f, fminf(1.0f, vec3D.z));
+    float alpha    = acos(cosTheta);
+    float sinAlpha = sqrt(1 - fminf(cosTheta * cosTheta, 1.f));
+    float inv_sinc = sinAlpha != 0.f ? alpha / sinAlpha : 0.f;
+
+    vec2D.x = alpha > 0.f ? vec3D.x * inv_sinc : vec2D.x;
+    vec2D.y = alpha > 0.f ? vec3D.y * inv_sinc : vec2D.y;
+    return vec2D;
+}
+
+inline __device__ float3 FromLocal(float3 t0, float3 t1, float3 t2, float3 x)
+{
+    return make_float3(dot(t0, x), dot(t1, x), dot(t2, x));
+}
+
 struct VMM
 {
     float kappas[MAX_COMPONENTS];
@@ -1758,13 +1777,13 @@ __global__ void MergeComponents(VMM *__restrict__ vmms,
 
     if (blockIdx.x >= *numLeafNodes) return;
 
-    uint32_t threadIndex         = threadIdx.x;
-    uint32_t nodeIndex           = leafNodeIndices[blockIdx.x];
-    const KDTreeNode &node       = nodes[nodeIndex];
-    uint32_t vmmIndex            = node.vmmIndex;
-    uint32_t sampleCount         = node.count;
-    uint32_t offset              = node.offset;
-    VMMStatistics &vmmStatistics = currentStatistics[vmmIndex];
+    uint32_t threadIndex               = threadIdx.x;
+    uint32_t nodeIndex                 = leafNodeIndices[blockIdx.x];
+    const KDTreeNode &node             = nodes[nodeIndex];
+    uint32_t vmmIndex                  = node.vmmIndex;
+    uint32_t sampleCount               = node.count;
+    uint32_t offset                    = node.offset;
+    const VMMStatistics &vmmStatistics = currentStatistics[vmmIndex];
 
     if (threadIndex == 0)
     {
@@ -1889,12 +1908,6 @@ __global__ void MergeComponents(VMM *__restrict__ vmms,
                     (scale01 * VMFIntegratedDivision(dir01, kappa01, normalization01,
                                                      -meanDirection, kappa, normalization));
                 chiSquareIJ -= weight;
-
-                if (blockIdx.x == 0)
-                {
-                    // printf("%u, thread: %u, %u %u %f\n", numComponents, threadIndex,
-                    //        componentIndex0, componentIndex1, chiSquareIJ);
-                }
             }
 
             float minChi = WarpReduceMin(chiSquareIJ);
@@ -1908,14 +1921,167 @@ __global__ void MergeComponents(VMM *__restrict__ vmms,
             __syncthreads();
         }
 
+        // if (threadIndex == 0)
+        // {
+        //     printf("%f\n", minMergeCost);
+        // }
         if (minMergeCost < mergeThreshold)
         {
             printf("good: %f %u %u\n", minMergeCost, componentsToMerge.x, componentsToMerge.y);
+
+            // Merge components
+            if (threadIndex == 0)
+            {
+                float weightI, weightJ, weightK;
+                float3 meanDirectionI, meanDirectionJ, meanDirectionK;
+                const uint32_t index0 = componentsToMerge.x;
+                const uint32_t index1 = componentsToMerge.y;
+
+                // Update VMM
+                {
+
+                    const float weight0 = sharedVMM.weights[index0];
+                    const float weight1 = sharedVMM.weights[index1];
+                    weightI             = weight0;
+                    weightJ             = weight1;
+
+                    const float meanCosine0 = KappaToMeanCosine(sharedVMM.kappas[index0]);
+                    const float meanCosine1 = KappaToMeanCosine(sharedVMM.kappas[index1]);
+
+                    float kappa  = 0.0f;
+                    float weight = weight0 + weight1;
+                    weightK      = weight;
+
+                    meanDirectionI = sharedVMM.ReadDirection(index0);
+                    meanDirectionJ = sharedVMM.ReadDirection(index1);
+
+                    float3 meanDirection = weight0 * meanCosine0 * meanDirectionI +
+                                           weight1 * meanCosine1 * meanDirectionJ;
+
+                    meanDirection /= weight;
+
+                    float meanCosine = dot(meanDirection, meanDirection);
+
+                    if (meanCosine > 0.0f)
+                    {
+                        meanCosine = sqrt(meanCosine);
+
+                        kappa = MeanCosineToKappa(meanCosine);
+                        kappa = kappa < 1e-3f ? 0.f : kappa;
+
+                        meanDirection /= meanCosine;
+                    }
+                    else
+                    {
+                        meanDirection = sharedVMM.ReadDirection(index0);
+                    }
+
+                    sharedVMM.weights[index0] = weight;
+                    sharedVMM.kappas[index0]  = kappa;
+
+                    meanDirectionK = meanDirection;
+                    sharedVMM.WriteDirection(index0, meanDirection);
+
+                    // TODO: parallax distances
+                    // const float distance0 = _distances[tmpIdx0.quot][tmpIdx0.rem];
+                    // const float distance1 = _distances[tmpIdx1.quot][tmpIdx1.rem];
+
+                    // float newDistance = weight0 * distance0 + weight1 * distance1;
+                    // newDistance /= (weight0 + weight1);
+
+                    // _distances[tmpIdx0.quot][tmpIdx0.rem] = newDistance;
+
+                    uint32_t last = sharedVMM.numComponents - 1;
+                    sharedVMM.UpdateComponent(index1, sharedVMM.kappas[last],
+                                              sharedVMM.ReadDirection(last),
+                                              sharedVMM.weights[last]);
+                    sharedVMM.UpdateComponent(last, 0.f, make_float3(0.f), 0.f);
+                    sharedVMM.numComponents -= 1;
+                }
+
+                // Update split statistics
+                const uint32_t last = sharedVMM.numComponents;
+                {
+                    SplitStatistics &splitStats = splitStatistics[vmmIndex];
+
+                    float3 frame0, frame1;
+                    BuildOrthonormalBasis(meanDirectionK, frame0, frame1);
+
+                    float2 meanDirection2DItoK =
+                        Map3DTo2D(FromLocal(frame0, frame1, meanDirectionK, meanDirectionI));
+                    float2 meanDirection2DJtoK =
+                        Map3DTo2D(FromLocal(frame0, frame1, meanDirectionK, meanDirectionJ));
+
+                    const float inv_weightK = (weightK > 0.f) ? 1.f / weightK : 1.f;
+
+                    const float sumWeightsI = splitStats.sumWeights[index0];
+                    const float sumWeightsJ = splitStats.sumWeights[index1];
+                    const float sumWeightsK = sumWeightsI + sumWeightsJ;
+
+                    const float3 covarianceI =
+                        (sumWeightsI > 0.f) ? splitStats.covarianceTotals[index0] / sumWeightsI
+                                            : make_float3(0.f);
+                    const float3 covarianceJ =
+                        (sumWeightsJ > 0.f) ? splitStats.covarianceTotals[index1] / sumWeightsJ
+                                            : make_float3(0.f);
+
+                    const float2 meanDirectionK2D = make_float2(0.f);
+                    float3 meanII = make_float3(meanDirection2DItoK.x * meanDirection2DItoK.x,
+                                                meanDirection2DItoK.y * meanDirection2DItoK.y,
+                                                meanDirection2DItoK.x * meanDirection2DItoK.y);
+                    float3 meanJJ = make_float3(meanDirection2DJtoK.x * meanDirection2DJtoK.x,
+                                                meanDirection2DJtoK.y * meanDirection2DJtoK.y,
+                                                meanDirection2DJtoK.x * meanDirection2DJtoK.y);
+                    float3 covarianceK = weightI * covarianceI + weightI * meanII +
+                                         weightJ * covarianceJ + weightJ * meanJJ;
+                    covarianceK *= inv_weightK;
+                    const float3 sampleCovarianceK = covarianceK * sumWeightsK;
+
+                    // TODO: is this ever used?
+                    // const float sumAssignedSamplesK =
+                    // sumAssignedSamples[tmpI.quot][tmpI.rem] +
+                    //                                   sumAssignedSamples[tmpJ.quot][tmpJ.rem];
+
+                    const float numSamplesK =
+                        inv_weightK * (weightI * splitStats.numSamples[index0] +
+                                       weightJ * splitStats.numSamples[index1]);
+                    const float chiSquareMCEstimatesK = splitStats.chiSquareTotals[index0] +
+                                                        splitStats.chiSquareTotals[index1];
+
+                    splitStats.SetComponent(index0, sampleCovarianceK, chiSquareMCEstimatesK,
+                                            sumWeightsK, numSamplesK);
+                    // sumAssignedSamples[tmpI.quot][tmpI.rem]   = sumAssignedSamplesK;
+
+                    splitStats.SetComponent(index1, splitStats.covarianceTotals[last],
+                                            splitStats.chiSquareTotals[last],
+                                            splitStats.sumWeights[last],
+                                            splitStats.numSamples[last]);
+
+                    splitStats.SetComponent(last, make_float3(0.f), 0.f, 0.f, 0);
+                }
+
+                // Update vmm statistics
+                {
+                    VMMStatistics &vmmStatistics = currentStatistics[vmmIndex];
+                    vmmStatistics.sumWeightedDirections[index0] +=
+                        vmmStatistics.sumWeightedDirections[index1];
+                    vmmStatistics.sumWeights[index0] += vmmStatistics.sumWeights[index1];
+                    // sumOfDistanceWeightes[tmpIdx0.quot][tmpIdx0.rem] +=
+                    //     sumOfDistanceWeightes[tmpIdx1.quot][tmpIdx1.rem];
+
+                    vmmStatistics.sumWeightedDirections[index1] =
+                        vmmStatistics.sumWeightedDirections[last];
+                    vmmStatistics.sumWeights[index1] = vmmStatistics.sumWeights[last];
+                    // sumOfDistanceWeightes[tmpIdx1.quot][tmpIdx1.rem] =
+                    //     sumOfDistanceWeightes[tmpIdx2.quot][tmpIdx2.rem];
+
+                    // reseting the statistics of the last component
+                    vmmStatistics.SetComponent(last, 0.f, make_float3(0.f));
+                    // sumOfDistanceWeightes[tmpIdx2.quot][tmpIdx2.rem]     = 0.0f;
+                }
+            }
         }
-        else
-        {
-            break;
-        }
+        else break;
     }
 }
 
