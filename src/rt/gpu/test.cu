@@ -349,6 +349,15 @@ __device__ T WarpReadLaneAt(T val, uint32_t thread)
     return val;
 }
 
+template <>
+__device__ float3 WarpReadLaneAt(float3 val, uint32_t thread)
+{
+    val.x = __shfl_sync(0xffffffff, val.x, thread);
+    val.y = __shfl_sync(0xffffffff, val.y, thread);
+    val.z = __shfl_sync(0xffffffff, val.z, thread);
+    return val;
+}
+
 template <typename T>
 __device__ T WarpReadLaneFirst(T val)
 {
@@ -501,6 +510,7 @@ struct SOASampleData
 
     float *weights;
     float *pdfs;
+    float *distances;
 
     __device__ SOASampleDataRef operator[](uint32_t index)
     {
@@ -839,6 +849,7 @@ struct VMM
     float directionY[MAX_COMPONENTS];
     float directionZ[MAX_COMPONENTS];
     float weights[MAX_COMPONENTS];
+    float distances[MAX_COMPONENTS];
 
     uint32_t numComponents;
 
@@ -902,12 +913,21 @@ struct VMM
         directionZ[componentIndex] = dir.z;
     }
 
-    __device__ void UpdateComponent(uint32_t componentIndex, float kappa, float3 dir,
-                                    float weight)
+    __device__ void UpdateComponent_(uint32_t componentIndex, float kappa, float3 dir,
+                                     float weight)
     {
         kappas[componentIndex] = kappa;
         WriteDirection(componentIndex, dir);
         weights[componentIndex] = weight;
+    }
+
+    __device__ void UpdateComponent(uint32_t componentIndex, float kappa, float3 dir,
+                                    float weight, float distance)
+    {
+        kappas[componentIndex] = kappa;
+        WriteDirection(componentIndex, dir);
+        weights[componentIndex]   = weight;
+        distances[componentIndex] = distance;
     }
 };
 
@@ -981,6 +1001,7 @@ struct VMMStatistics
 {
     float sumSampleWeights;
     float sumWeights[MAX_COMPONENTS];
+    float sumOfDistanceWeights[MAX_COMPONENTS];
     float3 sumWeightedDirections[MAX_COMPONENTS];
 
     // TODO: decay?
@@ -1210,14 +1231,6 @@ UpdateMixtureParameters(VMM &sharedVMM, VMMStatistics &sharedStatistics,
                 V = SoftAssignment(sharedVMM, sampleDirection, statistics.sumWeights);
             }
 
-            if (masked && iteration == 1)
-            {
-                if (threadIndex < MAX_COMPONENTS)
-                {
-                    // printf("V: %f\n", sharedVMM.weights[threadIndex]);
-                }
-            }
-
             hasData                     = V > 0.f;
             float invV                  = hasData ? 1.f / V : 0.f;
             float weightedLogLikelihood = hasData ? sampleWeight * __logf(V) : 0.f;
@@ -1430,7 +1443,6 @@ UpdateMixtureHelper(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentS
         UpdateMixtureParameters(sharedVMM, sharedStatistics, previousStatistics, samples.dir,
                                 samples.weights, sumSampleWeights, weightedLogLikelihood,
                                 offset, sampleCount);
-
         __syncthreads();
 
         AddVMMStatistics(previousStatistics, sharedStatistics);
@@ -1712,11 +1724,13 @@ SplitComponents(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStati
                 float meanCosine0 = meanCosine / abs(dot(meanDirection0, meanDirection));
                 meanCosine0       = min(meanCosine0, maxMeanCosine);
 
-                float kappa  = MeanCosineToKappa(meanCosine0);
-                float weight = vmm.weights[componentIndex] * 0.5f;
+                float kappa    = MeanCosineToKappa(meanCosine0);
+                float weight   = vmm.weights[componentIndex] * 0.5f;
+                float distance = vmm.distances[componentIndex];
 
-                vmm.UpdateComponent(componentIndex, kappa, meanDirection0, weight);
-                vmm.UpdateComponent(newComponentIndex, kappa, meanDirection1, weight);
+                vmm.UpdateComponent_(componentIndex, kappa, meanDirection0, weight);
+                vmm.UpdateComponent(newComponentIndex, kappa, meanDirection1, weight,
+                                    distance);
 
                 splitStats.SetComponent(componentIndex, make_float3(0.f), 0.f, 0.f, 0);
                 splitStats.SetComponent(newComponentIndex, make_float3(0.f), 0.f, 0.f, 0);
@@ -1881,6 +1895,12 @@ __global__ void MergeComponents(VMM *__restrict__ vmms,
                     kappa      = MeanCosineToKappa(meanCosine);
                     meanDirection /= meanCosine;
                 }
+
+                // what's left?
+                //     fitting vs updating distinction for both statistics and the tree
+                //     handling distances for parallax
+                //     runtime importance sampling, etc
+
                 else
                 {
                     meanDirection = meanDirection0;
@@ -1982,20 +2002,17 @@ __global__ void MergeComponents(VMM *__restrict__ vmms,
                     meanDirectionK = meanDirection;
                     sharedVMM.WriteDirection(index0, meanDirection);
 
-                    // TODO: parallax distances
-                    // const float distance0 = _distances[tmpIdx0.quot][tmpIdx0.rem];
-                    // const float distance1 = _distances[tmpIdx1.quot][tmpIdx1.rem];
+                    const float distance0 = sharedVMM.distances[index0];
+                    const float distance1 = sharedVMM.distances[index1];
 
-                    // float newDistance = weight0 * distance0 + weight1 * distance1;
-                    // newDistance /= (weight0 + weight1);
-
-                    // _distances[tmpIdx0.quot][tmpIdx0.rem] = newDistance;
+                    float newDistance = weight0 * distance0 + weight1 * distance1;
+                    newDistance /= (weight0 + weight1);
 
                     uint32_t last = sharedVMM.numComponents - 1;
                     sharedVMM.UpdateComponent(index1, sharedVMM.kappas[last],
                                               sharedVMM.ReadDirection(last),
-                                              sharedVMM.weights[last]);
-                    sharedVMM.UpdateComponent(last, 0.f, make_float3(0.f), 0.f);
+                                              sharedVMM.weights[last], newDistance);
+                    sharedVMM.UpdateComponent(last, 0.f, make_float3(0.f), 0.f, 0.f);
                     sharedVMM.numComponents -= 1;
                 }
 
@@ -2082,6 +2099,87 @@ __global__ void MergeComponents(VMM *__restrict__ vmms,
             }
         }
         else break;
+    }
+
+    if (threadIndex == 0)
+    {
+        VMMStatistics &vmmStatistics           = currentStatistics[vmmIndex];
+        vmmStatistics.numSamplesAfterLastMerge = 0;
+    }
+}
+
+__global__ void InitComponentDistances(VMM *vmms, KDTreeNode *nodes,
+                                       VMMStatistics *vmmStatistics, SOASampleData samples,
+                                       const uint32_t *__restrict__ leafNodeIndices,
+                                       const uint32_t *__restrict__ numLeafNodes)
+{
+    __shared__ float batchDistances[MAX_COMPONENTS];
+    __shared__ float batchSumWeights[MAX_COMPONENTS];
+
+    if (blockIdx.x >= *numLeafNodes) return;
+
+    if (threadIdx.x < MAX_COMPONENTS)
+    {
+        batchDistances[threadIdx.x]  = 0.f;
+        batchSumWeights[threadIdx.x] = 0.f;
+    }
+
+    __syncthreads();
+
+    uint32_t nodeIndex     = leafNodeIndices[blockIdx.x];
+    const KDTreeNode &node = nodes[nodeIndex];
+    uint32_t sampleCount   = node.count;
+    uint32_t sampleOffset  = node.offset;
+    uint32_t vmmIndex      = node.vmmIndex;
+
+    const VMM &vmm = vmms[vmmIndex];
+
+    uint32_t numComponents = vmm.numComponents;
+    float sampleDistance;
+
+    const uint32_t numSampleBatches = (sampleCount + blockDim.x - 1) / blockDim.x;
+
+    for (uint32_t batch = 0; batch < numSampleBatches; batch++)
+    {
+        VMMStatistics statistics;
+        uint32_t sampleIndex   = threadIdx.x + blockDim.x * batch;
+        bool hasData           = sampleIndex < sampleCount;
+        float V                = 0.f;
+        float3 sampleDirection = make_float3(0.f);
+        float sampleWeight     = 1.f;
+        float sampleDistance   = 0.f;
+
+        if (hasData)
+        {
+            sampleDirection = samples.dir[sampleIndex + sampleOffset];
+            sampleWeight    = samples.weights[sampleIndex + sampleOffset];
+            sampleDistance  = 1.f / samples.distances[sampleIndex + sampleOffset];
+            V               = SoftAssignment(vmm, sampleDirection, statistics.sumWeights);
+        }
+
+        hasData = V > 0.f;
+
+        for (uint32_t componentIndex = 0; componentIndex < vmm.numComponents; componentIndex++)
+        {
+            float weight = vmm.weights[componentIndex] > FLT_EPSILON
+                               ? sampleWeight * statistics.sumWeights[componentIndex] *
+                                     statistics.sumWeights[componentIndex] /
+                                     (vmm.weights[componentIndex] * V)
+                               : 0.f;
+
+            atomicAdd(&batchDistances[componentIndex], weight * sampleDistance);
+            atomicAdd(&batchSumWeights[componentIndex], weight);
+        }
+    }
+
+    if (threadIdx.x < MAX_COMPONENTS)
+    {
+        vmmStatistics[vmmIndex].sumOfDistanceWeights[threadIdx.x] =
+            batchSumWeights[threadIdx.x];
+        vmms[vmmIndex].distances[threadIdx.x] =
+            batchDistances[threadIdx.x] > FLT_EPSILON
+                ? batchSumWeights[threadIdx.x] / batchDistances[threadIdx.x]
+                : 0.f;
     }
 }
 
@@ -2296,8 +2394,8 @@ __global__ void CalculateSplitLocations(LevelInfo *info, KDTreeNode *nodes,
 
 __global__ void BeginLevel(LevelInfo *levelInfo, Queue *queue, Queue *queue2)
 {
-    // printf("level %u %u %u\n", levelInfo->start, levelInfo->count, levelInfo->childCount);
-    // printf("queue: %u\n", queue->writeOffset);
+    // printf("level %u %u %u\n", levelInfo->start, levelInfo->count,
+    // levelInfo->childCount); printf("queue: %u\n", queue->writeOffset);
 
     levelInfo->start += levelInfo->count;
     levelInfo->count      = levelInfo->childCount;
@@ -2375,7 +2473,8 @@ __global__ void CreateWorkItems(Queue *reduceQueue, WorkItem *reduceWorkItems,
         if (split)
         {
             partitionStart = atomicAdd(&partitionQueue->writeOffset, numWorkItems);
-            // node.SetChildIndex(info->start + info->count + atomicAdd(&info->childCount, 2));
+            // node.SetChildIndex(info->start + info->count + atomicAdd(&info->childCount,
+            // 2));
         }
         else
         {
@@ -2619,7 +2718,8 @@ __global__ void PrintStatistics(SampleStatistics *stats, KDTreeNode *nodes, Leve
     //     uint3 boundsMinUint = sampleStatistics->bounds.GetBoundsMinUint();
     //     uint3 boundsMaxUint = sampleStatistics->bounds.GetBoundsMaxUint();
     //
-    //     printf("par: %u %u %f\n", node->parentIndex, nodes[node->parentIndex].GetSplitDim(),
+    //     printf("par: %u %u %f\n", node->parentIndex,
+    //     nodes[node->parentIndex].GetSplitDim(),
     //            nodes[node->parentIndex].splitPos);
     //     printf("node: %u %u %f\n", i, node->GetSplitDim(), node->splitPos);
     //     printf("why? %u %u %u %u %u %u\n", boundsMinUint.x, boundsMinUint.y,
@@ -2629,8 +2729,8 @@ __global__ void PrintStatistics(SampleStatistics *stats, KDTreeNode *nodes, Leve
     //     printf("off count: %u %u,  bounds: %f %f %f %f %f %f\n mean: %lld %lld %lld "
     //            "var: %lld %lld %lld, %u\n\n",
     //            node->offset, node->count, boundsMin.x, boundsMin.y, boundsMin.z,
-    //            boundsMax.x, boundsMax.y, boundsMax.z, mean.x, mean.y, mean.z, variance.x,
-    //            variance.y, variance.z, sampleStatistics->numSamples);
+    //            boundsMax.x, boundsMax.y, boundsMax.z, mean.x, mean.y, mean.z,
+    //            variance.x, variance.y, variance.z, sampleStatistics->numSamples);
     // }
 }
 
@@ -2715,11 +2815,12 @@ void test()
     float *samplePosY = allocator.Alloc<float>(numSamples, 4u);
     float *samplePosZ = allocator.Alloc<float>(numSamples, 4u);
 
-    float *sampleDirX    = allocator.Alloc<float>(numSamples, 128u);
-    float *sampleDirY    = allocator.Alloc<float>(numSamples, 4u);
-    float *sampleDirZ    = allocator.Alloc<float>(numSamples, 4u);
-    float *sampleWeights = allocator.Alloc<float>(numSamples, 4u);
-    float *samplePdfs    = allocator.Alloc<float>(numSamples, 4u);
+    float *sampleDirX      = allocator.Alloc<float>(numSamples, 128u);
+    float *sampleDirY      = allocator.Alloc<float>(numSamples, 4u);
+    float *sampleDirZ      = allocator.Alloc<float>(numSamples, 4u);
+    float *sampleWeights   = allocator.Alloc<float>(numSamples, 4u);
+    float *samplePdfs      = allocator.Alloc<float>(numSamples, 4u);
+    float *sampleDistances = allocator.Alloc<float>(numSamples, 4u);
 
     SOAFloat3 samplePositions  = {samplePosX, samplePosY, samplePosZ};
     SOAFloat3 sampleDirections = {sampleDirX, sampleDirY, sampleDirZ};
@@ -2805,10 +2906,11 @@ void test()
 
     // VMM update
     SOASampleData soaSampleData;
-    soaSampleData.pos     = samplePositions;
-    soaSampleData.dir     = sampleDirections;
-    soaSampleData.weights = sampleWeights;
-    soaSampleData.pdfs    = samplePdfs;
+    soaSampleData.pos       = samplePositions;
+    soaSampleData.dir       = sampleDirections;
+    soaSampleData.weights   = sampleWeights;
+    soaSampleData.pdfs      = samplePdfs;
+    soaSampleData.distances = sampleDistances;
 
     cudaEvent_t vmmStart, vmmStop;
     cudaEventCreate(&vmmStart);
@@ -2821,22 +2923,22 @@ void test()
                                                  newSampleIndices, nodes, samples,
                                                  soaSampleData);
 
-    UpdateMixture<<<256, blockSize>>>(vmms, vmmStatistics, soaSampleData, leafNodeIndices,
-                                      numLeafNodes, nodes);
+    UpdateMixture<<<256, 512>>>(vmms, vmmStatistics, soaSampleData, leafNodeIndices,
+                                numLeafNodes, nodes);
 
-    UpdateSplitStatistics<<<numBlocks, blockSize>>>(vmms, vmmStatistics, splitStatistics,
-                                                    soaSampleData, leafNodeIndices,
-                                                    numLeafNodes, nodes);
-    SplitComponents<<<(maxNumNodes + WARP_SIZE - 1) / WARP_SIZE, WARP_SIZE>>>(
-        vmms, vmmStatistics, splitStatistics, soaSampleData, leafNodeIndices, numLeafNodes,
-        nodes, vmmQueue, vmmWorkItems);
-
-    PartialUpdateMixture<<<256, blockSize>>>(vmms, vmmStatistics, soaSampleData,
-                                             leafNodeIndices, numLeafNodes, nodes, vmmQueue,
-                                             vmmWorkItems);
-
-    MergeComponents<<<256, blockSize>>>(vmms, vmmStatistics, splitStatistics, soaSampleData,
-                                        leafNodeIndices, numLeafNodes, nodes);
+    // UpdateSplitStatistics<<<numBlocks, blockSize>>>(vmms, vmmStatistics, splitStatistics,
+    //                                                 soaSampleData, leafNodeIndices,
+    //                                                 numLeafNodes, nodes);
+    // SplitComponents<<<(maxNumNodes + WARP_SIZE - 1) / WARP_SIZE, WARP_SIZE>>>(
+    //     vmms, vmmStatistics, splitStatistics, soaSampleData, leafNodeIndices, numLeafNodes,
+    //     nodes, vmmQueue, vmmWorkItems);
+    //
+    // PartialUpdateMixture<<<256, blockSize>>>(vmms, vmmStatistics, soaSampleData,
+    //                                          leafNodeIndices, numLeafNodes, nodes, vmmQueue,
+    //                                          vmmWorkItems);
+    //
+    // MergeComponents<<<256, blockSize>>>(vmms, vmmStatistics, splitStatistics, soaSampleData,
+    //                                     leafNodeIndices, numLeafNodes, nodes);
 
     nvtxRangePop();
     cudaEventRecord(vmmStop);
