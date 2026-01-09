@@ -881,6 +881,7 @@ struct VMM
             }
 
             WriteDirection(n, uniformDirection);
+            distances[n] = 0.f;
             if (n < numComponents)
             {
                 kappas[n]  = kappa;
@@ -2108,10 +2109,10 @@ __global__ void MergeComponents(VMM *__restrict__ vmms,
     }
 }
 
-__global__ void InitComponentDistances(VMM *vmms, KDTreeNode *nodes,
-                                       VMMStatistics *vmmStatistics, SOASampleData samples,
-                                       const uint32_t *__restrict__ leafNodeIndices,
-                                       const uint32_t *__restrict__ numLeafNodes)
+__global__ void UpdateComponentDistances(VMM *vmms, KDTreeNode *nodes,
+                                         VMMStatistics *vmmStatistics, SOASampleData samples,
+                                         const uint32_t *__restrict__ leafNodeIndices,
+                                         const uint32_t *__restrict__ numLeafNodes)
 {
     __shared__ float batchDistances[MAX_COMPONENTS];
     __shared__ float batchSumWeights[MAX_COMPONENTS];
@@ -2174,12 +2175,100 @@ __global__ void InitComponentDistances(VMM *vmms, KDTreeNode *nodes,
 
     if (threadIdx.x < MAX_COMPONENTS)
     {
-        vmmStatistics[vmmIndex].sumOfDistanceWeights[threadIdx.x] =
-            batchSumWeights[threadIdx.x];
-        vmms[vmmIndex].distances[threadIdx.x] =
-            batchDistances[threadIdx.x] > FLT_EPSILON
-                ? batchSumWeights[threadIdx.x] / batchDistances[threadIdx.x]
+        VMMStatistics &vmmStats = vmmStatistics[vmmIndex];
+        VMM &vmm                = vmms[vmmIndex];
+
+        // NOTE: this assumes that the distances are 0 initialized
+        float sumInverseDistances = batchDistances[threadIdx.x];
+        sumInverseDistances +=
+            vmm.distances[threadIdx.x] > 0.0f
+                ? vmmStatistics[vmmIndex].sumOfDistanceWeights[threadIdx.x] /
+                      vmm.distances[threadIdx.x]
                 : 0.f;
+
+        vmmStats.sumOfDistanceWeights[threadIdx.x] += batchSumWeights[threadIdx.x];
+        vmm.distances[threadIdx.x] =
+            vmmStats.sumOfDistanceWeights[threadIdx.x] / sumInverseDistances;
+
+        // vmmStatistics[vmmIndex].sumOfDistanceWeights[threadIdx.x] =
+        //     batchSumWeights[threadIdx.x];
+        // vmm.distances[threadIdx.x] =
+        //     batchDistances[threadIdx.x] > FLT_EPSILON
+        //         ? batchSumWeights[threadIdx.x] / batchDistances[threadIdx.x]
+        //         : 0.f;
+    }
+}
+
+// Reprojects samples to VMM
+__global__ void ReprojectSamples(SampleStatistics *statistics, SOASampleData samples,
+                                 const uint32_t *__restrict__ leafNodeIndices,
+                                 const uint32_t *__restrict__ numLeafNodes,
+                                 const KDTreeNode *__restrict__ nodes, const Bounds3f *bounds)
+
+{
+    if (blockIdx.x >= *numLeafNodes) return;
+
+    uint32_t nodeIndex     = leafNodeIndices[blockIdx.x];
+    const KDTreeNode &node = nodes[nodeIndex];
+    uint32_t sampleCount   = node.count;
+    uint32_t sampleOffset  = node.offset;
+    uint32_t vmmIndex      = node.vmmIndex;
+
+    SampleStatistics &sampleStatistics = statistics[nodeIndex];
+
+    Bounds3f scaledBounds = nodeIndex == 0 ? *bounds : statistics[node.parentIndex].bounds;
+    float3 center         = scaledBounds.GetCenter();
+    scaledBounds.SetBoundsMin(center + (scaledBounds.GetBoundsMin() - center) *
+                                           INTEGER_SAMPLE_STATS_BOUND_SCALE);
+    scaledBounds.SetBoundsMax(center + (scaledBounds.GetBoundsMax() - center) *
+                                           INTEGER_SAMPLE_STATS_BOUND_SCALE);
+
+    center            = scaledBounds.GetCenter();
+    float3 halfExtent = scaledBounds.GetHalfExtent();
+    float3 sampleMean, sampleVariance;
+    sampleStatistics.ConvertToFloat(center, halfExtent, sampleMean, sampleVariance);
+
+    float norm        = dot(sampleVariance, sampleVariance);
+    norm              = max(FLT_EPSILON, norm);
+    float minDistance = sqrt(norm);
+    minDistance       = 3.f * 3.f * sqrt(minDistance);
+
+    const uint32_t numSampleBatches = (sampleCount + blockDim.x - 1) / blockDim.x;
+    for (uint32_t batch = 0; batch < numSampleBatches; batch++)
+    {
+        uint32_t sampleIndex = threadIdx.x + blockDim.x * batch;
+
+        float sampleDistance = samples.distances[sampleIndex + sampleOffset];
+
+        if (isinf(sampleDistance))
+        {
+            samples.pos[sampleIndex + sampleOffset] = sampleMean;
+            continue;
+        }
+        else if (!(sampleDistance > 0.0f))
+        {
+            continue;
+        }
+
+        const float distance        = fmaxf(minDistance, sampleDistance);
+        const float3 samplePosition = samples.pos[sampleIndex + sampleOffset];
+        float3 sampleDirection      = samples.dir[sampleIndex + sampleOffset];
+
+        const float3 originPosition = samplePosition + sampleDirection * distance;
+        float3 newDirection         = originPosition - sampleMean;
+        const float newDistance     = length(newDirection);
+
+        // TODO: are these ever used again?
+        // sample.position.x = pivotPoint[0];
+        // sample.position.y = pivotPoint[1];
+        // sample.position.z = pivotPoint[2];
+
+        newDirection =
+            newDistance > FLT_EPSILON ? newDirection / newDistance : sampleDirection;
+        samples.distances[sampleIndex + sampleOffset] =
+            newDistance > FLT_EPSILON ? newDistance : distance;
+        float3 qdirection = make_float3(newDirection.x, newDirection.y, newDirection.z);
+        samples.dir[sampleIndex + sampleOffset] = qdirection;
     }
 }
 
