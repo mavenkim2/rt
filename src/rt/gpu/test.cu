@@ -1093,11 +1093,11 @@ struct VMMMapState
     uint32_t iteration;
 };
 
-__global__ void InitializeSamples(SampleStatistics *statistics, Bounds3f *sampleBounds,
-                                  LevelInfo *levelInfo, KDTreeNode *nodes, SampleData *samples,
-                                  SOAFloat3 sampleDirections, SOAFloat3 samplePositions,
-                                  uint32_t *__restrict__ sampleIndices, uint32_t numSamples,
-                                  float3 sceneMin, float3 sceneMax)
+extern "C" __global__ void
+InitializeSamples(SampleStatistics *statistics, Bounds3f *sampleBounds, LevelInfo *levelInfo,
+                  KDTreeNode *nodes, SampleData *samples, SOAFloat3 sampleDirections,
+                  SOAFloat3 samplePositions, uint32_t *__restrict__ sampleIndices,
+                  uint32_t numSamples, float3 sceneMin, float3 sceneMax)
 {
     if (threadIdx.x == 0 && blockIdx.x == 0)
     {

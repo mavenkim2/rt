@@ -8,7 +8,6 @@
 #include "gpu_scene.h"
 #include "lights.h"
 #include "math/simd_base.h"
-#include "path_guiding.h"
 #include "radix_sort.h"
 #include "random.h"
 #include "shader_interop/hierarchy_traversal_shaderinterop.h"
@@ -34,6 +33,9 @@
 #include "volume.h"
 
 #include "gpu/path_guiding.h"
+
+// TODO: temp
+#include "gpu/cuda/cuda_device.h"
 
 #include "../../third_party/streamline/include/sl.h"
 #include "../../third_party/oidn/include/OpenImageDenoise/oidn.hpp"
@@ -139,6 +141,10 @@ static float GaussianEvaluate(Vec2f p, float sigma, float expX, float expY)
 
 void Render(RenderParams2 *params, int numScenes, Image *envMap)
 {
+    CUDADevice cudDevice;
+    string path = "../src/rt/gpu/kernel.cubin";
+    cudDevice.RegisterModule(path);
+
     Arena *arena             = params->arenas[GetThreadIndex()];
     ScenePrimitives **scenes = GetScenes();
 
@@ -979,7 +985,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     PhotonMapper photonMapper(sceneScratch.temp.arena);
 
     // Path guiding
-    PathGuider pathGuider(sceneScratch.temp.arena);
+    // PathGuiding pathGuiding(sceneScratch.temp.arena);
 
     Semaphore sem   = device->CreateSemaphore();
     sem.signalValue = 1;
@@ -1355,7 +1361,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         virtualTextureManager.Update(cmd);
 
         // photonMapper.BuildKDTree();
-        pathGuider.PathGuiding();
+        // pathGuider.PathGuiding();
 
         rg->StartPass(2,
                       [&clasGlobals      = virtualGeometryManager.clasGlobalsBuffer,
