@@ -33,6 +33,8 @@
 #include "photon_mapping/photon_mapping.h"
 #include "volume.h"
 
+#include "gpu/path_guiding.h"
+
 #include "../../third_party/streamline/include/sl.h"
 #include "../../third_party/oidn/include/OpenImageDenoise/oidn.hpp"
 

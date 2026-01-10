@@ -15,7 +15,6 @@
 #include "../base.h"
 #include "helper_math.h"
 #include "../thread_context.h"
-#include <cuda_runtime.h>
 #include <type_traits>
 
 #include "nvtx3/nvToolsExt.h"
