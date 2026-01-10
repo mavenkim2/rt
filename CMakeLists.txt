@@ -4,6 +4,8 @@ project(RT LANGUAGES CXX C)
 set (CMAKE_CXX_STANDARD 17)
 set (CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option (WITH_CUDA "Build with NVIDIA CUDA. Currently used only for GPU path guiding." ON) 
+
 if (MSVC)
     add_compile_definitions(
         _CRT_SECURE_NO_WARNINGS 
@@ -421,27 +423,39 @@ target_compile_options(convert PRIVATE ${RT_CXX_FLAGS})
 
 # CUDA support
 include(CheckLanguage)
-check_language(CUDA)
-
-if (CMAKE_CUDA_COMPILER)
-    enable_language (CUDA)
-    #message(STATUS "CUDA Compiler: ${CMAKE_CUDA_COMPILER}")
-    message(STATUS "CUDA Architecture: ${CMAKE_CUDA_ARCHITECTURES}")
-    set(CMAKE_CUDA_ARCHITECTURES "native")
-    # set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -lineinfo")
-    add_executable(rt_cuda_exe
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/gpu/test.cu
-    )
-
-    target_compile_options(rt_cuda_exe PRIVATE "-lineinfo")
-    set_target_properties(rt_cuda_exe PROPERTIES
-        CUDA_ARCHITECTURES native
-        CMAKE_CUDA_STANDARD 17
-        CMAKE_CUDA_STANDARD_REQUIRED ON
-    )
-else()
-    message (STATUS "could not find cuda compiler")
+if (WITH_CUDA)
+    check_language(CUDA)
+    if (CMAKE_CUDA_COMPILER)
+        enable_language(CUDA)
+        message(STATUS "CUDA Found: ${CMAKE_CUDA_COMPILER} (${CUDA_VERSION})")
+    endif()
 endif()
+
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/src/rt/gpu)
+
+# message(STATUS "CUDA Exe: ${CUDA_NVCC_EXECUTABLE}")
+#
+# if (CMAKE_CUDA_COMPILER)
+#     enable_language (CUDA)
+#
+#     message(STATUS "CUDA Compiler: ${CMAKE_CUDA_COMPILER}")
+#     message(STATUS "CUDA Architecture: ${CMAKE_CUDA_ARCHITECTURES}")
+#     message(STATUS "CUDA Exe: ${CUDA_NVCC_EXECUTABLE}")
+#     set(CMAKE_CUDA_ARCHITECTURES "native")
+#     # set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -lineinfo")
+#     add_executable(rt_cuda_exe
+#         ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/gpu/test.cu
+#     )
+#
+#     target_compile_options(rt_cuda_exe PRIVATE "-lineinfo")
+#     set_target_properties(rt_cuda_exe PROPERTIES
+#         CUDA_ARCHITECTURES native
+#         CMAKE_CUDA_STANDARD 17
+#         CMAKE_CUDA_STANDARD_REQUIRED ON
+#     )
+# else()
+#     message (STATUS "could not find cuda compiler")
+# endif()
 
 # Main executable
 add_executable(rt_exe 

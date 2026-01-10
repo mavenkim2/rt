@@ -1643,7 +1643,8 @@ SplitComponents(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStati
     const float splittingThreshold = 0.5f;
     const float maxKappa           = 32000.f;
     const float maxMeanCosine      = KappaToMeanCosine(maxKappa);
-    static_assert(MAX_COMPONENTS <= WARP_SIZE);
+    static_assert(MAX_COMPONENTS <= WARP_SIZE,
+                  "MAX_COMPONENTS must not be greater than the warp size");
 
     if (blockIdx.x >= *numLeafNodes) return;
 
@@ -2135,9 +2136,6 @@ __global__ void UpdateComponentDistances(VMM *vmms, KDTreeNode *nodes,
 
     const VMM &vmm = vmms[vmmIndex];
 
-    uint32_t numComponents = vmm.numComponents;
-    float sampleDistance;
-
     const uint32_t numSampleBatches = (sampleCount + blockDim.x - 1) / blockDim.x;
 
     for (uint32_t batch = 0; batch < numSampleBatches; batch++)
@@ -2267,8 +2265,7 @@ __global__ void ReprojectSamples(SampleStatistics *statistics, SOASampleData sam
             newDistance > FLT_EPSILON ? newDirection / newDistance : sampleDirection;
         samples.distances[sampleIndex + sampleOffset] =
             newDistance > FLT_EPSILON ? newDistance : distance;
-        float3 qdirection = make_float3(newDirection.x, newDirection.y, newDirection.z);
-        samples.dir[sampleIndex + sampleOffset] = qdirection;
+        samples.dir[sampleIndex + sampleOffset] = newDirection;
     }
 }
 
@@ -2372,7 +2369,7 @@ __device__ void BlockReduction(MergeType *totals, MergeType &out, uint32_t numEl
                                uint32_t blockIndex, uint32_t stride, AddFunc &&addFunc)
 {
     static constexpr uint32_t numWarps = blockSize >> WARP_SHIFT;
-    static_assert(numWarps <= WARP_SIZE);
+    static_assert(numWarps <= WARP_SIZE, "Too many warps");
     // const uint32_t numElementsPerThread = (numElements + blockSize - 1) / blockSize;
 
     uint32_t wId = threadIdx.x >> WARP_SHIFT;
@@ -2859,6 +2856,12 @@ struct CUDAArena
     // void Release() { cudaFree; }
 };
 
+struct Field
+{
+};
+
+void PathGuidingUpdate() {}
+
 void test()
 {
     cudaFree(0);
@@ -3015,19 +3018,19 @@ void test()
     UpdateMixture<<<256, 512>>>(vmms, vmmStatistics, soaSampleData, leafNodeIndices,
                                 numLeafNodes, nodes);
 
-    // UpdateSplitStatistics<<<numBlocks, blockSize>>>(vmms, vmmStatistics, splitStatistics,
-    //                                                 soaSampleData, leafNodeIndices,
-    //                                                 numLeafNodes, nodes);
-    // SplitComponents<<<(maxNumNodes + WARP_SIZE - 1) / WARP_SIZE, WARP_SIZE>>>(
-    //     vmms, vmmStatistics, splitStatistics, soaSampleData, leafNodeIndices, numLeafNodes,
-    //     nodes, vmmQueue, vmmWorkItems);
-    //
-    // PartialUpdateMixture<<<256, blockSize>>>(vmms, vmmStatistics, soaSampleData,
-    //                                          leafNodeIndices, numLeafNodes, nodes, vmmQueue,
-    //                                          vmmWorkItems);
-    //
-    // MergeComponents<<<256, blockSize>>>(vmms, vmmStatistics, splitStatistics, soaSampleData,
-    //                                     leafNodeIndices, numLeafNodes, nodes);
+    UpdateSplitStatistics<<<numBlocks, blockSize>>>(vmms, vmmStatistics, splitStatistics,
+                                                    soaSampleData, leafNodeIndices,
+                                                    numLeafNodes, nodes);
+    SplitComponents<<<(maxNumNodes + WARP_SIZE - 1) / WARP_SIZE, WARP_SIZE>>>(
+        vmms, vmmStatistics, splitStatistics, soaSampleData, leafNodeIndices, numLeafNodes,
+        nodes, vmmQueue, vmmWorkItems);
+
+    PartialUpdateMixture<<<256, blockSize>>>(vmms, vmmStatistics, soaSampleData,
+                                             leafNodeIndices, numLeafNodes, nodes, vmmQueue,
+                                             vmmWorkItems);
+
+    MergeComponents<<<256, blockSize>>>(vmms, vmmStatistics, splitStatistics, soaSampleData,
+                                        leafNodeIndices, numLeafNodes, nodes);
 
     nvtxRangePop();
     cudaEventRecord(vmmStop);
