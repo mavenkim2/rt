@@ -25,6 +25,7 @@ ModuleHandle CUDADevice::RegisterModule(string module)
     u32 numFunctions = 0;
     CUDA_ASSERT(cuModuleGetFunctionCount(&numFunctions, cuModule));
 
+#if 0
     CUfunction *functions = PushArray(arena, CUfunction, numFunctions);
     CUDA_ASSERT(cuModuleEnumerateFunctions(functions, numFunctions, cuModule));
 
@@ -34,6 +35,7 @@ ModuleHandle CUDADevice::RegisterModule(string module)
         CUDA_ASSERT(cuFuncGetName(&name, functions[i]));
         int stop = 5;
     }
+#endif
 
     cudaModules.push_back(cuModule);
     ModuleHandle handle = (u32)(cudaModules.size() - 1);
@@ -43,8 +45,16 @@ ModuleHandle CUDADevice::RegisterModule(string module)
     return handle;
 }
 
-void CUDADevice::RegisterKernels(string *kernels, u32 count, ModuleHandle moduleHandle)
+KernelHandle CUDADevice::RegisterKernels(const char *kernel, ModuleHandle moduleHandle)
 {
+    CUmodule module = cudaModules[moduleHandle];
+    CUfunction func;
+    CUDA_ASSERT(cuModuleGetFunction(&func, module, kernel));
+
+    cudaKernels.push_back(func);
+    KernelHandle handle = KernelHandle(cudaKernels.size() - 1);
+    return handle;
+
     // for (u32 i = 0; i < count; i++)
     // {
     //     string kernel   = kernels[i];

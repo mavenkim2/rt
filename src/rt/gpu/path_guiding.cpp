@@ -9,11 +9,18 @@ PathGuiding::PathGuiding()
     string path         = "../src/rt/gpu/kernel.cubin";
     ModuleHandle handle = device->RegisterModule(path);
 
-    string kernels[1];
-    kernels[0] = "help";
-    device->RegisterKernels(kernels, ArrayLength(kernels), handle);
+    for (int kernel = 0; kernel < PATH_GUIDING_KERNEL_MAX; kernel++)
+    {
+        handles[kernel] =
+            device->RegisterKernels((const char *)pathGuidingKernelNames[handle].str, handle);
+    }
 
-    // cuModuleLoadDataEx();
+    u32 numVMMs         = 32;
+    u32 numBlocks       = numVMMs;
+    const u32 blockSize = 256;
+
+    device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_INITIALIZE_SAMPLES], numBlocks,
+                          blockSize, numVMMs);
 }
 
 } // namespace rt

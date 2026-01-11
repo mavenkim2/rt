@@ -5,11 +5,24 @@
 
 namespace rt
 {
+
+enum PathGuidingKernels : int
+{
+    PATH_GUIDING_KERNEL_INITIALIZE_SAMPLES,
+    PATH_GUIDING_KERNEL_MAX,
+};
+
+static const string pathGuidingKernelNames[] = {
+    "InitializeSamples",
+};
+
 struct PathGuiding
 {
     PathGuiding();
     Device *device;
+    KernelHandle handles[PATH_GUIDING_KERNEL_MAX];
 };
+
 } // namespace rt
 
 #endif
