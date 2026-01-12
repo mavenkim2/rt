@@ -6,6 +6,10 @@
 namespace rt
 {
 
+#ifdef WITH_CUDA
+#define GPU_DEVICE __device__
+#endif
+
 typedef u32 ModuleHandle;
 typedef u32 KernelHandle;
 
@@ -17,11 +21,19 @@ struct Device
     void ExecuteKernel(KernelHandle handle, uint32_t numBlocks, uint32_t blockSize,
                        Args... args)
     {
-        void *paramArray[] = {(void *)&args...};
+        void *paramArray[] = {(void *)args...};
         ExecuteKernelInternal(handle, numBlocks, blockSize, paramArray, sizeof...(args));
     }
     virtual void ExecuteKernelInternal(KernelHandle handle, uint32_t numBlocks,
                                        uint32_t blockSize, void **params, u32 paramCount) = 0;
+
+    virtual void *Alloc(u32 size, uintptr_t alignment) = 0;
+    template <typename T>
+    T *Alloc(u32 count, u32 alignment = 0)
+    {
+        alignment = alignment == 0 ? sizeof(T) : alignment;
+        return (T *)Alloc(sizeof(T) * count, alignment);
+    }
 };
 
 struct Module

@@ -12,6 +12,9 @@ CUDADevice::CUDADevice()
     CUDA_ASSERT(cuDevicePrimaryCtxRetain(&cudaContext, cudaDevice));
 
     arena = ArenaAlloc();
+
+    // TODO: hardcoded
+    cudaArena.Init(megabytes(512));
 }
 
 ModuleHandle CUDADevice::RegisterModule(string module)
@@ -54,23 +57,23 @@ KernelHandle CUDADevice::RegisterKernels(const char *kernel, ModuleHandle module
     cudaKernels.push_back(func);
     KernelHandle handle = KernelHandle(cudaKernels.size() - 1);
     return handle;
+}
 
-    // for (u32 i = 0; i < count; i++)
-    // {
-    //     string kernel   = kernels[i];
-    //     CUmodule module = cudaModules[moduleHandle];
-    //     CUfunction func;
-    //     CUresult result = cuModuleGetFunction(&func, module, (char *)kernel.str);
-    //     if (result != CUDA_SUCCESS)
-    //     {
-    //         const char *errorName   = 0;
-    //         const char *errorString = 0;
-    //         cuGetErrorName(result, errorString);
-    //         cuGetErrorString(result, errorString);
-    //         Error(0, "CUDA Error: %S (%S)", errorName, errorString);
-    //     }
-    //     Assert(result == CUDA_SUCCESS);
-    // }
+void CUDADevice::ExecuteKernelInternal(KernelHandle handle, uint32_t numBlocks,
+                                       uint32_t blockSize, void **params, u32 paramCount)
+{
+    CUDA_ASSERT(cuCtxPushCurrent(cudaContext));
+    ScratchArena scratch;
+    CUfunction kernel = cudaKernels[handle];
+
+    // TODO: alternative streams. also, how do I ensure order is right?
+    cuLaunchKernel(kernel, numBlocks, 1, 1, blockSize, 1, 1, 0, 0, params, 0);
+    CUDA_ASSERT(cuCtxPopCurrent(0));
+}
+
+void *CUDADevice::Alloc(u32 size, uintptr_t alignment)
+{
+    return cudaArena.Alloc(size, alignment);
 }
 
 } // namespace rt

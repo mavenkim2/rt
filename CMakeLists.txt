@@ -434,6 +434,8 @@ if (WITH_CUDA)
         enable_language(CUDA)
         message(STATUS "CUDA Found: ${CMAKE_CUDA_COMPILER} (${CUDA_VERSION})")
         list (APPEND deps CUDA::cuda_driver)
+        list (APPEND deps CUDA::cudart)
+        list (APPEND RT_DEFINITIONS WITH_CUDA)
     endif()
 endif()
 
