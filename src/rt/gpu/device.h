@@ -2,13 +2,10 @@
 #define DEVICE_H_
 
 #include "../string.h"
+#include "platform.h"
 
 namespace rt
 {
-
-#ifdef WITH_CUDA
-#define GPU_DEVICE __device__
-#endif
 
 typedef u32 ModuleHandle;
 typedef u32 KernelHandle;
