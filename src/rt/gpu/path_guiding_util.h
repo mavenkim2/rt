@@ -10,6 +10,11 @@
 #define WARP_SIZE      32
 #define WARP_SHIFT     5u
 
+namespace rt
+{
+
+// TODO IMPORTANT: for other gpu platforms, change #ifdef __CUDACC__ 
+
 #ifdef __CUDACC__
 template <typename T>
 RT_GPU_DEVICE T WarpReduceSum(T val)
@@ -184,11 +189,12 @@ inline RT_DEVICE float3 OrderedUintToFloat(uint3 u)
 #endif
 
 template <typename T>
-struct Bounds
+struct GPUBounds
 {
     T boundsMin;
     T boundsMax;
 
+#ifdef __CUDACC__
     RT_DEVICE void Extend(T value)
     {
         boundsMin = min(boundsMin, value);
@@ -200,8 +206,7 @@ struct Bounds
         boundsMin = WarpReduceMin(boundsMin);
         boundsMax = WarpReduceMax(boundsMax);
     }
-
-    RT_DEVICE void AtomicMerge(const Bounds &other) {}
+#endif
 };
 
 struct SOAFloat3Ref
@@ -209,6 +214,7 @@ struct SOAFloat3Ref
     float *x, *y, *z;
     const uint32_t index;
 
+#ifdef __CUDACC__
     RT_DEVICE SOAFloat3Ref &operator=(const float3 &val)
     {
         x[index] = val.x;
@@ -224,6 +230,7 @@ struct SOAFloat3Ref
         float3 val = (float3)other;
         return (*this = val);
     }
+#endif
 };
 
 struct SOAFloat3
@@ -232,6 +239,7 @@ struct SOAFloat3
     float *y;
     float *z;
 
+#ifdef __CUDACC__
     RT_DEVICE SOAFloat3Ref operator[](uint32_t index) { return {x, y, z, index}; }
 
     RT_DEVICE float3 operator[](uint32_t index) const
@@ -247,6 +255,7 @@ struct SOAFloat3
         other.z = z + offset;
         return other;
     }
+#endif
 };
 
 struct SampleData
@@ -265,6 +274,7 @@ struct SOASampleDataRef
     float *pdfs;
     const uint32_t index;
 
+#ifdef __CUDACC__
     RT_DEVICE SOASampleDataRef &operator=(const SampleData &val)
     {
         pos            = val.pos;
@@ -273,6 +283,7 @@ struct SOASampleDataRef
         pdfs[index]    = val.pdf;
         return *this;
     }
+#endif
 };
 
 struct SOASampleData
@@ -284,6 +295,7 @@ struct SOASampleData
     float *pdfs;
     float *distances;
 
+#ifdef __CUDACC__
     RT_DEVICE SOASampleDataRef operator[](uint32_t index)
     {
         return {pos[index], dir[index], weights, pdfs, index};
@@ -293,18 +305,19 @@ struct SOASampleData
     {
         return {pos[index], dir[index], weights[index], pdfs[index]};
     }
+#endif
 };
 
 template <>
-struct Bounds<float3>
+struct GPUBounds<float3>
 {
 private:
     uint3 boundsMin;
     uint3 boundsMax;
 
-#ifdef __CUDAC__
+#ifdef __CUDACC__
 public:
-    RT_DEVICE Bounds()
+    RT_DEVICE GPUBounds()
     {
         const uint pos_inf = 0xff800000;
         const uint neg_inf = ~0xff800000;
@@ -335,7 +348,7 @@ public:
         boundsMax = WarpReduceMax(boundsMax);
     }
 
-    RT_DEVICE void AtomicMerge(const Bounds &other)
+    RT_DEVICE void AtomicMerge(const GPUBounds &other)
     {
         atomicMin(&boundsMin, other.boundsMin);
         atomicMax(&boundsMax, other.boundsMax);
@@ -368,7 +381,7 @@ public:
 #endif
 };
 
-typedef Bounds<float3> Bounds3f;
+typedef GPUBounds<float3> Bounds3f;
 
 struct LevelInfo
 {
@@ -422,7 +435,7 @@ struct SampleStatistics
 
     uint32_t numSamples;
 
-#ifdef __CUDAC__
+#ifdef __CUDACC__
     RT_DEVICE SampleStatistics()
         : numSamples(0), bounds(), mean(make_longlong3(0, 0, 0)),
           variance(make_longlong3(0, 0, 0))
@@ -545,3 +558,141 @@ struct SampleStatistics
     }
 #endif
 };
+
+struct VMM
+{
+    float kappas[MAX_COMPONENTS];
+    float directionX[MAX_COMPONENTS];
+    float directionY[MAX_COMPONENTS];
+    float directionZ[MAX_COMPONENTS];
+    float weights[MAX_COMPONENTS];
+    float distances[MAX_COMPONENTS];
+
+    uint32_t numComponents;
+
+#ifdef __CUDACC__
+
+    inline RT_GPU_DEVICE void Initialize()
+    {
+        const float gr = 1.618033988749895f;
+        numComponents  = MAX_COMPONENTS / 2;
+
+        const float weight = 1.f / float(numComponents);
+        const float kappa  = 5.f;
+        uint32_t l         = numComponents - 1;
+        for (uint32_t n = 0; n < MAX_COMPONENTS; n++)
+        {
+            float3 uniformDirection;
+            if (n < l + 1)
+            {
+                float phi      = 2.0f * ((float)n / gr);
+                float z        = 1.0f - ((2.0f * n + 1.0f) / float(l + 1));
+                float sinTheta = sqrt(1.f - min(z * z, 1.f));
+
+                // cos(theta) = z
+                // sin(theta) = sin(arccos(z)) = sqrt(1 - z^2)
+                float3 mu        = make_float3(sinTheta * cos(phi), sinTheta * sin(phi), z);
+                uniformDirection = mu;
+            }
+            else
+            {
+                uniformDirection = make_float3(0, 0, 1);
+            }
+
+            WriteDirection(n, uniformDirection);
+            distances[n] = 0.f;
+            if (n < numComponents)
+            {
+                kappas[n]  = kappa;
+                weights[n] = weight;
+            }
+            else
+            {
+                kappas[n]  = 0.0f;
+                weights[n] = 0.0f;
+                // vmm.normalizations[i][j] = ONE_OVER_FOUR_PI;
+                // vmm.eMinus2Kappa[i][j] = 1.0f;
+                // vmm._meanCosines[i][j] = 0.0f;
+            }
+        }
+    }
+
+    inline RT_GPU_DEVICE float3 ReadDirection(uint32_t componentIndex) const
+    {
+        float3 dir;
+        dir.x = directionX[componentIndex];
+        dir.y = directionY[componentIndex];
+        dir.z = directionZ[componentIndex];
+        return dir;
+    }
+
+    inline RT_GPU_DEVICE void WriteDirection(uint32_t componentIndex, float3 dir)
+    {
+        directionX[componentIndex] = dir.x;
+        directionY[componentIndex] = dir.y;
+        directionZ[componentIndex] = dir.z;
+    }
+
+    RT_GPU_DEVICE void UpdateComponent_(uint32_t componentIndex, float kappa, float3 dir,
+                                        float weight)
+    {
+        kappas[componentIndex] = kappa;
+        WriteDirection(componentIndex, dir);
+        weights[componentIndex] = weight;
+    }
+
+    RT_GPU_DEVICE void UpdateComponent(uint32_t componentIndex, float kappa, float3 dir,
+                                       float weight, float distance)
+    {
+        kappas[componentIndex] = kappa;
+        WriteDirection(componentIndex, dir);
+        weights[componentIndex]   = weight;
+        distances[componentIndex] = distance;
+    }
+#endif
+};
+
+struct VMMStatistics
+{
+    float sumSampleWeights;
+    float sumWeights[MAX_COMPONENTS];
+    float sumOfDistanceWeights[MAX_COMPONENTS];
+    float3 sumWeightedDirections[MAX_COMPONENTS];
+
+    // TODO: decay?
+    uint32_t numSamples;
+
+    uint32_t numSamplesAfterLastSplit;
+    uint32_t numSamplesAfterLastMerge;
+
+#ifdef __CUDACC__
+    RT_GPU_DEVICE void SetComponent(uint32_t componentIndex, float sumWeight,
+                                    float3 sumWeightedDirection)
+    {
+        assert(componentIndex < MAX_COMPONENTS);
+        sumWeights[componentIndex]            = sumWeight;
+        sumWeightedDirections[componentIndex] = sumWeightedDirection;
+    }
+#endif
+};
+
+struct SplitStatistics
+{
+    float3 covarianceTotals[MAX_COMPONENTS];
+    float chiSquareTotals[MAX_COMPONENTS];
+    float sumWeights[MAX_COMPONENTS];
+    uint32_t numSamples[MAX_COMPONENTS];
+
+#ifdef __CUDACC__
+    RT_GPU_DEVICE void SetComponent(uint32_t componentIndex, float3 covarianceTotal,
+                                    float chiSquareTotal, float sumWeight, uint32_t num)
+    {
+        covarianceTotals[componentIndex] = covarianceTotal;
+        chiSquareTotals[componentIndex]  = chiSquareTotal;
+        sumWeights[componentIndex]       = sumWeight;
+        numSamples[componentIndex]       = num;
+    }
+#endif
+};
+
+} // namespace rt

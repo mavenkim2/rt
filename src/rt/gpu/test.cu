@@ -261,96 +261,6 @@ inline __device__ float3 FromLocal(float3 t0, float3 t1, float3 t2, float3 x)
     return make_float3(dot(t0, x), dot(t1, x), dot(t2, x));
 }
 
-struct VMM
-{
-    float kappas[MAX_COMPONENTS];
-    float directionX[MAX_COMPONENTS];
-    float directionY[MAX_COMPONENTS];
-    float directionZ[MAX_COMPONENTS];
-    float weights[MAX_COMPONENTS];
-    float distances[MAX_COMPONENTS];
-
-    uint32_t numComponents;
-
-    inline __device__ void Initialize()
-    {
-        const float gr = 1.618033988749895f;
-        numComponents  = MAX_COMPONENTS / 2;
-
-        const float weight = 1.f / float(numComponents);
-        const float kappa  = 5.f;
-        uint32_t l         = numComponents - 1;
-        for (uint32_t n = 0; n < MAX_COMPONENTS; n++)
-        {
-            float3 uniformDirection;
-            if (n < l + 1)
-            {
-                float phi      = 2.0f * ((float)n / gr);
-                float z        = 1.0f - ((2.0f * n + 1.0f) / float(l + 1));
-                float sinTheta = sqrt(1.f - min(z * z, 1.f));
-
-                // cos(theta) = z
-                // sin(theta) = sin(arccos(z)) = sqrt(1 - z^2)
-                float3 mu        = make_float3(sinTheta * cos(phi), sinTheta * sin(phi), z);
-                uniformDirection = mu;
-            }
-            else
-            {
-                uniformDirection = make_float3(0, 0, 1);
-            }
-
-            WriteDirection(n, uniformDirection);
-            distances[n] = 0.f;
-            if (n < numComponents)
-            {
-                kappas[n]  = kappa;
-                weights[n] = weight;
-            }
-            else
-            {
-                kappas[n]  = 0.0f;
-                weights[n] = 0.0f;
-                // vmm.normalizations[i][j] = ONE_OVER_FOUR_PI;
-                // vmm.eMinus2Kappa[i][j] = 1.0f;
-                // vmm._meanCosines[i][j] = 0.0f;
-            }
-        }
-    }
-
-    inline __device__ float3 ReadDirection(uint32_t componentIndex) const
-    {
-        float3 dir;
-        dir.x = directionX[componentIndex];
-        dir.y = directionY[componentIndex];
-        dir.z = directionZ[componentIndex];
-        return dir;
-    }
-
-    inline __device__ void WriteDirection(uint32_t componentIndex, float3 dir)
-    {
-        directionX[componentIndex] = dir.x;
-        directionY[componentIndex] = dir.y;
-        directionZ[componentIndex] = dir.z;
-    }
-
-    __device__ void UpdateComponent_(uint32_t componentIndex, float kappa, float3 dir,
-                                     float weight)
-    {
-        kappas[componentIndex] = kappa;
-        WriteDirection(componentIndex, dir);
-        weights[componentIndex] = weight;
-    }
-
-    __device__ void UpdateComponent(uint32_t componentIndex, float kappa, float3 dir,
-                                    float weight, float distance)
-    {
-        kappas[componentIndex] = kappa;
-        WriteDirection(componentIndex, dir);
-        weights[componentIndex]   = weight;
-        distances[componentIndex] = distance;
-    }
-};
-
 inline __device__ float VMFProduct(float kappa0, float normalization0, float3 meanDirection0,
                                    float kappa1, float normalization1, float3 meanDirection1,
                                    float &productKappa, float &productNormalization,
@@ -417,28 +327,6 @@ __device__ float VMFIntegratedDivision(const float3 &meanDirection0, const float
     return scale;
 }
 
-struct VMMStatistics
-{
-    float sumSampleWeights;
-    float sumWeights[MAX_COMPONENTS];
-    float sumOfDistanceWeights[MAX_COMPONENTS];
-    float3 sumWeightedDirections[MAX_COMPONENTS];
-
-    // TODO: decay?
-    uint32_t numSamples;
-
-    uint32_t numSamplesAfterLastSplit;
-    uint32_t numSamplesAfterLastMerge;
-
-    __device__ void SetComponent(uint32_t componentIndex, float sumWeight,
-                                 float3 sumWeightedDirection)
-    {
-        assert(componentIndex < MAX_COMPONENTS);
-        sumWeights[componentIndex]            = sumWeight;
-        sumWeightedDirections[componentIndex] = sumWeightedDirection;
-    }
-};
-
 inline __device__ void AddVMMStatistics(VMMStatistics &left, const VMMStatistics &right)
 {
     const uint32_t threadIndex = threadIdx.x;
@@ -453,23 +341,6 @@ inline __device__ void AddVMMStatistics(VMMStatistics &left, const VMMStatistics
         left.numSamples += right.numSamples;
     }
 }
-
-struct SplitStatistics
-{
-    float3 covarianceTotals[MAX_COMPONENTS];
-    float chiSquareTotals[MAX_COMPONENTS];
-    float sumWeights[MAX_COMPONENTS];
-    uint32_t numSamples[MAX_COMPONENTS];
-
-    __device__ void SetComponent(uint32_t componentIndex, float3 covarianceTotal,
-                                 float chiSquareTotal, float sumWeight, uint32_t num)
-    {
-        covarianceTotals[componentIndex] = covarianceTotal;
-        chiSquareTotals[componentIndex]  = chiSquareTotal;
-        sumWeights[componentIndex]       = sumWeight;
-        numSamples[componentIndex]       = num;
-    }
-};
 
 __device__ float CalculateVMFNormalization(float kappa)
 {

@@ -6,6 +6,9 @@ namespace rt
 PathGuiding::PathGuiding()
 {
     // TODO: hardcoded
+    const uint32_t numSamples  = 1u << 22u;
+    const uint32_t maxNumNodes = 1u << 16u;
+
     string path         = "../src/rt/gpu/kernel.cubin";
     ModuleHandle handle = device->RegisterModule(path);
 
@@ -23,19 +26,19 @@ PathGuiding::PathGuiding()
     device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_INITIALIZE_SAMPLES], numBlocks,
                           blockSize, numVMMs);
 
+    Bounds3f *sampleBounds = device->Alloc<Bounds3f>(1, 4u);
+
+    KDTreeNode *nodes                  = device->Alloc<KDTreeNode>(maxNumNodes, 4u);
+    SampleStatistics *sampleStatistics = device->Alloc<SampleStatistics>(maxNumNodes, 8u);
+    VMM *vmms                          = device->Alloc<VMM>(maxNumNodes, 4u);
+    VMMStatistics *vmmStatistics       = device->Alloc<VMMStatistics>(maxNumNodes, 4);
+    SplitStatistics *splitStatistics   = device->Alloc<SplitStatistics>(maxNumNodes, 4);
+
+    device->MemZero(nodes, sizeof(KDTreeNode) * maxNumNodes);
+    device->MemZero(vmmStatistics, sizeof(VMMStatistics) * maxNumNodes);
+    device->MemZero(splitStatistics, sizeof(SplitStatistics) * maxNumNodes);
+
 #if 0
-    Bounds3f *sampleBounds = allocator.Alloc<Bounds3f>(1, 4u);
-
-    KDTreeNode *nodes                  = allocator.Alloc<KDTreeNode>(maxNumNodes, 4u);
-    SampleStatistics *sampleStatistics = allocator.Alloc<SampleStatistics>(maxNumNodes, 8u);
-    VMM *vmms                          = allocator.Alloc<VMM>(maxNumNodes, 4u);
-    VMMStatistics *vmmStatistics       = allocator.Alloc<VMMStatistics>(maxNumNodes, 4);
-    SplitStatistics *splitStatistics   = allocator.Alloc<SplitStatistics>(maxNumNodes, 4);
-
-    cudaMemset(nodes, 0, sizeof(KDTreeNode) * maxNumNodes);
-    cudaMemset(vmmStatistics, 0, sizeof(VMMStatistics) * maxNumNodes);
-    cudaMemset(splitStatistics, 0, sizeof(SplitStatistics) * maxNumNodes);
-
     SampleData *samples = allocator.Alloc<SampleData>(numSamples, 4u);
 
     uint32_t *leafNodeIndices = allocator.Alloc<uint32_t>(maxNumNodes + 1, 4u);

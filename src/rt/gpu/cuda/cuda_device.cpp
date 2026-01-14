@@ -4,6 +4,13 @@
 namespace rt
 {
 
+CUDAContextScope::CUDAContextScope(CUDADevice *device)
+{
+    CUDA_ASSERT(cuCtxPushCurrent(device->cudaContext));
+}
+
+CUDAContextScope::~CUDAContextScope() { CUDA_ASSERT(cuCtxPopCurrent(0)); }
+
 CUDADevice::CUDADevice()
 {
     CUDA_ASSERT(cuInit(0));
@@ -14,7 +21,7 @@ CUDADevice::CUDADevice()
     arena = ArenaAlloc();
 
     // TODO: hardcoded
-    cudaArena.Init(megabytes(512));
+    cudaArena.Init(this, megabytes(512));
 }
 
 ModuleHandle CUDADevice::RegisterModule(string module)
@@ -74,6 +81,12 @@ void CUDADevice::ExecuteKernelInternal(KernelHandle handle, uint32_t numBlocks,
 void *CUDADevice::Alloc(u32 size, uintptr_t alignment)
 {
     return cudaArena.Alloc(size, alignment);
+}
+
+void CUDADevice::MemZero(void *ptr, uint64_t size)
+{
+    CUDAContextScope scope(this);
+    CUDA_ASSERT(cuMemsetD8((CUdeviceptr)ptr, 0, size));
 }
 
 } // namespace rt

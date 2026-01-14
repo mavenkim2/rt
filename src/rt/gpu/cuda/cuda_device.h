@@ -6,10 +6,17 @@
 #include "../device.h"
 
 #include <cuda.h>
-#include <cuda_runtime.h>
 
 namespace rt
 {
+
+struct CUDADevice;
+
+struct CUDAContextScope
+{
+    CUDAContextScope(CUDADevice *device);
+    ~CUDAContextScope();
+};
 
 #define CUDA_ASSERT(statement)                                                                \
     {                                                                                         \
@@ -30,9 +37,11 @@ struct CUDAArena
     u32 totalSize;
     u32 offset;
 
-    void Init(u32 size)
+    void Init(CUDADevice *device, u32 size)
     {
-        cudaMalloc(&ptr, size);
+        CUDAContextScope scope(device);
+
+        CUDA_ASSERT(cuMemAlloc((CUdeviceptr *)&ptr, size));
         totalSize = size;
         base      = uintptr_t(ptr);
         offset    = 0;
@@ -78,6 +87,7 @@ struct CUDADevice : Device
                                void **params, u32 paramCount) override;
 
     void *Alloc(u32 size, uintptr_t alignment) override;
+    void MemZero(void *ptr, uint64_t size) override;
 };
 } // namespace rt
 

@@ -31,6 +31,7 @@ struct Device
         alignment = alignment == 0 ? sizeof(T) : alignment;
         return (T *)Alloc(sizeof(T) * count, alignment);
     }
+    virtual void MemZero(void *ptr, uint64_t size) = 0;
 };
 
 struct Module
