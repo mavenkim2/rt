@@ -5,6 +5,7 @@ set (CMAKE_CXX_STANDARD 17)
 set (CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option (WITH_CUDA "Build with NVIDIA CUDA. Currently used only for GPU path guiding." ON) 
+option(USE_GPU "USE_GPU" OFF)
 
 if (MSVC)
     add_compile_definitions(
@@ -133,9 +134,6 @@ if (uppercase_CMAKE_BUILD_TYPE STREQUAL "DEBUG")
 endif()
 
 list (APPEND RT_DEFINITIONS "__SSE3__" "__SSE4_1__")
-
-# GPU or CPU path
-option(USE_GPU "USE_GPU" OFF)
 
 # Create thread context static lib (shared w/ ptex)
 set (MEM_SOURCE_FILES 

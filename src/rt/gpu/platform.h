@@ -1,8 +1,10 @@
 #pragma once
 
-#ifdef WITH_CUDA
-#define GPU_DEVICE __host__ __device__
+#ifdef __CUDACC__
+#define RT_DEVICE __host__ __device__
 #include <cuda_runtime.h>
+#else
+#define RT_DEVICE
 #endif
 
 namespace rt

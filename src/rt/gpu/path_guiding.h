@@ -19,20 +19,20 @@ struct KDTreeNode
     u32 count;
     u32 vmmIndex;
 
-    GPU_DEVICE u32 GetChildIndex() const { return (childIndex_dim << 2) >> 2; }
-    GPU_DEVICE void SetChildIndex(u32 childIndex)
+    RT_DEVICE u32 GetChildIndex() const { return (childIndex_dim << 2) >> 2; }
+    RT_DEVICE void SetChildIndex(u32 childIndex)
     {
         Assert(childIndex < (1u << 30u));
         childIndex_dim |= childIndex;
     }
-    GPU_DEVICE u32 GetSplitDim() const { return childIndex_dim >> 30; }
-    GPU_DEVICE void SetSplitDim(u32 dim)
+    RT_DEVICE u32 GetSplitDim() const { return childIndex_dim >> 30; }
+    RT_DEVICE void SetSplitDim(u32 dim)
     {
         Assert(dim < 3);
         childIndex_dim |= dim << 30;
     }
-    GPU_DEVICE bool HasChild() const { return childIndex_dim != ~0u; }
-    GPU_DEVICE bool IsChild() const { return (childIndex_dim >> 30u) == 3u; }
+    RT_DEVICE bool HasChild() const { return childIndex_dim != ~0u; }
+    RT_DEVICE bool IsChild() const { return (childIndex_dim >> 30u) == 3u; }
 };
 
 enum PathGuidingKernels : int

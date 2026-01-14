@@ -2,6 +2,7 @@
 #define RANDOM_H
 
 #include <limits>
+#include "gpu/platform.h"
 #include "math/math_include.h"
 #include "hash.h"
 
@@ -14,14 +15,14 @@ inline f32 RandomFloat(f32 min, f32 max) { return min + (max - min) * RandomFloa
 
 inline i32 RandomInt(i32 min, i32 max) { return i32(RandomFloat(f32(min), f32(max))); }
 
-inline Vec3f RandomVec3() { return Vec3f(RandomFloat(), RandomFloat(), RandomFloat()); }
+inline float3 RandomVec3() { return make_float3(RandomFloat(), RandomFloat(), RandomFloat()); }
 
-inline Vec3f RandomVec3(f32 min, f32 max)
+inline float3 RandomVec3(f32 min, f32 max)
 {
-    return Vec3f(RandomFloat(min, max), RandomFloat(min, max), RandomFloat(min, max));
+    return make_float3(RandomFloat(min, max), RandomFloat(min, max), RandomFloat(min, max));
 }
 
-inline Vec3f RandomCosineDirection()
+inline float3 RandomCosineDirection()
 {
     f32 r1 = RandomFloat();
     f32 r2 = RandomFloat();
@@ -30,7 +31,7 @@ inline Vec3f RandomCosineDirection()
     f32 x   = Cos(phi) * Sqrt(r2);
     f32 y   = Sin(phi) * Sqrt(r2);
     f32 z   = Sqrt(1 - r2);
-    return Vec3f(x, y, z);
+    return make_float3(x, y, z);
 }
 
 //////////////////////////////
@@ -44,18 +45,20 @@ inline Vec3f RandomCosineDirection()
 #define PCG32_DEFAULT_STATE  0x853c49e6748fea9bULL
 #define PCG32_DEFAULT_STREAM 0xda3e39cb94b95bdbULL
 #define PCG32_MULT           0x5851f42d4c957f2dULL
-static constexpr f32 oneMinusEpsilon = 0x1.fffffep-1;
+#define ONE_MINUS_EPSILON    0x1.fffffep-1
+static const float oneMinusEpsilon = 0x1.fffffep-1;
 
 struct RNG
 {
-    RNG() : state(PCG32_DEFAULT_STATE), inc(PCG32_DEFAULT_STREAM) {}
-    RNG(u64 seqIndex, u64 offset) { SetSequence(seqIndex, offset); }
+    RT_DEVICE RNG() : state(PCG32_DEFAULT_STATE), inc(PCG32_DEFAULT_STREAM) {}
+    RT_DEVICE RNG(u64 seqIndex, u64 offset) { SetSequence(seqIndex, offset); }
     RNG(u64 seqIndex) { SetSequence(seqIndex); }
 
-    void SetSequence(u64 sequenceIndex, u64 offset);
+    RT_DEVICE void SetSequence(u64 sequenceIndex, u64 offset);
     void SetSequence(u64 sequenceIndex) { SetSequence(sequenceIndex, MixBits(sequenceIndex)); }
+
     template <typename T>
-    T Uniform();
+    RT_DEVICE T Uniform();
 
     template <typename T>
     typename std::enable_if_t<std::is_integral_v<T>, T> Uniform(T b)
@@ -119,7 +122,7 @@ inline void RNG::SetSequence(u64 sequenceIndex, u64 seed)
 template <>
 inline f32 RNG::Uniform<f32>()
 {
-    return Min(oneMinusEpsilon, Uniform<u32>() * 0x1p-32f);
+    return fminf(ONE_MINUS_EPSILON, Uniform<u32>() * 0x1p-32f);
 }
 
 inline void RNG::Advance(i64 iDelta)
