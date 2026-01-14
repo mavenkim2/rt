@@ -20,7 +20,7 @@ static const string pathGuidingKernelNames[] = {
 
 struct PathGuiding
 {
-    PathGuiding();
+    PathGuiding(Device *device);
     Device *device;
     KernelHandle handles[PATH_GUIDING_KERNEL_MAX];
 };

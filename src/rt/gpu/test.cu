@@ -362,28 +362,6 @@ __device__ float MeanCosineToKappa(float meanCosine)
     return (meanCosine * 3.f - meanCosine * meanCosine2) / (1.f - meanCosine2);
 }
 
-struct Queue
-{
-    uint32_t readOffset;
-    uint32_t writeOffset;
-};
-
-struct WorkItem
-{
-    uint32_t nodeIndex;
-    uint32_t offset;
-    uint32_t count;
-};
-
-struct VMMMapState
-{
-    int numWorkItems;
-    uint32_t numSamples;
-    uint32_t sampleOffset;
-    float previousLogLikelihood;
-    uint32_t iteration;
-};
-
 #define GPU_KERNEL extern "C" __global__ void
 
 GPU_KERNEL InitializeSamples(SampleStatistics *statistics, Bounds3f *sampleBounds,
@@ -436,6 +414,11 @@ GPU_KERNEL InitializeSamples(SampleStatistics *statistics, Bounds3f *sampleBound
         sampleIndices[sampleIndex]    = sampleIndex;
 
         samplePositions[sampleIndex] = p;
+
+        if (blockIdx.x == 0)
+        {
+            printf("%f %f %f\n", p.x, p.y, p.z);
+        }
     }
 }
 
@@ -679,7 +662,7 @@ __device__ void
 UpdateMixtureHelper(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStatistics,
                     const SOASampleData samples, const uint32_t *__restrict__ leafNodeIndices,
                     const uint32_t *__restrict__ numLeafNodes,
-                    const KDTreeNode *__restrict__ nodes, Queue *queue = 0,
+                    const KDTreeNode *__restrict__ nodes, VMMQueue *queue = 0,
                     WorkItem *workItems = 0)
 {
     assert(!partial || (partial && queue && workItems));
@@ -784,11 +767,13 @@ UpdateMixture(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStatist
                                nodes);
 }
 
-__global__ void
-PartialUpdateMixture(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStatistics,
-                     const SOASampleData samples, const uint32_t *__restrict__ leafNodeIndices,
-                     const uint32_t *__restrict__ numLeafNodes,
-                     const KDTreeNode *__restrict__ nodes, Queue *queue, WorkItem *workItems)
+__global__ void PartialUpdateMixture(VMM *__restrict__ vmms,
+                                     VMMStatistics *__restrict__ currentStatistics,
+                                     const SOASampleData samples,
+                                     const uint32_t *__restrict__ leafNodeIndices,
+                                     const uint32_t *__restrict__ numLeafNodes,
+                                     const KDTreeNode *__restrict__ nodes, VMMQueue *queue,
+                                     WorkItem *workItems)
 {
     UpdateMixtureHelper<true>(vmms, currentStatistics, samples, leafNodeIndices, numLeafNodes,
                               nodes, queue, workItems);
@@ -930,7 +915,7 @@ SplitComponents(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStati
                 SplitStatistics *__restrict__ splitStatistics, const SOASampleData samples,
                 const uint32_t *__restrict__ leafNodeIndices,
                 const uint32_t *__restrict__ numLeafNodes,
-                const KDTreeNode *__restrict__ nodes, Queue *queue, WorkItem *workItems)
+                const KDTreeNode *__restrict__ nodes, VMMQueue *queue, WorkItem *workItems)
 {
     const float splittingThreshold = 0.5f;
     const float maxKappa           = 32000.f;
@@ -1770,7 +1755,7 @@ __global__ void CalculateSplitLocations(LevelInfo *info, KDTreeNode *nodes,
     }
 }
 
-__global__ void BeginLevel(LevelInfo *levelInfo, Queue *queue, Queue *queue2)
+__global__ void BeginLevel(LevelInfo *levelInfo, VMMQueue *queue, VMMQueue *queue2)
 {
     // printf("level %u %u %u\n", levelInfo->start, levelInfo->count,
     // levelInfo->childCount); printf("queue: %u\n", queue->writeOffset);
@@ -1819,8 +1804,8 @@ __global__ void CalculateChildIndices(LevelInfo *info, KDTreeNode *nodes)
 }
 
 template <uint32_t blockSize>
-__global__ void CreateWorkItems(Queue *reduceQueue, WorkItem *reduceWorkItems,
-                                Queue *partitionQueue, WorkItem *partitionWorkItems,
+__global__ void CreateWorkItems(VMMQueue *reduceQueue, WorkItem *reduceWorkItems,
+                                VMMQueue *partitionQueue, WorkItem *partitionWorkItems,
                                 KDTreeNode *nodes, LevelInfo *info, SampleStatistics *stats)
 {
     if (blockIdx.x >= info->count) return;
@@ -1879,8 +1864,8 @@ __global__ void CreateWorkItems(Queue *reduceQueue, WorkItem *reduceWorkItems,
 }
 
 template <uint32_t blockSize>
-__global__ void CalculateNodeStatistics(Queue *queue, WorkItem *workItems, KDTreeNode *nodes,
-                                        SampleStatistics *statistics,
+__global__ void CalculateNodeStatistics(VMMQueue *queue, WorkItem *workItems,
+                                        KDTreeNode *nodes, SampleStatistics *statistics,
                                         SOAFloat3 samplePositions, uint32_t *sampleIndices,
                                         Bounds3f *bounds = 0)
 {
@@ -1933,7 +1918,7 @@ __global__ void CalculateNodeStatistics(Queue *queue, WorkItem *workItems, KDTre
     }
 }
 
-__global__ void BuildKDTree(Queue *queue, WorkItem *workItems, uint32_t level,
+__global__ void BuildKDTree(VMMQueue *queue, WorkItem *workItems, uint32_t level,
                             LevelInfo *levelInfo, KDTreeNode *nodes, uint32_t *sampleIndices,
                             uint32_t *newSampleIndices, SOAFloat3 samplePositions)
 {
@@ -2214,15 +2199,15 @@ void test()
 
     LevelInfo *levelInfo = allocator.Alloc<LevelInfo>(1, 4u);
 
-    Queue *reduceQueue           = allocator.Alloc<Queue>(1, 4u);
-    Queue *partitionQueue        = allocator.Alloc<Queue>(1, 4u);
-    Queue *vmmQueue              = allocator.Alloc<Queue>(1, 4u);
+    VMMQueue *reduceQueue        = allocator.Alloc<VMMQueue>(1, 4u);
+    VMMQueue *partitionQueue     = allocator.Alloc<VMMQueue>(1, 4u);
+    VMMQueue *vmmQueue           = allocator.Alloc<VMMQueue>(1, 4u);
     WorkItem *reductionWorkItems = allocator.Alloc<WorkItem>(2 * numSamples / blockSize, 4u);
     WorkItem *partitionWorkItems = allocator.Alloc<WorkItem>(2 * numSamples / blockSize, 4u);
     WorkItem *vmmWorkItems       = allocator.Alloc<WorkItem>(numSamples, 4u);
 
     cudaMemset(vmmWorkItems, 0, sizeof(WorkItem) * numSamples);
-    cudaMemset(vmmQueue, 0, sizeof(Queue));
+    cudaMemset(vmmQueue, 0, sizeof(VMMQueue));
 
     VMMMapState *vmmMapStates = allocator.Alloc<VMMMapState>(maxNumNodes, 4u);
 

@@ -18,7 +18,7 @@ struct Device
     void ExecuteKernel(KernelHandle handle, uint32_t numBlocks, uint32_t blockSize,
                        Args... args)
     {
-        void *paramArray[] = {(void *)args...};
+        void *paramArray[] = {(void *)&args...};
         ExecuteKernelInternal(handle, numBlocks, blockSize, paramArray, sizeof...(args));
     }
     virtual void ExecuteKernelInternal(KernelHandle handle, uint32_t numBlocks,

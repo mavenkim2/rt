@@ -13,7 +13,7 @@
 namespace rt
 {
 
-// TODO IMPORTANT: for other gpu platforms, change #ifdef __CUDACC__ 
+// TODO IMPORTANT: for other gpu platforms, change #ifdef __CUDACC__
 
 #ifdef __CUDACC__
 template <typename T>
@@ -693,6 +693,28 @@ struct SplitStatistics
         numSamples[componentIndex]       = num;
     }
 #endif
+};
+
+struct VMMQueue
+{
+    uint32_t readOffset;
+    uint32_t writeOffset;
+};
+
+struct WorkItem
+{
+    uint32_t nodeIndex;
+    uint32_t offset;
+    uint32_t count;
+};
+
+struct VMMMapState
+{
+    int numWorkItems;
+    uint32_t numSamples;
+    uint32_t sampleOffset;
+    float previousLogLikelihood;
+    uint32_t iteration;
 };
 
 } // namespace rt

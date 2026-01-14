@@ -3,7 +3,7 @@
 namespace rt
 {
 
-PathGuiding::PathGuiding()
+PathGuiding::PathGuiding(Device *device) : device(device)
 {
     // TODO: hardcoded
     const uint32_t numSamples  = 1u << 22u;
@@ -15,16 +15,12 @@ PathGuiding::PathGuiding()
     for (int kernel = 0; kernel < PATH_GUIDING_KERNEL_MAX; kernel++)
     {
         handles[kernel] =
-            device->RegisterKernels((const char *)pathGuidingKernelNames[handle].str, handle);
+            device->RegisterKernels((const char *)pathGuidingKernelNames[kernel].str, handle);
     }
 
     u32 numVMMs         = 32;
     u32 numBlocks       = numVMMs;
     const u32 blockSize = 256;
-
-    // port my allocator
-    device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_INITIALIZE_SAMPLES], numBlocks,
-                          blockSize, numVMMs);
 
     Bounds3f *sampleBounds = device->Alloc<Bounds3f>(1, 4u);
 
@@ -38,48 +34,53 @@ PathGuiding::PathGuiding()
     device->MemZero(vmmStatistics, sizeof(VMMStatistics) * maxNumNodes);
     device->MemZero(splitStatistics, sizeof(SplitStatistics) * maxNumNodes);
 
-#if 0
-    SampleData *samples = allocator.Alloc<SampleData>(numSamples, 4u);
+    SampleData *samples = device->Alloc<SampleData>(numSamples, 4u);
 
-    uint32_t *leafNodeIndices = allocator.Alloc<uint32_t>(maxNumNodes + 1, 4u);
+    uint32_t *leafNodeIndices = device->Alloc<uint32_t>(maxNumNodes + 1, 4u);
     uint32_t *numLeafNodes    = leafNodeIndices;
     leafNodeIndices += 1;
-    float *samplePosX = allocator.Alloc<float>(numSamples, 4u);
-    float *samplePosY = allocator.Alloc<float>(numSamples, 4u);
-    float *samplePosZ = allocator.Alloc<float>(numSamples, 4u);
+    float *samplePosX = device->Alloc<float>(numSamples, 4u);
+    float *samplePosY = device->Alloc<float>(numSamples, 4u);
+    float *samplePosZ = device->Alloc<float>(numSamples, 4u);
 
-    float *sampleDirX      = allocator.Alloc<float>(numSamples, 128u);
-    float *sampleDirY      = allocator.Alloc<float>(numSamples, 4u);
-    float *sampleDirZ      = allocator.Alloc<float>(numSamples, 4u);
-    float *sampleWeights   = allocator.Alloc<float>(numSamples, 4u);
-    float *samplePdfs      = allocator.Alloc<float>(numSamples, 4u);
-    float *sampleDistances = allocator.Alloc<float>(numSamples, 4u);
+    float *sampleDirX      = device->Alloc<float>(numSamples, 128u);
+    float *sampleDirY      = device->Alloc<float>(numSamples, 4u);
+    float *sampleDirZ      = device->Alloc<float>(numSamples, 4u);
+    float *sampleWeights   = device->Alloc<float>(numSamples, 4u);
+    float *samplePdfs      = device->Alloc<float>(numSamples, 4u);
+    float *sampleDistances = device->Alloc<float>(numSamples, 4u);
 
     SOAFloat3 samplePositions  = {samplePosX, samplePosY, samplePosZ};
     SOAFloat3 sampleDirections = {sampleDirX, sampleDirY, sampleDirZ};
 
-    uint32_t *sampleIndices    = allocator.Alloc<uint32_t>(numSamples, 4u);
-    uint32_t *newSampleIndices = allocator.Alloc<uint32_t>(numSamples, 4u);
+    uint32_t *sampleIndices    = device->Alloc<uint32_t>(numSamples, 4u);
+    uint32_t *newSampleIndices = device->Alloc<uint32_t>(numSamples, 4u);
 
-    LevelInfo *levelInfo = allocator.Alloc<LevelInfo>(1, 4u);
+    LevelInfo *levelInfo = device->Alloc<LevelInfo>(1, 4u);
 
-    Queue *reduceQueue           = allocator.Alloc<Queue>(1, 4u);
-    Queue *partitionQueue        = allocator.Alloc<Queue>(1, 4u);
-    Queue *vmmQueue              = allocator.Alloc<Queue>(1, 4u);
-    WorkItem *reductionWorkItems = allocator.Alloc<WorkItem>(2 * numSamples / blockSize, 4u);
-    WorkItem *partitionWorkItems = allocator.Alloc<WorkItem>(2 * numSamples / blockSize, 4u);
-    WorkItem *vmmWorkItems       = allocator.Alloc<WorkItem>(numSamples, 4u);
+    VMMQueue *reduceQueue        = device->Alloc<VMMQueue>(1, 4u);
+    VMMQueue *partitionQueue     = device->Alloc<VMMQueue>(1, 4u);
+    VMMQueue *vmmQueue           = device->Alloc<VMMQueue>(1, 4u);
+    WorkItem *reductionWorkItems = device->Alloc<WorkItem>(2 * numSamples / blockSize, 4u);
+    WorkItem *partitionWorkItems = device->Alloc<WorkItem>(2 * numSamples / blockSize, 4u);
+    WorkItem *vmmWorkItems       = device->Alloc<WorkItem>(numSamples, 4u);
 
-    cudaMemset(vmmWorkItems, 0, sizeof(WorkItem) * numSamples);
-    cudaMemset(vmmQueue, 0, sizeof(Queue));
+    device->MemZero(vmmWorkItems, sizeof(WorkItem) * numSamples);
+    device->MemZero(vmmQueue, sizeof(VMMQueue));
 
-    VMMMapState *vmmMapStates = allocator.Alloc<VMMMapState>(maxNumNodes, 4u);
+    VMMMapState *vmmMapStates = device->Alloc<VMMMapState>(maxNumNodes, 4u);
 
     float3 sceneMin = make_float3(0.f);
     float3 sceneMax = make_float3(100.f);
 
-    printf("amount alloc: %u\n", allocator.offset);
-#endif
+    const u32 numSampleBlocks = (numSamples + blockSize - 1) / blockSize;
+
+    device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_INITIALIZE_SAMPLES], numSampleBlocks,
+                          blockSize, sampleStatistics, sampleBounds, levelInfo, nodes, samples,
+                          sampleDirections, samplePositions, sampleIndices, numSamples,
+                          sceneMin, sceneMax);
+
+    cudaDeviceSynchronize();
 }
 
 } // namespace rt
