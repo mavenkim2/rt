@@ -332,7 +332,6 @@ inline Vec3<T> ClampZero(const Vec3<T> &v)
 }
 
 typedef Vec3<f32> Vec3f;
-typedef Vec3<f32> float3;
 typedef Vec3<u32> Vec3u;
 typedef Vec3<i32> Vec3i;
 
@@ -408,9 +407,6 @@ inline void CoordinateSystem(const Vec3<T> &v1, Vec3<T> *v2, Vec3<T> *v3)
     *v2      = Vec3<T>(1 + sign * Sqr(v1.x) * a, sign * b, -sign * v1.x);
     *v3      = Vec3<T>(b, sign + Sqr(v1.y) * a, -v1.y);
 }
-
-// TODO: unify cpu gpu code paths
-inline float3 make_float3(float a, float b, float c) { return float3(a, b, c); }
 
 } // namespace rt
 #endif

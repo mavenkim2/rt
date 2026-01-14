@@ -15,14 +15,14 @@ inline f32 RandomFloat(f32 min, f32 max) { return min + (max - min) * RandomFloa
 
 inline i32 RandomInt(i32 min, i32 max) { return i32(RandomFloat(f32(min), f32(max))); }
 
-inline float3 RandomVec3() { return make_float3(RandomFloat(), RandomFloat(), RandomFloat()); }
+inline Vec3f RandomVec3() { return Vec3f(RandomFloat(), RandomFloat(), RandomFloat()); }
 
-inline float3 RandomVec3(f32 min, f32 max)
+inline Vec3f RandomVec3(f32 min, f32 max)
 {
-    return make_float3(RandomFloat(min, max), RandomFloat(min, max), RandomFloat(min, max));
+    return Vec3f(RandomFloat(min, max), RandomFloat(min, max), RandomFloat(min, max));
 }
 
-inline float3 RandomCosineDirection()
+inline Vec3f RandomCosineDirection()
 {
     f32 r1 = RandomFloat();
     f32 r2 = RandomFloat();
@@ -31,7 +31,7 @@ inline float3 RandomCosineDirection()
     f32 x   = Cos(phi) * Sqrt(r2);
     f32 y   = Sin(phi) * Sqrt(r2);
     f32 z   = Sqrt(1 - r2);
-    return make_float3(x, y, z);
+    return Vec3f(x, y, z);
 }
 
 //////////////////////////////

@@ -2,11 +2,19 @@
 #define SAMPLING_H
 
 #include "random.h"
-#include "math/vec4.h"
-#include "math/math.h"
+#include "math/math_include.h"
 
 namespace rt
 {
+
+template <typename T>
+inline Vec3<T> SampleUniformSphere(const Vec2<T> &u)
+{
+    T z   = 1 - 2 * u.x;
+    T r   = SafeSqrt(1 - z * z);
+    T phi = 2 * PI * u.y;
+    return {r * Cos(phi), r * Sin(phi), z};
+}
 
 template <typename T>
 T LinearPDF(T x, T a, T b)
@@ -71,7 +79,7 @@ Vec2<T> SampleBilinear(const Vec2<T> &u, const Vec4<T> &w)
 }
 
 inline LaneNF32 SphericalQuadArea(const Vec3lfn &a, const Vec3lfn &b, const Vec3lfn &c,
-                           const Vec3lfn &d)
+                                  const Vec3lfn &d)
 {
     Vec3lfn axb = Normalize(Cross(a, b));
     Vec3lfn bxc = Normalize(Cross(b, c));
@@ -85,8 +93,9 @@ inline LaneNF32 SphericalQuadArea(const Vec3lfn &a, const Vec3lfn &b, const Vec3
     return Abs(g0 + g1 + g2 + g3 - 2 * PI);
 }
 
-inline Vec3lfn SampleSphericalRectangle(const Vec3lfn &p, const Vec3lfn &base, const Vec3lfn &eu,
-                                 const Vec3lfn &ev, const Vec2lfn &samples, LaneNF32 *pdf)
+inline Vec3lfn SampleSphericalRectangle(const Vec3lfn &p, const Vec3lfn &base,
+                                        const Vec3lfn &eu, const Vec3lfn &ev,
+                                        const Vec2lfn &samples, LaneNF32 *pdf)
 {
     LaneNF32 euLength = Length(eu);
     LaneNF32 evLength = Length(ev);
@@ -217,15 +226,6 @@ inline Vec2<T> InvertUniformHemisphereSample(const Vec3<T> &w)
     return Vec2<T>(w.z, phi / (2 * PI));
 }
 
-template <typename T>
-inline Vec3<T> SampleUniformSphere(const Vec2<T> &u)
-{
-    T z   = 1 - 2 * u[0];
-    T r   = SafeSqrt(1 - z * z);
-    T phi = 2 * PI * u[1];
-    return {r * Cos(phi), r * Sin(phi), z};
-}
-
 inline f32 UniformSpherePDF() { return Inv4Pi; }
 
 template <typename T>
@@ -273,9 +273,5 @@ inline Vec3f RandomInUnitDisk()
     return Vec3f(SampleUniformDiskConcentric(u), 0.f);
 }
 
-// inline Vec2f InvertCosineHemisphereSample(Vec3f w)
-// {
-// return InvertUniformDisk
-// }
 } // namespace rt
 #endif

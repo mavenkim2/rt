@@ -1,3 +1,5 @@
+#pragma once
+
 #ifdef __CUDACC__
 #pragma warning test
 __device__ void atomicAdd(float3 *a, float3 b)

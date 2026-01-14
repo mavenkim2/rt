@@ -10,14 +10,13 @@
 // restructured and adapted for CUDA execution.
 
 #include <assert.h>
-#include "../util/atomic.h"
 #include <cfloat>
 #include <stdio.h>
 #include "../base.h"
 #include "helper_math.h"
 #include "../thread_context.h"
-#include "../random.h"
 #include <type_traits>
+#include "path_guiding_util.h"
 
 #include "nvtx3/nvToolsExt.h"
 #include "nvtx3/nvToolsExtCuda.h"
@@ -32,6 +31,156 @@ static_assert(MAX_COMPONENTS <= WARP_SIZE, "too many max components");
 namespace rt
 {
 
+struct RNG
+{
+    __device__ static uint PCG(uint x)
+    {
+        uint state = x * 747796405u + 2891336453u;
+        uint word  = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+        return (word >> 22u) ^ word;
+    }
+
+    // Ref: M. Jarzynski and M. Olano, "Hash Functions for GPU Rendering," Journal of Computer
+    // Graphics Techniques, 2020.
+    static uint3 PCG3d(uint3 v)
+    {
+        v = v * 1664525u + 1013904223u;
+        v.x += v.y * v.z;
+        v.y += v.z * v.x;
+        v.z += v.x * v.y;
+        v ^= v >> 16u;
+        v.x += v.y * v.z;
+        v.y += v.z * v.x;
+        v.z += v.x * v.y;
+        return v;
+    }
+
+    // Ref: M. Jarzynski and M. Olano, "Hash Functions for GPU Rendering," Journal of Computer
+    // Graphics Techniques, 2020.
+    static uint4 PCG4d(uint4 v)
+    {
+        v = v * 1664525u + 1013904223u;
+        v.x += v.y * v.w;
+        v.y += v.z * v.x;
+        v.z += v.x * v.y;
+        v.w += v.y * v.z;
+        v ^= v >> 16u;
+        v.x += v.y * v.w;
+        v.y += v.z * v.x;
+        v.z += v.x * v.y;
+        v.w += v.y * v.z;
+        return v;
+    }
+
+    static RNG Init(uint2 pixel, uint frame)
+    {
+        RNG rng;
+#if 0
+        rng.State = RNG::PCG(pixel.x + RNG::PCG(pixel.y + RNG::PCG(frame)));
+#else
+        rng.State = RNG::PCG3d(make_uint3(pixel, frame)).x;
+#endif
+
+        return rng;
+    }
+
+    static RNG Init(uint2 pixel, uint frame, uint idx)
+    {
+        RNG rng;
+        rng.State = RNG::PCG4d(make_uint4(pixel, frame, idx)).x;
+
+        return rng;
+    }
+
+    __device__ static RNG Init(uint idx, uint frame)
+    {
+        RNG rng;
+        rng.State = rng.PCG(idx + PCG(frame));
+
+        return rng;
+    }
+
+    static RNG Init(uint seed)
+    {
+        RNG rng;
+        rng.State = seed;
+
+        return rng;
+    }
+
+    __device__ uint UniformUint()
+    {
+        this->State = this->State * 747796405u + 2891336453u;
+        uint word = ((this->State >> ((this->State >> 28u) + 4u)) ^ this->State) * 277803737u;
+
+        return (word >> 22u) ^ word;
+    }
+
+    __device__ float Uniform()
+    {
+#if 0
+    	return asfloat(0x3f800000 | (UniformUint() >> 9)) - 1.0f;
+#else
+        // For 32-bit floats, any integer in [0, 2^24] can be represented exactly and
+        // there may be rounding errors for anything larger, e.g. 2^24 + 1 is rounded
+        // down to 2^24.
+        // Given random integers, we can right shift by 8 bits to get integers in
+        // [0, 2^24 - 1]. After division by 2^-24, we have uniform numbers in [0, 1).
+        // Ref: https://prng.di.unimi.it/
+        return float(UniformUint() >> 8) * 0x1p-24f;
+#endif
+    }
+
+    // Returns samples in [0, bound)
+    __device__ uint UniformUintBounded(uint bound)
+    {
+        uint32_t threshold = (~bound + 1u) % bound;
+
+        for (;;)
+        {
+            uint32_t r = UniformUint();
+
+            if (r >= threshold) return r % bound;
+        }
+    }
+
+    // Returns samples in [0, bound). Biased but faster than #UniformUintBounded():
+    // https://en.wikipedia.org/wiki/Fisher%E2%80%93Yates_shuffle
+    __device__ uint UniformUintBounded_Faster(uint bound)
+    {
+        return (uint)(Uniform() * float(bound));
+    }
+
+    __device__ float2 Uniform2D()
+    {
+        float u0 = Uniform();
+        float u1 = Uniform();
+
+        return make_float2(u0, u1);
+    }
+
+    __device__ float3 Uniform3D()
+    {
+        float u0 = Uniform();
+        float u1 = Uniform();
+        float u2 = Uniform();
+
+        return make_float3(u0, u1, u2);
+    }
+
+    __device__ float4 Uniform4D()
+    {
+        float u0 = Uniform();
+        float u1 = Uniform();
+        float u2 = Uniform();
+        float u3 = Uniform();
+
+        return make_float4(u0, u1, u2, u3);
+    }
+
+    uint State;
+};
+
 __device__ float3 SampleUniformSphere(float2 u)
 {
     float z   = 1 - 2 * u.x;
@@ -39,541 +188,6 @@ __device__ float3 SampleUniformSphere(float2 u)
     float phi = 2 * PI * u.y;
     return make_float3(r * cos(phi), r * sin(phi), z);
 }
-
-template <typename T>
-__device__ T WarpReduceSum(T val)
-{
-#pragma unroll
-    for (int offset = (WARP_SIZE >> 1); offset > 0; offset >>= 1)
-    {
-        val += __shfl_down_sync(0xffffffff, val, offset);
-    }
-    return val;
-}
-
-template <>
-__device__ float3 WarpReduceSum(float3 val)
-{
-    val.x = WarpReduceSum(val.x);
-    val.y = WarpReduceSum(val.y);
-    val.z = WarpReduceSum(val.z);
-    return val;
-}
-
-template <>
-__device__ int3 WarpReduceSum(int3 val)
-{
-    val.x = WarpReduceSum(val.x);
-    val.y = WarpReduceSum(val.y);
-    val.z = WarpReduceSum(val.z);
-    return val;
-}
-
-template <>
-__device__ longlong3 WarpReduceSum(longlong3 val)
-{
-    val.x = WarpReduceSum(val.x);
-    val.y = WarpReduceSum(val.y);
-    val.z = WarpReduceSum(val.z);
-    return val;
-}
-
-template <>
-__device__ uint3 WarpReduceSum(uint3 val)
-{
-    val.x = WarpReduceSum(val.x);
-    val.y = WarpReduceSum(val.y);
-    val.z = WarpReduceSum(val.z);
-    return val;
-}
-
-template <typename T>
-__device__ T WarpReduceMin(T val)
-{
-#pragma unroll
-    for (int offset = (WARP_SIZE >> 1); offset > 0; offset >>= 1)
-    {
-        T temp = __shfl_down_sync(0xffffffff, val, offset);
-        val    = min(val, temp);
-    }
-    return val;
-}
-
-template <>
-__device__ float3 WarpReduceMin(float3 val)
-{
-    val.x = WarpReduceMin(val.x);
-    val.y = WarpReduceMin(val.y);
-    val.z = WarpReduceMin(val.z);
-    return val;
-}
-
-template <>
-__device__ uint3 WarpReduceMin(uint3 val)
-{
-    val.x = WarpReduceMin(val.x);
-    val.y = WarpReduceMin(val.y);
-    val.z = WarpReduceMin(val.z);
-    return val;
-}
-
-template <typename T>
-__device__ T WarpReduceMax(T val)
-{
-#pragma unroll
-    for (int offset = (WARP_SIZE >> 1); offset > 0; offset >>= 1)
-    {
-        T temp = __shfl_down_sync(0xffffffff, val, offset);
-        val    = max(val, temp);
-    }
-    return val;
-}
-
-template <>
-__device__ float3 WarpReduceMax(float3 val)
-{
-    val.x = WarpReduceMax(val.x);
-    val.y = WarpReduceMax(val.y);
-    val.z = WarpReduceMax(val.z);
-    return val;
-}
-
-template <>
-__device__ uint3 WarpReduceMax(uint3 val)
-{
-    val.x = WarpReduceMax(val.x);
-    val.y = WarpReduceMax(val.y);
-    val.z = WarpReduceMax(val.z);
-    return val;
-}
-
-template <typename T>
-__device__ T WarpReadLaneAt(T val, uint32_t thread)
-{
-    val = __shfl_sync(0xffffffff, val, thread);
-    return val;
-}
-
-template <>
-__device__ float3 WarpReadLaneAt(float3 val, uint32_t thread)
-{
-    val.x = __shfl_sync(0xffffffff, val.x, thread);
-    val.y = __shfl_sync(0xffffffff, val.y, thread);
-    val.z = __shfl_sync(0xffffffff, val.z, thread);
-    return val;
-}
-
-template <typename T>
-__device__ T WarpReadLaneFirst(T val)
-{
-    val = __shfl_sync(0xffffffff, val, 0);
-    return val;
-}
-
-template <typename T>
-__device__ T WarpReduceSumBroadcast(T val)
-{
-    val = WarpReduceSum(val);
-    return WarpReadLaneFirst(val);
-}
-
-inline __device__ uint32_t FloatToOrderedUint(float f)
-{
-    uint32_t u    = __float_as_uint(f);
-    uint32_t mask = (u & 0x80000000) ? ~0u : 0x80000000;
-    return u ^ mask;
-}
-
-inline __device__ float OrderedUintToFloat(uint32_t u)
-{
-    uint32_t mask = (u & 0x80000000) ? 0x80000000 : ~0u;
-    return __uint_as_float(u ^ mask);
-}
-
-inline __device__ uint3 FloatToOrderedUint(float3 f)
-{
-    uint3 u;
-    u.x = FloatToOrderedUint(f.x);
-    u.y = FloatToOrderedUint(f.y);
-    u.z = FloatToOrderedUint(f.z);
-    return u;
-}
-
-inline __device__ float3 OrderedUintToFloat(uint3 u)
-{
-    float3 f;
-    f.x = OrderedUintToFloat(u.x);
-    f.y = OrderedUintToFloat(u.y);
-    f.z = OrderedUintToFloat(u.z);
-    return f;
-}
-
-template <typename T>
-struct Bounds
-{
-    T boundsMin;
-    T boundsMax;
-
-    __device__ void Extend(T value)
-    {
-        boundsMin = min(boundsMin, value);
-        boundsMax = max(boundsMax, value);
-    }
-
-    __device__ void WarpReduce()
-    {
-        boundsMin = WarpReduceMin(boundsMin);
-        boundsMax = WarpReduceMax(boundsMax);
-    }
-
-    __device__ void AtomicMerge(const Bounds &other) {}
-};
-
-struct SOAFloat3Ref
-{
-    float *x, *y, *z;
-    const uint32_t index;
-
-    __device__ SOAFloat3Ref &operator=(const float3 &val)
-    {
-        x[index] = val.x;
-        y[index] = val.y;
-        z[index] = val.z;
-        return *this;
-    }
-
-    __device__ operator float3() const { return make_float3(x[index], y[index], z[index]); }
-
-    __device__ SOAFloat3Ref &operator=(const SOAFloat3Ref &other)
-    {
-        float3 val = (float3)other;
-        return (*this = val);
-    }
-};
-
-struct SOAFloat3
-{
-    float *x;
-    float *y;
-    float *z;
-
-    __device__ SOAFloat3Ref operator[](uint32_t index) { return {x, y, z, index}; }
-
-    __device__ float3 operator[](uint32_t index) const
-    {
-        return make_float3(x[index], y[index], z[index]);
-    }
-
-    __device__ SOAFloat3 operator+(uint32_t offset)
-    {
-        SOAFloat3 other;
-        other.x = x + offset;
-        other.y = y + offset;
-        other.z = z + offset;
-        return other;
-    }
-};
-
-struct SampleData
-{
-    float3 pos;
-    float3 dir;
-    float weight;
-    float pdf;
-};
-
-struct SOASampleDataRef
-{
-    SOAFloat3Ref pos;
-    SOAFloat3Ref dir;
-    float *weights;
-    float *pdfs;
-    const uint32_t index;
-
-    __device__ SOASampleDataRef &operator=(const SampleData &val)
-    {
-        pos            = val.pos;
-        dir            = val.dir;
-        weights[index] = val.weight;
-        pdfs[index]    = val.pdf;
-        return *this;
-    }
-
-    // __device__ operator float3() const { return make_float3(x[index], y[index], z[index]); }
-    //
-    // __device__ SOASampleDataRef &operator=(const SOAFloat3Ref &other)
-    // {
-    //     float3 val = (float3)other;
-    //     return (*this = val);
-    // }
-};
-
-struct SOASampleData
-{
-    SOAFloat3 pos;
-    SOAFloat3 dir;
-
-    float *weights;
-    float *pdfs;
-    float *distances;
-
-    __device__ SOASampleDataRef operator[](uint32_t index)
-    {
-        return {pos[index], dir[index], weights, pdfs, index};
-    }
-
-    __device__ SampleData operator[](uint32_t index) const
-    {
-        return {pos[index], dir[index], weights[index], pdfs[index]};
-    }
-};
-
-template <>
-struct Bounds<float3>
-{
-private:
-    uint3 boundsMin;
-    uint3 boundsMax;
-
-public:
-    __device__ Bounds()
-    {
-        const uint pos_inf = 0xff800000;
-        const uint neg_inf = ~0xff800000;
-
-        boundsMin = make_uint3(pos_inf);
-        boundsMax = make_uint3(neg_inf);
-    }
-
-    __device__ void Clear()
-    {
-        const uint pos_inf = 0xff800000;
-        const uint neg_inf = ~0xff800000;
-
-        boundsMin = make_uint3(pos_inf);
-        boundsMax = make_uint3(neg_inf);
-    }
-
-    __device__ void Extend(float3 value)
-    {
-        uint3 val = FloatToOrderedUint(value);
-        boundsMin = min(boundsMin, val);
-        boundsMax = max(boundsMax, val);
-    }
-
-    __device__ void WarpReduce()
-    {
-        boundsMin = WarpReduceMin(boundsMin);
-        boundsMax = WarpReduceMax(boundsMax);
-    }
-
-    __device__ void AtomicMerge(const Bounds &other)
-    {
-        atomicMin(&boundsMin, other.boundsMin);
-        atomicMax(&boundsMax, other.boundsMax);
-    }
-
-    __device__ void SetBoundsMin(float3 f) { boundsMin = FloatToOrderedUint(f); }
-    __device__ void SetBoundsMax(float3 f) { boundsMax = FloatToOrderedUint(f); }
-
-    __device__ float3 GetBoundsMin() const { return OrderedUintToFloat(boundsMin); }
-    __device__ float3 GetBoundsMax() const { return OrderedUintToFloat(boundsMax); }
-
-    __device__ uint3 GetBoundsMinUint() const { return boundsMin; }
-    __device__ uint3 GetBoundsMaxUint() const { return boundsMax; }
-
-    __device__ float3 GetCenter() const
-    {
-        float3 bMin = GetBoundsMin();
-        float3 bMax = GetBoundsMax();
-
-        return (bMin + bMax) * 0.5f;
-    }
-
-    __device__ float3 GetHalfExtent() const
-    {
-        float3 bMin = GetBoundsMin();
-        float3 bMax = GetBoundsMax();
-
-        return (bMax - bMin) * 0.5f;
-    }
-};
-
-typedef Bounds<float3> Bounds3f;
-
-struct LevelInfo
-{
-    uint32_t start;
-    uint32_t count;
-    uint32_t childCount;
-};
-
-struct KDTreeNode
-{
-    float splitPos;
-    uint32_t childIndex_dim;
-
-    // TODO: remove?
-    int parentIndex;
-
-    uint32_t offset;
-    uint32_t count;
-    uint32_t vmmIndex;
-
-    __device__ uint32_t GetChildIndex() const { return (childIndex_dim << 2) >> 2; }
-    __device__ void SetChildIndex(uint32_t childIndex)
-    {
-        assert(childIndex < (1u << 30u));
-        childIndex_dim |= childIndex;
-    }
-    __device__ uint32_t GetSplitDim() const { return childIndex_dim >> 30; }
-    __device__ void SetSplitDim(uint32_t dim)
-    {
-        assert(dim < 3);
-        childIndex_dim |= dim << 30;
-    }
-    __device__ bool HasChild() const { return childIndex_dim != ~0u; }
-    __device__ bool IsChild() const { return (childIndex_dim >> 30u) == 3u; }
-};
-
-#define INTEGER_BINS                     float(1 << 18)
-#define INTEGER_SAMPLE_STATS_BOUND_SCALE (1.0f + 2.f / INTEGER_BINS)
-#define MAX_TREE_DEPTH                   32
-#define MAX_SAMPLES_PER_LEAF             32000
-#define MIN_SPLIT_SAMPLES                (MAX_SAMPLES_PER_LEAF / 8u)
-#define MIN_MERGE_SAMPLES                (MAX_SAMPLES_PER_LEAF / 4u)
-
-struct SampleStatistics
-{
-    Bounds3f bounds;
-    // int3 mean;
-    // int3 variance;
-    longlong3 mean;
-    longlong3 variance;
-
-    uint32_t numSamples;
-
-    __device__ SampleStatistics()
-        : numSamples(0), bounds(), mean(make_longlong3(0, 0, 0)),
-          variance(make_longlong3(0, 0, 0))
-    {
-    }
-
-    __device__ void Clear()
-    {
-        numSamples = 0;
-        bounds.Clear();
-        mean     = make_longlong3(0, 0, 0);
-        variance = make_longlong3(0, 0, 0);
-    }
-
-    __device__ void AddSample(float3 pos, float3 center, float3 invHalfExtent)
-    {
-        numSamples++;
-        float3 tmpSample = (pos - center) * invHalfExtent;
-
-        float3 tmpVariance = ((tmpSample * tmpSample) * INTEGER_BINS);
-
-        mean += make_longlong3(tmpSample * INTEGER_BINS);
-        variance += make_longlong3(tmpVariance);
-
-        bounds.Extend(pos);
-    }
-
-    __device__ void WarpReduce()
-    {
-        bounds.WarpReduce();
-        mean       = WarpReduceSum(mean);
-        variance   = WarpReduceSum(variance);
-        numSamples = WarpReduceSum(numSamples);
-    }
-
-    __device__ inline void AtomicMerge(const SampleStatistics &other)
-    {
-        bounds.AtomicMerge(other.bounds);
-        atomicAdd(&mean, other.mean);
-        atomicAdd(&variance, other.variance);
-        atomicAdd(&numSamples, other.numSamples);
-    }
-
-    __device__ void ConvertToFloat(float3 center, float3 halfExtent, float3 &outMean,
-                                   float3 &outVariance)
-    {
-        longlong3 intMean = mean;
-        longlong3 intVar  = variance;
-
-        float invNumSamples = 1.f / numSamples;
-        float3 sampleMean   = make_float3(intMean) * invNumSamples;
-        sampleMean /= INTEGER_BINS;
-
-        float3 sampleMeanBin = sampleMean;
-        sampleMean           = sampleMean * halfExtent + center;
-
-        float3 lowerCollectedSampleBound = bounds.GetBoundsMin();
-        float3 upperCollectedSampleBound = bounds.GetBoundsMax();
-
-        float3 collectedSampleBoundExtend =
-            (upperCollectedSampleBound - lowerCollectedSampleBound);
-        float3 halfCollectedSampleBoundExtend =
-            (upperCollectedSampleBound - lowerCollectedSampleBound) * 0.5f;
-        float3 halfBinSize = make_float3(0.5f / INTEGER_BINS) * halfExtent;
-
-        sampleMean.x = sampleMean.x <= lowerCollectedSampleBound.x
-                           ? lowerCollectedSampleBound.x +
-                                 min(halfCollectedSampleBoundExtend.x, halfBinSize.x)
-                           : sampleMean.x;
-        sampleMean.y = sampleMean.y <= lowerCollectedSampleBound.y
-                           ? lowerCollectedSampleBound.y +
-                                 min(halfCollectedSampleBoundExtend.y, halfBinSize.y)
-                           : sampleMean.y;
-        sampleMean.z = sampleMean.z <= lowerCollectedSampleBound.z
-                           ? lowerCollectedSampleBound.z +
-                                 min(halfCollectedSampleBoundExtend.z, halfBinSize.z)
-                           : sampleMean.z;
-        sampleMean.x = sampleMean.x >= upperCollectedSampleBound.x
-                           ? upperCollectedSampleBound.x -
-                                 min(halfCollectedSampleBoundExtend.x, halfBinSize.x)
-                           : sampleMean.x;
-        sampleMean.y = sampleMean.y >= upperCollectedSampleBound.y
-                           ? upperCollectedSampleBound.y -
-                                 min(halfCollectedSampleBoundExtend.y, halfBinSize.y)
-                           : sampleMean.y;
-        sampleMean.z = sampleMean.z >= upperCollectedSampleBound.z
-                           ? upperCollectedSampleBound.z -
-                                 min(halfCollectedSampleBoundExtend.z, halfBinSize.z)
-                           : sampleMean.z;
-
-        float3 sampleVariance =
-            (make_float3(intVar.x, intVar.y, intVar.z) / (INTEGER_BINS)) * invNumSamples;
-        sampleVariance -= sampleMeanBin * sampleMeanBin;
-        sampleVariance = make_float3(max(0.f, sampleVariance.x), max(0.f, sampleVariance.y),
-                                     max(0.f, sampleVariance.z));
-
-        sampleVariance = sampleVariance * (halfExtent * halfExtent);
-        sampleVariance.x =
-            min(collectedSampleBoundExtend.x * collectedSampleBoundExtend.x, sampleVariance.x);
-        sampleVariance.y =
-            min(collectedSampleBoundExtend.y * collectedSampleBoundExtend.y, sampleVariance.y);
-        sampleVariance.z =
-            min(collectedSampleBoundExtend.z * collectedSampleBoundExtend.z, sampleVariance.z);
-
-        sampleVariance.x =
-            upperCollectedSampleBound.x - lowerCollectedSampleBound.x < 2.f / INTEGER_BINS
-                ? 0.f
-                : sampleVariance.x;
-        sampleVariance.y =
-            upperCollectedSampleBound.y - lowerCollectedSampleBound.y < 2.f / INTEGER_BINS
-                ? 0.f
-                : sampleVariance.y;
-        sampleVariance.z =
-            upperCollectedSampleBound.z - lowerCollectedSampleBound.z < 2.f / INTEGER_BINS
-                ? 0.f
-                : sampleVariance.z;
-
-        outVariance = sampleVariance;
-        outMean     = sampleMean;
-    }
-};
 
 inline __device__ void GetSplitDimensionAndPosition(float3 sampleMean, float3 sampleVariance,
                                                     float3 sampleBoundExtend,
@@ -929,17 +543,16 @@ GPU_KERNEL InitializeSamples(SampleStatistics *statistics, Bounds3f *sampleBound
     uint32_t sampleIndex = threadIdx.x + blockIdx.x * blockDim.x;
     if (sampleIndex < numSamples)
     {
-        RNG rng(sampleIndex, numSamples);
-        float2 u     = make_float2(rng.Uniform<float>(), rng.Uniform<float>());
+        RNG rng      = RNG::Init(sampleIndex, numSamples);
+        float2 u     = rng.Uniform2D();
         float3 dir   = SampleUniformSphere(u);
-        float weight = rng.Uniform<float>();
+        float weight = rng.Uniform();
         weight       = weight < 1e-3f ? 1e-3f : weight;
-        float pdf    = rng.Uniform<float>();
+        float pdf    = rng.Uniform();
         pdf          = pdf < 1e-3f ? 1e-3f : pdf;
 
-        float3 p =
-            make_float3(rng.Uniform<float>(), rng.Uniform<float>(), rng.Uniform<float>());
-        p = p * (sceneMax - sceneMin) + sceneMin;
+        float3 p = make_float3(rng.Uniform2D(), rng.Uniform());
+        p        = p * (sceneMax - sceneMin) + sceneMin;
 
         SampleData data;
         data.pos    = p;
