@@ -32,30 +32,18 @@ struct CUDAContextScope
 
 struct CUDAArena
 {
-    void *ptr;
-    uintptr_t base;
-    u32 totalSize;
-    u32 offset;
+    CUDADevice *device;
+    uintptr_t ptr;
 
-    void Init(CUDADevice *device, u32 size)
-    {
-        CUDAContextScope scope(device);
+    size_t granularity;
+    size_t reservedSize;
+    size_t committedSize;
 
-        CUDA_ASSERT(cuMemAlloc((CUdeviceptr *)&ptr, size));
-        totalSize = size;
-        base      = uintptr_t(ptr);
-        offset    = 0;
-    }
+    uintptr_t offset;
 
-    void *Alloc(u32 size, uintptr_t alignment)
-    {
-        uintptr_t current = uintptr_t((char *)ptr + offset);
-        uintptr_t aligned = (current + alignment - 1) & ~(alignment - 1);
-        offset            = (aligned - base) + size;
-
-        Assert(offset <= totalSize);
-        return (void *)aligned;
-    }
+    CUDAArena() = default;
+    CUDAArena(CUDADevice *device, size_t maxSize);
+    void *Alloc(size_t size, uintptr_t alignment);
 
     template <typename T>
     T *Alloc(u32 count, u32 alignment = 0)
