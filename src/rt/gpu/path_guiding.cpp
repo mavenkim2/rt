@@ -22,9 +22,10 @@ PathGuiding::PathGuiding(Device *device) : device(device)
     u32 numBlocks       = numVMMs;
     const u32 blockSize = 256;
 
+    gpuArena               = device->CreateArena(megabytes(512));
     Bounds3f *sampleBounds = device->Alloc<Bounds3f>(1, 4u);
 
-    KDTreeNode *nodes                  = device->Alloc<KDTreeNode>(maxNumNodes, 4u);
+    nodes                              = device->Alloc<KDTreeNode>(maxNumNodes, 4u);
     SampleStatistics *sampleStatistics = device->Alloc<SampleStatistics>(maxNumNodes, 8u);
     VMM *vmms                          = device->Alloc<VMM>(maxNumNodes, 4u);
     VMMStatistics *vmmStatistics       = device->Alloc<VMMStatistics>(maxNumNodes, 4);
@@ -53,9 +54,6 @@ PathGuiding::PathGuiding(Device *device) : device(device)
     SOAFloat3 samplePositions  = {samplePosX, samplePosY, samplePosZ};
     SOAFloat3 sampleDirections = {sampleDirX, sampleDirY, sampleDirZ};
 
-    uint32_t *sampleIndices    = device->Alloc<uint32_t>(numSamples, 4u);
-    uint32_t *newSampleIndices = device->Alloc<uint32_t>(numSamples, 4u);
-
     LevelInfo *levelInfo = device->Alloc<LevelInfo>(1, 4u);
 
     VMMQueue *reduceQueue        = device->Alloc<VMMQueue>(1, 4u);
@@ -75,12 +73,78 @@ PathGuiding::PathGuiding(Device *device) : device(device)
 
     const u32 numSampleBlocks = (numSamples + blockSize - 1) / blockSize;
 
-    device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_INITIALIZE_SAMPLES], numSampleBlocks,
-                          blockSize, sampleStatistics, sampleBounds, levelInfo, nodes, samples,
-                          sampleDirections, samplePositions, sampleIndices, numSamples,
-                          sceneMin, sceneMax);
+    // device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_INITIALIZE_SAMPLES], numSampleBlocks,
+    //                       blockSize, sampleStatistics, sampleBounds, levelInfo, nodes,
+    //                       samples, sampleDirections, samplePositions, sampleIndices,
+    //                       numSamples, sceneMin, sceneMax);
 
     cudaDeviceSynchronize();
+}
+
+void PathGuiding::Update()
+{
+    gpuArena->Clear();
+
+    // TODO IMPORTANT: sync here
+
+    const uint32_t numSamples = *numSamplesBuffer;
+
+    // TODO: ?
+    const uint32_t maxNumNodes = numSamples;
+
+    if (numSamples == 0)
+    {
+        Print("No path guiding samples. Skipping update.\n");
+        return;
+    }
+
+    uint32_t *sampleIndices    = gpuArena->Alloc<uint32_t>(numSamples, 4u);
+    uint32_t *newSampleIndices = gpuArena->Alloc<uint32_t>(numSamples, 4u);
+
+    uint32_t *nodeIndices    = gpuArena->Alloc<uint32_t>(maxNumNodes, 4u);
+    uint32_t *newNodeIndices = gpuArena->Alloc<uint32_t>(maxNumNodes, 4u);
+
+    LevelInfo *levelInfo;
+
+    // Update KD Tree
+    for (uint32_t level = 0; level < MAX_TREE_DEPTH; level++)
+    {
+        const uint32_t maxNodesOnLevel = 1u << level;
+        const uint32_t nodeBlocks      = (maxNodesOnLevel + WARP_SIZE - 1) / WARP_SIZE;
+
+        uint32_t *s0 = (level & 1) ? newSampleIndices : sampleIndices;
+        uint32_t *s1 = (level & 1) ? sampleIndices : newSampleIndices;
+
+        uint32_t *n0 = (level & 1) ? newNodeIndices : nodeIndices;
+        uint32_t *n1 = (level & 1) ? nodeIndices : newNodeIndices;
+
+        if (level > 0)
+        {
+            // device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_GET_CHILD_NODE_OFFSET,
+            // nodeBlocks, WARP_SIZE, levelInfo, nodes, level);
+        }
+        // device->ExecuteKernel(KernelHandle handle, uint32_t numBlocks, uint32_t blockSize,
+        // Args args...)
+        // BeginLevel<<<1, 1>>>(levelInfo, reduceQueue, partitionQueue);
+
+        device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_CALCULATE_CHILD_INDICES], 1, 1,
+                              levelInfo, nodes, n0, n1);
+#if 0
+        CreateWorkItems<blockSize>
+            <<<numBlocks, blockSize>>>(reduceQueue, reductionWorkItems, partitionQueue,
+                                       partitionWorkItems, nodes, levelInfo, sampleStatistics);
+
+        CalculateNodeStatistics<blockSize>
+            <<<numBlocks, blockSize>>>(reduceQueue, reductionWorkItems, nodes,
+                                       sampleStatistics, samplePositions, s0, sampleBounds);
+
+        CalculateSplitLocations<<<nodeBlocks, WARP_SIZE>>>(levelInfo, nodes, sampleStatistics,
+                                                           sampleBounds);
+
+        BuildKDTree<<<numBlocks, blockSize>>>(partitionQueue, partitionWorkItems, level,
+                                              levelInfo, nodes, s0, s1, samplePositions);
+#endif
+    }
 }
 
 } // namespace rt

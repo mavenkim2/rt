@@ -422,20 +422,6 @@ GPU_KERNEL InitializeSamples(SampleStatistics *statistics, Bounds3f *sampleBound
     }
 }
 
-__global__ void AssignSamples(uint32_t *vmmOffsets, uint32_t *vmmCounts, uint32_t numVMMs,
-                              uint32_t numSamples)
-{
-    assert(numSamples >= numVMMs);
-    uint32_t samplesPerVMM = numSamples / numVMMs;
-    uint32_t count         = 0;
-    for (uint i = 0; i < numVMMs; i++)
-    {
-        vmmOffsets[i] = count;
-        vmmCounts[i]  = samplesPerVMM;
-        count += samplesPerVMM;
-    }
-}
-
 inline __device__ float SoftAssignment(const VMM &vmm, float3 sampleDirection,
                                        float *softAssignment)
 {
@@ -758,7 +744,7 @@ UpdateMixtureHelper(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentS
     }
 }
 
-__global__ void
+GPU_KERNEL
 UpdateMixture(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStatistics,
               const SOASampleData samples, const uint32_t *__restrict__ leafNodeIndices,
               const uint32_t *__restrict__ numLeafNodes, const KDTreeNode *__restrict__ nodes)
@@ -767,25 +753,25 @@ UpdateMixture(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStatist
                                nodes);
 }
 
-__global__ void PartialUpdateMixture(VMM *__restrict__ vmms,
-                                     VMMStatistics *__restrict__ currentStatistics,
-                                     const SOASampleData samples,
-                                     const uint32_t *__restrict__ leafNodeIndices,
-                                     const uint32_t *__restrict__ numLeafNodes,
-                                     const KDTreeNode *__restrict__ nodes, VMMQueue *queue,
-                                     WorkItem *workItems)
+GPU_KERNEL PartialUpdateMixture(VMM *__restrict__ vmms,
+                                VMMStatistics *__restrict__ currentStatistics,
+                                const SOASampleData samples,
+                                const uint32_t *__restrict__ leafNodeIndices,
+                                const uint32_t *__restrict__ numLeafNodes,
+                                const KDTreeNode *__restrict__ nodes, VMMQueue *queue,
+                                WorkItem *workItems)
 {
     UpdateMixtureHelper<true>(vmms, currentStatistics, samples, leafNodeIndices, numLeafNodes,
                               nodes, queue, workItems);
 }
 
-__global__ void UpdateSplitStatistics(VMM *__restrict__ vmms,
-                                      VMMStatistics *__restrict__ currentStatistics,
-                                      SplitStatistics *__restrict__ splitStatistics,
-                                      const SOASampleData samples,
-                                      const uint32_t *__restrict__ leafNodeIndices,
-                                      const uint32_t *__restrict__ numLeafNodes,
-                                      const KDTreeNode *__restrict__ nodes)
+GPU_KERNEL UpdateSplitStatistics(VMM *__restrict__ vmms,
+                                 VMMStatistics *__restrict__ currentStatistics,
+                                 SplitStatistics *__restrict__ splitStatistics,
+                                 const SOASampleData samples,
+                                 const uint32_t *__restrict__ leafNodeIndices,
+                                 const uint32_t *__restrict__ numLeafNodes,
+                                 const KDTreeNode *__restrict__ nodes)
 {
     __shared__ float sharedChiSquareTotals[MAX_COMPONENTS];
 
@@ -910,7 +896,7 @@ __global__ void UpdateSplitStatistics(VMM *__restrict__ vmms,
     }
 }
 
-__global__ void
+GPU_KERNEL
 SplitComponents(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStatistics,
                 SplitStatistics *__restrict__ splitStatistics, const SOASampleData samples,
                 const uint32_t *__restrict__ leafNodeIndices,
@@ -1051,13 +1037,13 @@ SplitComponents(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStati
     }
 }
 
-__global__ void MergeComponents(VMM *__restrict__ vmms,
-                                VMMStatistics *__restrict__ currentStatistics,
-                                SplitStatistics *__restrict__ splitStatistics,
-                                const SOASampleData samples,
-                                const uint32_t *__restrict__ leafNodeIndices,
-                                const uint32_t *__restrict__ numLeafNodes,
-                                const KDTreeNode *__restrict__ nodes)
+GPU_KERNEL MergeComponents(VMM *__restrict__ vmms,
+                           VMMStatistics *__restrict__ currentStatistics,
+                           SplitStatistics *__restrict__ splitStatistics,
+                           const SOASampleData samples,
+                           const uint32_t *__restrict__ leafNodeIndices,
+                           const uint32_t *__restrict__ numLeafNodes,
+                           const KDTreeNode *__restrict__ nodes)
 {
     const float mergeThreshold = 0.025f;
     __shared__ float mergeKappas[MAX_COMPONENTS];
@@ -1387,10 +1373,10 @@ __global__ void MergeComponents(VMM *__restrict__ vmms,
     }
 }
 
-__global__ void UpdateComponentDistances(VMM *vmms, KDTreeNode *nodes,
-                                         VMMStatistics *vmmStatistics, SOASampleData samples,
-                                         const uint32_t *__restrict__ leafNodeIndices,
-                                         const uint32_t *__restrict__ numLeafNodes)
+GPU_KERNEL UpdateComponentDistances(VMM *vmms, KDTreeNode *nodes, VMMStatistics *vmmStatistics,
+                                    SOASampleData samples,
+                                    const uint32_t *__restrict__ leafNodeIndices,
+                                    const uint32_t *__restrict__ numLeafNodes)
 {
     __shared__ float batchDistances[MAX_COMPONENTS];
     __shared__ float batchSumWeights[MAX_COMPONENTS];
@@ -1475,10 +1461,10 @@ __global__ void UpdateComponentDistances(VMM *vmms, KDTreeNode *nodes,
 }
 
 // Reprojects samples to VMM
-__global__ void ReprojectSamples(SampleStatistics *statistics, SOASampleData samples,
-                                 const uint32_t *__restrict__ leafNodeIndices,
-                                 const uint32_t *__restrict__ numLeafNodes,
-                                 const KDTreeNode *__restrict__ nodes, const Bounds3f *bounds)
+GPU_KERNEL ReprojectSamples(SampleStatistics *statistics, SOASampleData samples,
+                            const uint32_t *__restrict__ leafNodeIndices,
+                            const uint32_t *__restrict__ numLeafNodes,
+                            const KDTreeNode *__restrict__ nodes, const Bounds3f *bounds)
 
 {
     if (blockIdx.x >= *numLeafNodes) return;
@@ -1697,10 +1683,12 @@ __device__ void BlockReductionGridStride(MergeType *totals, MergeType &out,
                               addFunc);
 }
 
-template <uint32_t blockSize>
-__global__ void GetSampleBounds(Bounds3f *sampleBounds, float *sampleX, float *sampleY,
-                                float *sampleZ, uint32_t numSamples)
+GPU_KERNEL GetSampleBounds(Bounds3f *sampleBounds, float *sampleX, float *sampleY,
+                           float *sampleZ, uint32_t numSamples)
 {
+    const uint32_t blockSize = 256;
+    assert(blockDim.x == blockSize);
+
     static constexpr uint32_t numWarps = blockSize >> WARP_SHIFT;
     __shared__ Bounds3f totals[numWarps];
 
@@ -1711,8 +1699,8 @@ __global__ void GetSampleBounds(Bounds3f *sampleBounds, float *sampleX, float *s
         });
 }
 
-__global__ void CalculateSplitLocations(LevelInfo *info, KDTreeNode *nodes,
-                                        SampleStatistics *statistics, Bounds3f *bounds = 0)
+GPU_KERNEL CalculateSplitLocations(LevelInfo *info, KDTreeNode *nodes,
+                                   SampleStatistics *statistics, Bounds3f *bounds = 0)
 {
     uint32_t threadIndex = threadIdx.x + blockDim.x * blockIdx.x;
     if (threadIndex >= info->count) return;
@@ -1755,7 +1743,7 @@ __global__ void CalculateSplitLocations(LevelInfo *info, KDTreeNode *nodes,
     }
 }
 
-__global__ void BeginLevel(LevelInfo *levelInfo, VMMQueue *queue, VMMQueue *queue2)
+GPU_KERNEL BeginLevel(LevelInfo *levelInfo, VMMQueue *queue, VMMQueue *queue2)
 {
     // printf("level %u %u %u\n", levelInfo->start, levelInfo->count,
     // levelInfo->childCount); printf("queue: %u\n", queue->writeOffset);
@@ -1770,30 +1758,28 @@ __global__ void BeginLevel(LevelInfo *levelInfo, VMMQueue *queue, VMMQueue *queu
     queue2->writeOffset = 0;
 }
 
-__global__ void Pass(uint32_t *sampleIndices, uint32_t *newSampleIndices, uint32_t level)
+GPU_KERNEL CalculateChildIndices(LevelInfo *info, KDTreeNode *nodes, uint32_t *nodeIndices,
+                                 uint32_t *newNodeIndices)
 {
-    if (blockIdx.x == 0)
+    for (uint32_t nodeIndexIndex = 0; nodeIndexIndex < info->count; nodeIndexIndex++)
     {
-        printf("%u %u\n", sampleIndices[threadIdx.x], newSampleIndices[threadIdx.x]);
-    }
-}
-
-__global__ void CalculateChildIndices(LevelInfo *info, KDTreeNode *nodes)
-{
-    for (uint32_t nodeIndex = info->start; nodeIndex < info->start + info->count; nodeIndex++)
-    {
-        KDTreeNode &node = nodes[nodeIndex];
+        uint32_t nodeIndex = nodeIndices[nodeIndexIndex];
+        KDTreeNode &node   = nodes[nodeIndex];
 
         bool split = node.count > MAX_SAMPLES_PER_LEAF;
 
         {
-            // stats[nodeIndex] = SampleStatistics();
             if (split)
             {
-                assert(info->start == 1 || node.parentIndex != 0);
-                node.SetChildIndex(info->start + info->count + info->childCount);
-                // atomicAdd(&info->childCount, 2));
-                info->childCount += 2;
+                uint32_t childIndex = ~0u;
+                if (!node.HasChild())
+                {
+                    assert(info->start == 1 || node.parentIndex != 0);
+                    const uint32_t childIndex = info->start + info->count + info->childCount;
+                    node.SetChildIndex(childIndex);
+                }
+                newNodeIndices[info->childCount++] = childIndex;
+                newNodeIndices[info->childCount++] = childIndex + 1;
             }
             else
             {
@@ -1803,11 +1789,13 @@ __global__ void CalculateChildIndices(LevelInfo *info, KDTreeNode *nodes)
     }
 }
 
-template <uint32_t blockSize>
-__global__ void CreateWorkItems(VMMQueue *reduceQueue, WorkItem *reduceWorkItems,
-                                VMMQueue *partitionQueue, WorkItem *partitionWorkItems,
-                                KDTreeNode *nodes, LevelInfo *info, SampleStatistics *stats)
+GPU_KERNEL CreateWorkItems(VMMQueue *reduceQueue, WorkItem *reduceWorkItems,
+                           VMMQueue *partitionQueue, WorkItem *partitionWorkItems,
+                           KDTreeNode *nodes, LevelInfo *info, SampleStatistics *stats)
 {
+    assert(blockDim.x == 256);
+    const uint32_t blockSize = 256;
+
     if (blockIdx.x >= info->count) return;
 
     // TODO: this is bad and slow for now
@@ -1863,12 +1851,12 @@ __global__ void CreateWorkItems(VMMQueue *reduceQueue, WorkItem *reduceWorkItems
     }
 }
 
-template <uint32_t blockSize>
-__global__ void CalculateNodeStatistics(VMMQueue *queue, WorkItem *workItems,
-                                        KDTreeNode *nodes, SampleStatistics *statistics,
-                                        SOAFloat3 samplePositions, uint32_t *sampleIndices,
-                                        Bounds3f *bounds = 0)
+GPU_KERNEL CalculateNodeStatistics(VMMQueue *queue, WorkItem *workItems, KDTreeNode *nodes,
+                                   SampleStatistics *statistics, SOAFloat3 samplePositions,
+                                   uint32_t *sampleIndices, Bounds3f *bounds = 0)
 {
+    const uint32_t blockSize = 256;
+    assert(blockSize == blockDim.x);
     static constexpr uint32_t numWarps = blockSize >> WARP_SHIFT;
 
     __shared__ WorkItem workItem;
@@ -1918,9 +1906,9 @@ __global__ void CalculateNodeStatistics(VMMQueue *queue, WorkItem *workItems,
     }
 }
 
-__global__ void BuildKDTree(VMMQueue *queue, WorkItem *workItems, uint32_t level,
-                            LevelInfo *levelInfo, KDTreeNode *nodes, uint32_t *sampleIndices,
-                            uint32_t *newSampleIndices, SOAFloat3 samplePositions)
+GPU_KERNEL BuildKDTree(VMMQueue *queue, WorkItem *workItems, uint32_t level,
+                       LevelInfo *levelInfo, KDTreeNode *nodes, uint32_t *sampleIndices,
+                       uint32_t *newSampleIndices, SOAFloat3 samplePositions)
 {
     __shared__ KDTreeNode node;
     __shared__ WorkItem workItem;
@@ -1959,7 +1947,9 @@ __global__ void BuildKDTree(VMMQueue *queue, WorkItem *workItems, uint32_t level
     }
 }
 
-__global__ void GetChildNodeOffset(LevelInfo *levelInfo, KDTreeNode *nodes, uint32_t level)
+GPU_KERNEL Something(uint32_t *__restrict__ nodeIndices) {}
+
+GPU_KERNEL GetChildNodeOffset(LevelInfo *levelInfo, KDTreeNode *nodes, uint32_t level)
 {
     uint32_t threadIndex = threadIdx.x + blockIdx.x * blockDim.x;
 
@@ -1989,10 +1979,11 @@ __global__ void GetChildNodeOffset(LevelInfo *levelInfo, KDTreeNode *nodes, uint
     }
 }
 
-template <uint32_t blockSize>
-__global__ void FindLeafNodes(LevelInfo *levelInfo, KDTreeNode *nodes, uint32_t *nodeIndices,
-                              uint32_t *numLeafNodes, VMMMapState *states, VMM *vmms)
+GPU_KERNEL FindLeafNodes(LevelInfo *levelInfo, KDTreeNode *nodes, uint32_t *nodeIndices,
+                         uint32_t *numLeafNodes, VMMMapState *states, VMM *vmms)
 {
+    const uint32_t blockSize = 256;
+    assert(blockDim.x == blockSize);
     // uint32_t threadIndex = threadIdx.x + blockIdx.x * blockDim.x;
     // if (threadIndex >= levelInfo->start) return;
     // KDTreeNode &node = nodes[threadIndex];
@@ -2017,7 +2008,7 @@ __global__ void FindLeafNodes(LevelInfo *levelInfo, KDTreeNode *nodes, uint32_t 
     printf("%u\n", *numLeafNodes);
 }
 
-__global__ void
+GPU_KERNEL
 WriteSamplesToSOA(const uint32_t *__restrict__ numLeafNodes,
                   uint32_t *__restrict__ leafIndices, uint32_t *__restrict__ sampleIndices,
                   uint32_t *__restrict__ newSampleIndices, KDTreeNode *__restrict__ nodes,
@@ -2039,9 +2030,9 @@ WriteSamplesToSOA(const uint32_t *__restrict__ numLeafNodes,
     }
 }
 
-__global__ void PrintStatistics(SampleStatistics *stats, KDTreeNode *nodes, LevelInfo *info,
-                                uint32_t *test, VMM *vmm, VMMMapState *states,
-                                SplitStatistics *splitStats, VMMStatistics *vmmStats)
+GPU_KERNEL PrintStatistics(SampleStatistics *stats, KDTreeNode *nodes, LevelInfo *info,
+                           uint32_t *test, VMM *vmm, VMMMapState *states,
+                           SplitStatistics *splitStats, VMMStatistics *vmmStats)
 {
     uint32_t t = 6;
 
@@ -2133,12 +2124,6 @@ struct CUDAArena
     // void Release() { cudaFree; }
 };
 
-struct Field
-{
-};
-
-void PathGuidingUpdate() {}
-
 void test()
 {
     cudaFree(0);
@@ -2226,6 +2211,7 @@ void test()
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
+#if 0
     nvtxRangePush("start");
     InitializeSamples<<<(numSamples + 255) / 256, 256>>>(
         sampleStatistics, sampleBounds, levelInfo, nodes, samples, sampleDirections,
@@ -2313,6 +2299,7 @@ void test()
     cudaEventRecord(vmmStop);
     PrintStatistics<<<1, 1>>>(sampleStatistics, nodes, levelInfo, numLeafNodes, vmms,
                               vmmMapStates, splitStatistics, vmmStatistics);
+#endif
 
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess)
@@ -2327,8 +2314,8 @@ void test()
     cudaEventElapsedTime(&milliseconds, start, stop);
     printf("KD Tree GPU Time: %f ms\n", milliseconds);
 
-    cudaEventElapsedTime(&milliseconds, vmmStart, vmmStop);
-    printf("VMM GPU Time: %f ms\n", milliseconds);
+    // cudaEventElapsedTime(&milliseconds, vmmStart, vmmStop);
+    // printf("VMM GPU Time: %f ms\n", milliseconds);
 }
 
 } // namespace rt

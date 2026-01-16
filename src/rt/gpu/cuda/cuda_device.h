@@ -30,7 +30,7 @@ struct CUDAContextScope
         }                                                                                     \
     }
 
-struct CUDAArena
+struct CUDAArena : GPUArena
 {
     CUDADevice *device;
     uintptr_t ptr;
@@ -43,17 +43,9 @@ struct CUDAArena
 
     CUDAArena() = default;
     CUDAArena(CUDADevice *device, size_t maxSize);
-    void *Alloc(size_t size, uintptr_t alignment);
 
-    template <typename T>
-    T *Alloc(u32 count, u32 alignment = 0)
-    {
-        alignment = alignment == 0 ? sizeof(T) : alignment;
-        return (T *)Alloc(sizeof(T) * count, alignment);
-    }
-
-    void Clear() { offset = 0; }
-    // void Release() { cudaFree; }
+    void *Alloc(size_t size, uintptr_t alignment) override;
+    void Clear() override;
 };
 
 struct CUDADevice : Device
@@ -71,11 +63,13 @@ struct CUDADevice : Device
     ModuleHandle RegisterModule(string module) override;
     KernelHandle RegisterKernels(const char *kernel, ModuleHandle module) override;
 
-    void ExecuteKernelInternal(KernelHandle handle, uint32_t numBlocks, uint32_t blockSize,
-                               void **params, u32 paramCount) override;
-
+    GPUArena *CreateArena(size_t maxSize) override;
     void *Alloc(u32 size, uintptr_t alignment) override;
     void MemZero(void *ptr, uint64_t size) override;
+
+protected:
+    void ExecuteKernelInternal(KernelHandle handle, uint32_t numBlocks, uint32_t blockSize,
+                               void **params, u32 paramCount) override;
 };
 } // namespace rt
 

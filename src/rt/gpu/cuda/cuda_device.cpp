@@ -81,6 +81,8 @@ void *CUDAArena::Alloc(size_t size, uintptr_t alignment)
     }
 }
 
+void CUDAArena::Clear() { offset = 0; }
+
 // TODO: hardcoded
 CUDADevice::CUDADevice()
 {
@@ -143,6 +145,12 @@ void CUDADevice::ExecuteKernelInternal(KernelHandle handle, uint32_t numBlocks,
 
     // TODO: alternative streams. also, how do I ensure order is right?
     cuLaunchKernel(kernel, numBlocks, 1, 1, blockSize, 1, 1, 0, 0, params, 0);
+}
+
+GPUArena *CUDADevice::CreateArena(size_t maxSize)
+{
+    CUDAArena *a = PushStructConstruct(arena, CUDAArena)(this, maxSize);
+    return a;
 }
 
 void *CUDADevice::Alloc(u32 size, uintptr_t alignment)
