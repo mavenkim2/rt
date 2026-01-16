@@ -393,6 +393,11 @@ struct LevelInfo
 struct KDTreeNode
 {
     float splitPos;
+
+    // NOTE: This variable can be in one of three states.
+    // 1. Bits all set: child node
+    // 2. Child index bits set, dim = 3: internal node, split location not determined yet
+    // 3. Child index bits set, 0 < dim < 3: internal node
     uint32_t childIndex_dim;
 
     // TODO: remove?
@@ -428,8 +433,6 @@ struct KDTreeNode
 struct SampleStatistics
 {
     Bounds3f bounds;
-    // int3 mean;
-    // int3 variance;
     longlong3 mean;
     longlong3 variance;
 

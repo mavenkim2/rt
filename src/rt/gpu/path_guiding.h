@@ -60,12 +60,14 @@ struct PathGuiding
     GPUArena *gpuArena;
     Device *device;
     KernelHandle handles[PATH_GUIDING_KERNEL_MAX];
+    bool initialized;
 
     // CPU + GPU visible memory
     uint32_t *numSamplesBuffer;
 
     // GPU visible memory
     KDTreeNode *nodes;
+    SampleStatistics *sampleStatistics;
 
     void Update();
 };
