@@ -364,27 +364,12 @@ __device__ float MeanCosineToKappa(float meanCosine)
 
 #define GPU_KERNEL extern "C" __global__ void
 
-GPU_KERNEL InitializeSamples(Bounds3f *rootBounds, SampleStatistics *statistics,
-                             KDTreeBuildState *buildState, KDTreeNode *nodes,
-                             SampleData *samples, SOAFloat3 sampleDirections,
-                             SOAFloat3 samplePositions, uint32_t *__restrict__ sampleIndices,
-                             uint32_t numSamples, float3 sceneMin, float3 sceneMax)
+__device__ void RandomlyInitializeSamples(SampleData *samples, SOAFloat3 sampleDirections,
+                                          SOAFloat3 samplePositions,
+                                          uint32_t *__restrict__ sampleIndices,
+                                          uint32_t numSamples, float3 sceneMin,
+                                          float3 sceneMax)
 {
-    if (threadIdx.x == 0 && blockIdx.x == 0)
-    {
-        nodes[0].count  = numSamples;
-        nodes[0].offset = 0;
-        // nodes[0].childIndex_dim = 1;
-        nodes[0].parentIndex = -1;
-
-        buildState->totalNumNodes     = 1;
-        buildState->numNodes          = 0;
-        buildState->nextLevelNumNodes = 1;
-
-        *rootBounds   = Bounds3f();
-        statistics[0] = SampleStatistics();
-    }
-
     uint32_t sampleIndex = threadIdx.x + blockIdx.x * blockDim.x;
     if (sampleIndex < numSamples)
     {
@@ -411,6 +396,46 @@ GPU_KERNEL InitializeSamples(Bounds3f *rootBounds, SampleStatistics *statistics,
 
         samplePositions[sampleIndex] = p;
     }
+}
+
+GPU_KERNEL InitializeSamples(Bounds3f *rootBounds, SampleStatistics *statistics,
+                             KDTreeBuildState *buildState, KDTreeNode *nodes,
+                             SampleData *samples, SOAFloat3 sampleDirections,
+                             SOAFloat3 samplePositions, uint32_t *__restrict__ sampleIndices,
+                             uint32_t numSamples, float3 sceneMin, float3 sceneMax)
+{
+    if (threadIdx.x == 0 && blockIdx.x == 0)
+    {
+        nodes[0].count  = numSamples;
+        nodes[0].offset = 0;
+        // nodes[0].childIndex_dim = 1;
+        nodes[0].parentIndex = -1;
+
+        buildState->totalNumNodes     = 1;
+        buildState->numNodes          = 0;
+        buildState->nextLevelNumNodes = 1;
+
+        *rootBounds   = Bounds3f();
+        statistics[0] = SampleStatistics();
+    }
+
+    RandomlyInitializeSamples(samples, sampleDirections, samplePositions, sampleIndices,
+                              numSamples, sceneMin, sceneMax);
+}
+
+GPU_KERNEL UpdateStart(KDTreeBuildState *buildState, SampleData *samples,
+                       SOAFloat3 sampleDirections, SOAFloat3 samplePositions,
+                       uint32_t *__restrict__ sampleIndices, uint32_t numSamples,
+                       float3 sceneMin, float3 sceneMax)
+{
+    if (threadIdx.x == 0 && blockIdx.x == 0)
+    {
+        buildState->numNodes          = 0;
+        buildState->nextLevelNumNodes = 1;
+    }
+
+    RandomlyInitializeSamples(samples, sampleDirections, samplePositions, sampleIndices,
+                              numSamples, sceneMin, sceneMax);
 }
 
 inline __device__ float SoftAssignment(const VMM &vmm, float3 sampleDirection,
@@ -1745,6 +1770,7 @@ GPU_KERNEL BeginLevel(KDTreeBuildState *buildState)
 
 GPU_KERNEL CalculateChildIndices(KDTreeNode *__restrict__ nodes,
                                  KDTreeBuildState *__restrict__ buildState,
+                                 SampleStatistics *__restrict__ sampleStatistics,
                                  const uint32_t *__restrict__ nodeIndices,
                                  uint32_t *__restrict__ nextNodeIndices)
 {
@@ -1753,7 +1779,8 @@ GPU_KERNEL CalculateChildIndices(KDTreeNode *__restrict__ nodes,
         uint32_t nodeIndex = nodeIndices[nodeIndexIndex];
         KDTreeNode &node   = nodes[nodeIndex];
 
-        bool split    = node.count > MAX_SAMPLES_PER_LEAF;
+        bool split =
+            (node.count + sampleStatistics[nodeIndex].numSamples) > MAX_SAMPLES_PER_LEAF;
         bool hasChild = node.HasChild();
 
         if (split || hasChild)

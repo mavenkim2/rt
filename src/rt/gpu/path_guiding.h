@@ -29,6 +29,7 @@ enum PathGuidingKernels : int
     PATH_GUIDING_KERNEL_FIND_LEAF_NODES,
     PATH_GUIDING_KERNEL_WRITE_SAMPLES_SOA,
     PATH_GUIDING_KERNEL_PRINT_STATS,
+    PATH_GUIDING_KERNEL_UPDATE_START,
 
     PATH_GUIDING_KERNEL_MAX,
 };
@@ -53,6 +54,7 @@ static const string pathGuidingKernelNames[] = {
     "FindLeafNodes",
     "WriteSamplesToSOA",
     "PrintStatistics",
+    "UpdateStart",
 };
 
 struct PathGuiding

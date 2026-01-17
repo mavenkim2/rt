@@ -80,11 +80,6 @@ void PathGuiding::Update()
     float3 sceneMin = make_float3(0.f);
     float3 sceneMax = make_float3(100.f);
 
-    device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_INITIALIZE_SAMPLES], numSampleBlocks,
-                          blockSize, rootBounds, sampleStatistics, treeBuildState, nodes,
-                          samples, sampleDirections, samplePositions, sampleIndices,
-                          numSamples, sceneMin, sceneMax);
-
     // TODO IMPORTANT: sync here
     // const uint32_t numSamples = *numSamplesBuffer;
 
@@ -94,12 +89,23 @@ void PathGuiding::Update()
         return;
     }
 
+    bool wasInit = initialized;
     if (!initialized)
     {
         initialized = true;
+        device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_INITIALIZE_SAMPLES], numSampleBlocks,
+                              blockSize, rootBounds, sampleStatistics, treeBuildState, nodes,
+                              samples, sampleDirections, samplePositions, sampleIndices,
+                              numSamples, sceneMin, sceneMax);
         device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_GET_SAMPLE_BOUNDS], numSampleBlocks,
                               blockSize, rootBounds, samplePositions, numSamples);
         // numSamplesBuffer);
+    }
+    else
+    {
+        device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_UPDATE_START], numSampleBlocks,
+                              blockSize, treeBuildState, samples, sampleDirections,
+                              samplePositions, sampleIndices, numSamples, sceneMin, sceneMax);
     }
 
     // node indices
@@ -120,7 +126,8 @@ void PathGuiding::Update()
 
         device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_BEGIN_LEVEL], 1, 1, treeBuildState);
         device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_CALCULATE_CHILD_INDICES], 1, 1,
-                              nodes, treeBuildState, nodeIndices, nextNodeIndices);
+                              nodes, treeBuildState, sampleStatistics, nodeIndices,
+                              nextNodeIndices);
         device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_CREATE_WORK_ITEMS], maxNodesOnLevel,
                               blockSize, treeBuildState, reductionWorkItems,
                               partitionWorkItems, nodes, sampleStatistics, nodeIndices);
@@ -139,8 +146,11 @@ void PathGuiding::Update()
                               WARP_SIZE, treeBuildState, nodes, level, nodeIndices);
     }
 
-    device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_PRINT_STATS], 1, 1, treeBuildState,
-                          sampleStatistics, nodes);
+    if (wasInit)
+    {
+        device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_PRINT_STATS], 1, 1, treeBuildState,
+                              sampleStatistics, nodes);
+    }
     cudaDeviceSynchronize();
 }
 

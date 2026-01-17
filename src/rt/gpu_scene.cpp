@@ -146,6 +146,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     cudDevice.RegisterModule(path);
     PathGuiding guiding(&cudDevice);
     guiding.Update();
+    guiding.Update();
 
     Arena *arena             = params->arenas[GetThreadIndex()];
     ScenePrimitives **scenes = GetScenes();
