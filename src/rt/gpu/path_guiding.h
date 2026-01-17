@@ -73,6 +73,7 @@ struct PathGuiding
     KDTreeBuildState *treeBuildState;
     KDTreeNode *nodes;
     SampleStatistics *sampleStatistics;
+    Bounds3f *rootBounds;
 
     PathGuiding(Device *device);
     void Update();

@@ -385,10 +385,12 @@ typedef GPUBounds<float3> Bounds3f;
 
 struct KDTreeBuildState
 {
-    uint32_t numNodes;
-    uint32_t nextLevelNumNodes;
+    // persists across updates
     uint32_t totalNumNodes;
 
+    // temporary values
+    uint32_t numNodes;
+    uint32_t nextLevelNumNodes;
     uint32_t numReduceWorkItems;
     uint32_t numPartitionWorkItems;
 };
@@ -414,13 +416,15 @@ struct KDTreeNode
     RT_DEVICE void SetChildIndex(uint32_t childIndex)
     {
         assert(childIndex < (1u << 30u));
-        childIndex_dim |= childIndex;
+        uint32_t dim   = GetSplitDim();
+        childIndex_dim = childIndex | (dim << 30);
     }
     RT_DEVICE uint32_t GetSplitDim() const { return childIndex_dim >> 30; }
     RT_DEVICE void SetSplitDim(uint32_t dim)
     {
         assert(dim < 3);
-        childIndex_dim |= dim << 30;
+        uint32_t childIndex = GetChildIndex();
+        childIndex_dim      = childIndex | (dim << 30);
     }
     RT_DEVICE bool HasChild() const { return childIndex_dim != ~0u; }
     RT_DEVICE bool IsChild() const { return (childIndex_dim >> 30u) == 3u; }
@@ -428,7 +432,7 @@ struct KDTreeNode
 
 #define INTEGER_BINS                     float(1 << 18)
 #define INTEGER_SAMPLE_STATS_BOUND_SCALE (1.0f + 2.f / INTEGER_BINS)
-#define MAX_TREE_DEPTH                   32
+#define MAX_TREE_DEPTH                   24
 #define MAX_SAMPLES_PER_LEAF             32000
 #define MIN_SPLIT_SAMPLES                (MAX_SAMPLES_PER_LEAF / 8u)
 #define MIN_MERGE_SAMPLES                (MAX_SAMPLES_PER_LEAF / 4u)

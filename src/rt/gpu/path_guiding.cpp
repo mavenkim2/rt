@@ -21,8 +21,11 @@ PathGuiding::PathGuiding(Device *device) : device(device), initialized(false)
     gpuArena               = device->CreateArena(megabytes(512));
     Bounds3f *sampleBounds = device->Alloc<Bounds3f>(1, 4u);
 
-    nodes                            = device->Alloc<KDTreeNode>(maxNumNodes, 4u);
-    sampleStatistics                 = device->Alloc<SampleStatistics>(maxNumNodes, 8u);
+    nodes            = device->Alloc<KDTreeNode>(maxNumNodes, 4u);
+    sampleStatistics = device->Alloc<SampleStatistics>(maxNumNodes, 8u);
+    treeBuildState   = device->Alloc<KDTreeBuildState>(1, 4u);
+    rootBounds       = device->Alloc<Bounds3f>(1, 4u);
+
     VMM *vmms                        = device->Alloc<VMM>(maxNumNodes, 4u);
     VMMStatistics *vmmStatistics     = device->Alloc<VMMStatistics>(maxNumNodes, 4);
     SplitStatistics *splitStatistics = device->Alloc<SplitStatistics>(maxNumNodes, 4);
@@ -69,6 +72,7 @@ void PathGuiding::Update()
     WorkItem *partitionWorkItems = gpuArena->Alloc<WorkItem>(2 * numSamples / blockSize, 4u);
     WorkItem *vmmWorkItems       = gpuArena->Alloc<WorkItem>(numSamples, 4u);
 
+    device->MemZero(&buildNodeIndices[0], sizeof(buildNodeIndices[0]));
     device->MemZero(vmmWorkItems, sizeof(WorkItem) * numSamples);
 
     VMMMapState *vmmMapStates = gpuArena->Alloc<VMMMapState>(maxNumNodes, 4u);
@@ -77,9 +81,9 @@ void PathGuiding::Update()
     float3 sceneMax = make_float3(100.f);
 
     device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_INITIALIZE_SAMPLES], numSampleBlocks,
-                          blockSize, sampleStatistics, treeBuildState, nodes, samples,
-                          sampleDirections, samplePositions, sampleIndices, numSamples,
-                          sceneMin, sceneMax);
+                          blockSize, rootBounds, sampleStatistics, treeBuildState, nodes,
+                          samples, sampleDirections, samplePositions, sampleIndices,
+                          numSamples, sceneMin, sceneMax);
 
     // TODO IMPORTANT: sync here
     // const uint32_t numSamples = *numSamplesBuffer;
@@ -93,23 +97,20 @@ void PathGuiding::Update()
     if (!initialized)
     {
         initialized = true;
-        // TODO IMPORTANT: make sure the sample bounds are initialized properly
         device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_GET_SAMPLE_BOUNDS], numSampleBlocks,
-                              blockSize, &sampleStatistics[0].bounds, samplePositions,
-                              numSamples);
+                              blockSize, rootBounds, samplePositions, numSamples);
         // numSamplesBuffer);
     }
 
     // node indices
 
     // Update KD Tree
-    uint32_t level = 0;
-    // for (uint32_t level = 0; level < MAX_TREE_DEPTH; level++)
+
+    // TODO: might have to block stride if there are too many nodes.
+    for (uint32_t level = 0; level < MAX_TREE_DEPTH; level++)
     {
         const uint32_t maxNodesOnLevel = 1u << level;
         const uint32_t nodeBlocks      = (maxNodesOnLevel + WARP_SIZE - 1) / WARP_SIZE;
-
-        const uint32_t nodeLargeBlocks = (maxNodesOnLevel + blockSize - 1) / blockSize;
 
         uint32_t *s0 = (level & 1) ? newSampleIndices : sampleIndices;
         uint32_t *s1 = (level & 1) ? sampleIndices : newSampleIndices;
@@ -120,17 +121,18 @@ void PathGuiding::Update()
         device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_BEGIN_LEVEL], 1, 1, treeBuildState);
         device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_CALCULATE_CHILD_INDICES], 1, 1,
                               nodes, treeBuildState, nodeIndices, nextNodeIndices);
-        device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_CREATE_WORK_ITEMS], nodeLargeBlocks,
+        device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_CREATE_WORK_ITEMS], maxNodesOnLevel,
                               blockSize, treeBuildState, reductionWorkItems,
                               partitionWorkItems, nodes, sampleStatistics, nodeIndices);
         // NOTE: sample statistics are permanently stored as longlongs.
-        device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_CALCULATE_NODE_STATISTICS],
-                              numSampleBlocks, blockSize, treeBuildState, reductionWorkItems,
-                              nodes, sampleStatistics, samplePositions, s0);
+        // TODO: # thread blocks may need to be more for calculate node stats + buildkdtree
+        device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_CALCULATE_NODE_STATISTICS], 1,
+                              blockSize, treeBuildState, reductionWorkItems, nodes,
+                              sampleStatistics, samplePositions, s0, rootBounds);
         device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_CALCULATE_SPLIT_LOCATIONS],
                               nodeBlocks, WARP_SIZE, treeBuildState, nodes, sampleStatistics,
-                              nodeIndices);
-        device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_BUILD_KDTREE], nodeLargeBlocks,
+                              nodeIndices, rootBounds);
+        device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_BUILD_KDTREE], numSampleBlocks,
                               blockSize, treeBuildState, partitionWorkItems, nodes, s0, s1,
                               samplePositions);
         device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_GET_CHILD_NODE_OFFSET], nodeBlocks,

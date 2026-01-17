@@ -144,7 +144,7 @@ void CUDADevice::ExecuteKernelInternal(KernelHandle handle, uint32_t numBlocks,
     CUfunction kernel = cudaKernels[handle];
 
     // TODO: alternative streams. also, how do I ensure order is right?
-    cuLaunchKernel(kernel, numBlocks, 1, 1, blockSize, 1, 1, 0, 0, params, 0);
+    CUDA_ASSERT(cuLaunchKernel(kernel, numBlocks, 1, 1, blockSize, 1, 1, 0, 0, params, 0));
 }
 
 GPUArena *CUDADevice::CreateArena(size_t maxSize)

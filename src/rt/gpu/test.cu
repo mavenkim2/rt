@@ -364,11 +364,11 @@ __device__ float MeanCosineToKappa(float meanCosine)
 
 #define GPU_KERNEL extern "C" __global__ void
 
-GPU_KERNEL InitializeSamples(SampleStatistics *statistics, KDTreeBuildState *buildState,
-                             KDTreeNode *nodes, SampleData *samples,
-                             SOAFloat3 sampleDirections, SOAFloat3 samplePositions,
-                             uint32_t *__restrict__ sampleIndices, uint32_t numSamples,
-                             float3 sceneMin, float3 sceneMax)
+GPU_KERNEL InitializeSamples(Bounds3f *rootBounds, SampleStatistics *statistics,
+                             KDTreeBuildState *buildState, KDTreeNode *nodes,
+                             SampleData *samples, SOAFloat3 sampleDirections,
+                             SOAFloat3 samplePositions, uint32_t *__restrict__ sampleIndices,
+                             uint32_t numSamples, float3 sceneMin, float3 sceneMax)
 {
     if (threadIdx.x == 0 && blockIdx.x == 0)
     {
@@ -378,13 +378,11 @@ GPU_KERNEL InitializeSamples(SampleStatistics *statistics, KDTreeBuildState *bui
         nodes[0].parentIndex = -1;
 
         buildState->totalNumNodes     = 1;
-        buildState->numNodes          = 1;
-        buildState->nextLevelNumNodes = 0;
+        buildState->numNodes          = 0;
+        buildState->nextLevelNumNodes = 1;
 
-        for (uint32_t i = 0; i < 3; i++)
-        {
-            statistics[i] = SampleStatistics();
-        }
+        *rootBounds   = Bounds3f();
+        statistics[0] = SampleStatistics();
     }
 
     uint32_t sampleIndex = threadIdx.x + blockIdx.x * blockDim.x;
@@ -1693,7 +1691,7 @@ GPU_KERNEL GetSampleBounds(Bounds3f *sampleBounds, SOAFloat3 samplePositions,
 
 GPU_KERNEL CalculateSplitLocations(KDTreeBuildState *buildState, KDTreeNode *nodes,
                                    SampleStatistics *statistics,
-                                   uint32_t *__restrict__ nodeIndices)
+                                   uint32_t *__restrict__ nodeIndices, Bounds3f *rootBounds)
 {
     uint32_t threadIndex = threadIdx.x + blockDim.x * blockIdx.x;
     if (threadIndex >= buildState->numNodes) return;
@@ -1704,7 +1702,7 @@ GPU_KERNEL CalculateSplitLocations(KDTreeBuildState *buildState, KDTreeNode *nod
     if (node->HasChild())
     {
         Bounds3f scaledBounds =
-            nodeIndex == 0 ? statistics[0].bounds : statistics[node->parentIndex].bounds;
+            nodeIndex == 0 ? *rootBounds : statistics[node->parentIndex].bounds;
         float3 center = scaledBounds.GetCenter();
         scaledBounds.SetBoundsMin(center + (scaledBounds.GetBoundsMin() - center) *
                                                INTEGER_SAMPLE_STATS_BOUND_SCALE);
@@ -1737,6 +1735,8 @@ GPU_KERNEL CalculateSplitLocations(KDTreeBuildState *buildState, KDTreeNode *nod
 
 GPU_KERNEL BeginLevel(KDTreeBuildState *buildState)
 {
+    printf("start level: %u %u %u\n", buildState->numNodes, buildState->nextLevelNumNodes,
+           buildState->totalNumNodes);
     buildState->numReduceWorkItems    = 0;
     buildState->numPartitionWorkItems = 0;
     buildState->numNodes              = buildState->nextLevelNumNodes;
@@ -1850,7 +1850,8 @@ GPU_KERNEL CreateWorkItems(KDTreeBuildState *buildState, WorkItem *reduceWorkIte
 
 GPU_KERNEL CalculateNodeStatistics(KDTreeBuildState *buildState, WorkItem *workItems,
                                    KDTreeNode *nodes, SampleStatistics *statistics,
-                                   SOAFloat3 samplePositions, uint32_t *sampleIndices)
+                                   SOAFloat3 samplePositions, uint32_t *sampleIndices,
+                                   Bounds3f *rootBounds)
 {
     const uint32_t blockSize = 256;
     assert(blockSize == blockDim.x);
@@ -1872,12 +1873,17 @@ GPU_KERNEL CalculateNodeStatistics(KDTreeBuildState *buildState, WorkItem *workI
         __syncthreads();
 
         const uint32_t *blockSampleIndices = sampleIndices + node.offset + workItem.offset;
-        Bounds3f scaledBounds              = workItem.nodeIndex == 0 ? statistics[0].bounds
-                                                                     : statistics[node.parentIndex].bounds;
+        Bounds3f scaledBounds =
+            workItem.nodeIndex == 0 ? *rootBounds : statistics[node.parentIndex].bounds;
 
         SampleStatistics &blockStatistics = statistics[workItem.nodeIndex];
 
         float3 center = scaledBounds.GetCenter();
+        if (threadIdx.x == 0)
+        {
+            float3 m  = scaledBounds.GetBoundsMin();
+            float3 mx = scaledBounds.GetBoundsMax();
+        }
         scaledBounds.SetBoundsMin(center + (scaledBounds.GetBoundsMin() - center) *
                                                INTEGER_SAMPLE_STATS_BOUND_SCALE);
         scaledBounds.SetBoundsMax(center + (scaledBounds.GetBoundsMax() - center) *
@@ -2048,11 +2054,15 @@ GPU_KERNEL PrintStatistics(KDTreeBuildState *buildState, SampleStatistics *stats
 
         SampleStatistics &s = stats[i];
         float3 bmin         = s.bounds.GetBoundsMin();
+        float3 bmax         = s.bounds.GetBoundsMax();
         longlong3 mean      = s.mean;
+        longlong3 variance  = s.variance;
         // printf("node: %u, %u, %lld %lld %lld\n", i, s.numSamples, mean.x, mean.y,
         // mean.z);
-        printf("node: %u, %u, %u, %f %f %f\n", i, nodes[i].count, s.numSamples, bmin.x, bmin.y,
-               bmin.z);
+        printf("node: %u, %u, %u, %f %f %f, %f %f %f, mean %lld %lld %lld, variance %lld %lld "
+               "%lld \n",
+               i, nodes[i].count, s.numSamples, bmin.x, bmin.y, bmin.z, bmax.x, bmax.y, bmax.z,
+               mean.x, mean.y, mean.z, variance.x, variance.y, variance.z);
     }
 
     // for (uint32_t i = 191; i < 192; i++)
