@@ -164,4 +164,10 @@ void CUDADevice::MemZero(void *ptr, uint64_t size)
     CUDA_ASSERT(cuMemsetD8((CUdeviceptr)ptr, 0, size));
 }
 
+void CUDADevice::MemSet(void *ptr, char ch, uint64_t size)
+{
+    CUDAContextScope scope(this);
+    CUDA_ASSERT(cuMemsetD8((CUdeviceptr)ptr, ch, size));
+}
+
 } // namespace rt

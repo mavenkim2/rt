@@ -145,6 +145,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     string path = "../src/rt/gpu/kernel.cubin";
     cudDevice.RegisterModule(path);
     PathGuiding guiding(&cudDevice);
+    guiding.Update();
 
     Arena *arena             = params->arenas[GetThreadIndex()];
     ScenePrimitives **scenes = GetScenes();

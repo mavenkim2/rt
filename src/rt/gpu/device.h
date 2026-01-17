@@ -42,8 +42,9 @@ struct Device
         alignment = alignment == 0 ? sizeof(T) : alignment;
         return (T *)Alloc(sizeof(T) * count, alignment);
     }
-    virtual void MemZero(void *ptr, uint64_t size) = 0;
-    virtual GPUArena *CreateArena(size_t maxSize)  = 0;
+    virtual void MemZero(void *ptr, uint64_t size)         = 0;
+    virtual void MemSet(void *ptr, char ch, uint64_t size) = 0;
+    virtual GPUArena *CreateArena(size_t maxSize)          = 0;
 
 protected:
     virtual void ExecuteKernelInternal(KernelHandle handle, uint32_t numBlocks,

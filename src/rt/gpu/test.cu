@@ -364,24 +364,22 @@ __device__ float MeanCosineToKappa(float meanCosine)
 
 #define GPU_KERNEL extern "C" __global__ void
 
-GPU_KERNEL InitializeSamples(SampleStatistics *statistics, Bounds3f *sampleBounds,
-                             LevelInfo *levelInfo, KDTreeNode *nodes, SampleData *samples,
+GPU_KERNEL InitializeSamples(SampleStatistics *statistics, KDTreeBuildState *buildState,
+                             KDTreeNode *nodes, SampleData *samples,
                              SOAFloat3 sampleDirections, SOAFloat3 samplePositions,
                              uint32_t *__restrict__ sampleIndices, uint32_t numSamples,
                              float3 sceneMin, float3 sceneMax)
 {
     if (threadIdx.x == 0 && blockIdx.x == 0)
     {
-        *sampleBounds = Bounds3f();
-
         nodes[0].count  = numSamples;
         nodes[0].offset = 0;
         // nodes[0].childIndex_dim = 1;
         nodes[0].parentIndex = -1;
 
-        levelInfo[0].start      = 0;
-        levelInfo[0].count      = 0;
-        levelInfo[0].childCount = 1;
+        buildState->totalNumNodes     = 1;
+        buildState->numNodes          = 1;
+        buildState->nextLevelNumNodes = 0;
 
         for (uint32_t i = 0; i < 3; i++)
         {
@@ -414,11 +412,6 @@ GPU_KERNEL InitializeSamples(SampleStatistics *statistics, Bounds3f *sampleBound
         sampleIndices[sampleIndex]    = sampleIndex;
 
         samplePositions[sampleIndex] = p;
-
-        if (blockIdx.x == 0)
-        {
-            printf("%f %f %f\n", p.x, p.y, p.z);
-        }
     }
 }
 
@@ -644,14 +637,13 @@ UpdateMixtureParameters(VMM &sharedVMM, VMMStatistics &sharedStatistics,
 // - make sure to get chi square statistics fromm previous update
 // - proper criteria for splitting/merging
 template <bool partial = false>
-__device__ void
-UpdateMixtureHelper(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStatistics,
-                    const SOASampleData samples, const uint32_t *__restrict__ leafNodeIndices,
-                    const uint32_t *__restrict__ numLeafNodes,
-                    const KDTreeNode *__restrict__ nodes, VMMQueue *queue = 0,
-                    WorkItem *workItems = 0)
+__device__ void UpdateMixtureHelper(
+    VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStatistics,
+    const SOASampleData samples, const uint32_t *__restrict__ leafNodeIndices,
+    const uint32_t *__restrict__ numLeafNodes, const KDTreeNode *__restrict__ nodes,
+    const uint32_t *__restrict__ numWorkItems = 0, const WorkItem *workItems = 0)
 {
-    assert(!partial || (partial && queue && workItems));
+    assert(!partial || (partial && numWorkItems && workItems));
 
     __shared__ VMMStatistics sharedStatistics;
     __shared__ VMM sharedVMM;
@@ -667,9 +659,9 @@ UpdateMixtureHelper(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentS
     }
     else
     {
-        assert(queue);
+        assert(numWorkItems);
         assert(workItems);
-        limit = queue->writeOffset;
+        limit = *numWorkItems;
     }
 
     if (blockIdx.x >= limit) return;
@@ -753,16 +745,15 @@ UpdateMixture(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStatist
                                nodes);
 }
 
-GPU_KERNEL PartialUpdateMixture(VMM *__restrict__ vmms,
-                                VMMStatistics *__restrict__ currentStatistics,
-                                const SOASampleData samples,
-                                const uint32_t *__restrict__ leafNodeIndices,
-                                const uint32_t *__restrict__ numLeafNodes,
-                                const KDTreeNode *__restrict__ nodes, VMMQueue *queue,
-                                WorkItem *workItems)
+GPU_KERNEL
+PartialUpdateMixture(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStatistics,
+                     const SOASampleData samples, const uint32_t *__restrict__ leafNodeIndices,
+                     const uint32_t *__restrict__ numLeafNodes,
+                     const KDTreeNode *__restrict__ nodes,
+                     const uint32_t *__restrict__ numWorkItems, const WorkItem *workItems)
 {
     UpdateMixtureHelper<true>(vmms, currentStatistics, samples, leafNodeIndices, numLeafNodes,
-                              nodes, queue, workItems);
+                              nodes, numWorkItems, workItems);
 }
 
 GPU_KERNEL UpdateSplitStatistics(VMM *__restrict__ vmms,
@@ -901,7 +892,8 @@ SplitComponents(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStati
                 SplitStatistics *__restrict__ splitStatistics, const SOASampleData samples,
                 const uint32_t *__restrict__ leafNodeIndices,
                 const uint32_t *__restrict__ numLeafNodes,
-                const KDTreeNode *__restrict__ nodes, VMMQueue *queue, WorkItem *workItems)
+                const KDTreeNode *__restrict__ nodes, uint32_t *__restrict__ numWorkItems,
+                WorkItem *__restrict__ workItems)
 {
     const float splittingThreshold = 0.5f;
     const float maxKappa           = 32000.f;
@@ -1032,7 +1024,7 @@ SplitComponents(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStati
         workItem.offset    = sharedSplitMask;
         workItem.count     = 0;
 
-        uint32_t workItemIndex   = atomicAdd(&queue->writeOffset, 1);
+        uint32_t workItemIndex   = atomicAdd(numWorkItems, 1);
         workItems[workItemIndex] = workItem;
     }
 }
@@ -1699,13 +1691,14 @@ GPU_KERNEL GetSampleBounds(Bounds3f *sampleBounds, SOAFloat3 samplePositions,
                                         });
 }
 
-GPU_KERNEL CalculateSplitLocations(LevelInfo *info, KDTreeNode *nodes,
-                                   SampleStatistics *statistics)
+GPU_KERNEL CalculateSplitLocations(KDTreeBuildState *buildState, KDTreeNode *nodes,
+                                   SampleStatistics *statistics,
+                                   uint32_t *__restrict__ nodeIndices)
 {
     uint32_t threadIndex = threadIdx.x + blockDim.x * blockIdx.x;
-    if (threadIndex >= info->count) return;
+    if (threadIndex >= buildState->numNodes) return;
 
-    int nodeIndex    = info->start + threadIndex;
+    int nodeIndex    = nodeIndices[threadIndex];
     KDTreeNode *node = &nodes[nodeIndex];
 
     if (node->HasChild())
@@ -1742,26 +1735,23 @@ GPU_KERNEL CalculateSplitLocations(LevelInfo *info, KDTreeNode *nodes,
     }
 }
 
-GPU_KERNEL BeginLevel(LevelInfo *levelInfo, VMMQueue *queue, VMMQueue *queue2)
+GPU_KERNEL BeginLevel(KDTreeBuildState *buildState)
 {
-    // printf("level %u %u %u\n", levelInfo->start, levelInfo->count,
-    // levelInfo->childCount); printf("queue: %u\n", queue->writeOffset);
-
-    levelInfo->start += levelInfo->count;
-    levelInfo->count      = levelInfo->childCount;
-    levelInfo->childCount = 0;
-    queue->readOffset     = 0;
-    queue->writeOffset    = 0;
-
-    queue2->readOffset  = 0;
-    queue2->writeOffset = 0;
+    buildState->numReduceWorkItems    = 0;
+    buildState->numPartitionWorkItems = 0;
+    buildState->numNodes              = buildState->nextLevelNumNodes;
+    buildState->nextLevelNumNodes     = 0;
 }
 
-GPU_KERNEL CalculateChildIndices(LevelInfo *info, KDTreeNode *nodes)
+GPU_KERNEL CalculateChildIndices(KDTreeNode *__restrict__ nodes,
+                                 KDTreeBuildState *__restrict__ buildState,
+                                 const uint32_t *__restrict__ nodeIndices,
+                                 uint32_t *__restrict__ nextNodeIndices)
 {
-    for (uint32_t nodeIndex = info->start; nodeIndex < info->start + info->count; nodeIndex++)
+    for (uint32_t nodeIndexIndex = 0; nodeIndexIndex < buildState->numNodes; nodeIndexIndex++)
     {
-        KDTreeNode &node = nodes[nodeIndex];
+        uint32_t nodeIndex = nodeIndices[nodeIndexIndex];
+        KDTreeNode &node   = nodes[nodeIndex];
 
         bool split    = node.count > MAX_SAMPLES_PER_LEAF;
         bool hasChild = node.HasChild();
@@ -1771,11 +1761,20 @@ GPU_KERNEL CalculateChildIndices(LevelInfo *info, KDTreeNode *nodes)
             uint32_t childIndex = ~0u;
             if (!hasChild)
             {
-                assert(info->start == 1 || node.parentIndex != 0);
-                const uint32_t childIndex = info->start + info->count + info->childCount;
+                childIndex = buildState->totalNumNodes;
+                buildState->totalNumNodes += 2;
                 node.SetChildIndex(childIndex);
             }
+            else
+            {
+                childIndex = node.GetChildIndex();
+            }
 
+            assert(childIndex != ~0u);
+
+            nextNodeIndices[buildState->nextLevelNumNodes]     = childIndex;
+            nextNodeIndices[buildState->nextLevelNumNodes + 1] = childIndex + 1;
+            buildState->nextLevelNumNodes += 2;
             nodes[childIndex].count     = 0;
             nodes[childIndex + 1].count = 0;
         }
@@ -1786,16 +1785,16 @@ GPU_KERNEL CalculateChildIndices(LevelInfo *info, KDTreeNode *nodes)
     }
 }
 
-GPU_KERNEL CreateWorkItems(VMMQueue *reduceQueue, WorkItem *reduceWorkItems,
-                           VMMQueue *partitionQueue, WorkItem *partitionWorkItems,
-                           KDTreeNode *nodes, LevelInfo *info, SampleStatistics *stats)
+GPU_KERNEL CreateWorkItems(KDTreeBuildState *buildState, WorkItem *reduceWorkItems,
+                           WorkItem *partitionWorkItems, KDTreeNode *nodes,
+                           SampleStatistics *stats, uint32_t *nodeIndices)
 {
     assert(blockDim.x == 256);
     const uint32_t blockSize = 256;
 
-    if (blockIdx.x >= info->count) return;
+    if (blockIdx.x >= buildState->numNodes) return;
 
-    uint32_t nodeIndex = info->start + blockIdx.x;
+    uint32_t nodeIndex = nodeIndices[blockIdx.x];
 
     __shared__ KDTreeNode node;
     __shared__ uint32_t reduceStart;
@@ -1816,12 +1815,12 @@ GPU_KERNEL CreateWorkItems(VMMQueue *reduceQueue, WorkItem *reduceWorkItems,
     {
         if (reduce)
         {
-            reduceStart      = atomicAdd(&reduceQueue->writeOffset, numWorkItems);
+            reduceStart      = atomicAdd(&buildState->numReduceWorkItems, numWorkItems);
             stats[nodeIndex] = SampleStatistics();
         }
         if (split)
         {
-            partitionStart = atomicAdd(&partitionQueue->writeOffset, numWorkItems);
+            partitionStart = atomicAdd(&buildState->numPartitionWorkItems, numWorkItems);
         }
     }
 
@@ -1849,9 +1848,9 @@ GPU_KERNEL CreateWorkItems(VMMQueue *reduceQueue, WorkItem *reduceWorkItems,
     }
 }
 
-GPU_KERNEL CalculateNodeStatistics(VMMQueue *queue, WorkItem *workItems, KDTreeNode *nodes,
-                                   SampleStatistics *statistics, SOAFloat3 samplePositions,
-                                   uint32_t *sampleIndices)
+GPU_KERNEL CalculateNodeStatistics(KDTreeBuildState *buildState, WorkItem *workItems,
+                                   KDTreeNode *nodes, SampleStatistics *statistics,
+                                   SOAFloat3 samplePositions, uint32_t *sampleIndices)
 {
     const uint32_t blockSize = 256;
     assert(blockSize == blockDim.x);
@@ -1861,7 +1860,7 @@ GPU_KERNEL CalculateNodeStatistics(VMMQueue *queue, WorkItem *workItems, KDTreeN
     __shared__ KDTreeNode node;
     __shared__ SampleStatistics totals[numWarps];
 
-    for (uint32_t workItemIndex = blockIdx.x; workItemIndex < queue->writeOffset;
+    for (uint32_t workItemIndex = blockIdx.x; workItemIndex < buildState->numReduceWorkItems;
          workItemIndex += gridDim.x)
     {
         if (threadIdx.x == 0)
@@ -1903,8 +1902,8 @@ GPU_KERNEL CalculateNodeStatistics(VMMQueue *queue, WorkItem *workItems, KDTreeN
     }
 }
 
-GPU_KERNEL BuildKDTree(VMMQueue *queue, WorkItem *workItems, LevelInfo *levelInfo,
-                       KDTreeNode *nodes, uint32_t *sampleIndices, uint32_t *newSampleIndices,
+GPU_KERNEL BuildKDTree(KDTreeBuildState *buildState, WorkItem *workItems, KDTreeNode *nodes,
+                       uint32_t *sampleIndices, uint32_t *newSampleIndices,
                        SOAFloat3 samplePositions)
 {
     __shared__ KDTreeNode node;
@@ -1912,8 +1911,8 @@ GPU_KERNEL BuildKDTree(VMMQueue *queue, WorkItem *workItems, LevelInfo *levelInf
 
     __shared__ PartitionSharedState partitionState;
 
-    for (uint32_t workItemIndex = blockIdx.x; workItemIndex < queue->writeOffset;
-         workItemIndex += gridDim.x)
+    for (uint32_t workItemIndex = blockIdx.x;
+         workItemIndex < buildState->numPartitionWorkItems; workItemIndex += gridDim.x)
     {
         if (threadIdx.x == 0)
         {
@@ -1944,14 +1943,15 @@ GPU_KERNEL BuildKDTree(VMMQueue *queue, WorkItem *workItems, LevelInfo *levelInf
     }
 }
 
-GPU_KERNEL GetChildNodeOffset(LevelInfo *levelInfo, KDTreeNode *nodes, uint32_t level)
+GPU_KERNEL GetChildNodeOffset(KDTreeBuildState *buildState, KDTreeNode *nodes, uint32_t level,
+                              uint32_t *nodeIndices)
 {
     uint32_t threadIndex = threadIdx.x + blockIdx.x * blockDim.x;
 
-    if (threadIndex >= levelInfo->count) return;
+    if (threadIndex >= buildState->numNodes) return;
 
-    int parentIndex  = levelInfo->start + threadIndex;
-    KDTreeNode *node = &nodes[levelInfo->start + threadIndex];
+    int parentIndex  = nodeIndices[threadIndex];
+    KDTreeNode *node = &nodes[parentIndex];
 
     if (node->HasChild())
     {
@@ -1974,8 +1974,9 @@ GPU_KERNEL GetChildNodeOffset(LevelInfo *levelInfo, KDTreeNode *nodes, uint32_t 
     }
 }
 
-GPU_KERNEL FindLeafNodes(LevelInfo *levelInfo, KDTreeNode *nodes, uint32_t *nodeIndices,
-                         uint32_t *numLeafNodes, VMMMapState *states, VMM *vmms)
+GPU_KERNEL FindLeafNodes(KDTreeBuildState *buildState, KDTreeNode *nodes,
+                         uint32_t *nodeIndices, uint32_t *numLeafNodes, VMMMapState *states,
+                         VMM *vmms)
 {
     const uint32_t blockSize = 256;
     assert(blockDim.x == blockSize);
@@ -1983,7 +1984,7 @@ GPU_KERNEL FindLeafNodes(LevelInfo *levelInfo, KDTreeNode *nodes, uint32_t *node
     // if (threadIndex >= levelInfo->start) return;
     // KDTreeNode &node = nodes[threadIndex];
 
-    for (uint32_t threadIndex = 0; threadIndex < levelInfo->start; threadIndex++)
+    for (uint32_t threadIndex = 0; threadIndex < buildState->totalNumNodes; threadIndex++)
     {
         KDTreeNode &node = nodes[threadIndex];
         if (node.IsChild())
@@ -2025,36 +2026,35 @@ WriteSamplesToSOA(const uint32_t *__restrict__ numLeafNodes,
     }
 }
 
-GPU_KERNEL PrintStatistics(SampleStatistics *stats, KDTreeNode *nodes, LevelInfo *info,
-                           uint32_t *test, VMM *vmm, VMMMapState *states,
-                           SplitStatistics *splitStats, VMMStatistics *vmmStats)
+GPU_KERNEL PrintStatistics(KDTreeBuildState *buildState, SampleStatistics *stats,
+                           KDTreeNode *nodes)
 {
-    uint32_t t = 6;
+    // uint32_t t = 6;
+    //
+    // for (uint32_t i = 0; i < MAX_COMPONENTS; i++)
+    // {
+    //     // printf("%f ", splitStats[t].chiSquareTotals[i]);
+    //     printf("%f ", vmm[t].weights[i]);
+    //     printf("%f ", vmmStats[t].sumWeights[i]);
+    // }
+    //
+    // printf("\n");
 
-    for (uint32_t i = 0; i < MAX_COMPONENTS; i++)
+    printf("total num nodes: %u\n", buildState->totalNumNodes);
+    for (uint32_t i = 0; i < buildState->totalNumNodes; i++)
     {
-        // printf("%f ", splitStats[t].chiSquareTotals[i]);
-        printf("%f ", vmm[t].weights[i]);
-        printf("%f ", vmmStats[t].sumWeights[i]);
+        // KDTreeNode &node = nodes[i];
+        // printf("node: %u %u %f\n", i, node.GetSplitDim(), node.splitPos);
+
+        SampleStatistics &s = stats[i];
+        float3 bmin         = s.bounds.GetBoundsMin();
+        longlong3 mean      = s.mean;
+        // printf("node: %u, %u, %lld %lld %lld\n", i, s.numSamples, mean.x, mean.y,
+        // mean.z);
+        printf("node: %u, %u, %u, %f %f %f\n", i, nodes[i].count, s.numSamples, bmin.x, bmin.y,
+               bmin.z);
     }
 
-    printf("\n");
-
-    // printf("num: %u\n", *test);
-    // for (uint32_t i = 0; i < info->start + info->count; i++)
-    // {
-    //     // KDTreeNode &node = nodes[i];
-    //     // printf("node: %u %u %f\n", i, node.GetSplitDim(), node.splitPos);
-    //
-    //     SampleStatistics &s = stats[i];
-    //     float3 bmin         = s.bounds.GetBoundsMin();
-    //     longlong3 mean      = s.mean;
-    //     // printf("node: %u, %u, %lld %lld %lld\n", i, s.numSamples, mean.x, mean.y,
-    //     // mean.z);
-    //     printf("node: %u, %u, %u, %f %f %f\n", i, nodes[i].count, s.numSamples, bmin.x,
-    //     bmin.y,
-    //            bmin.z);
-    // }
     // for (uint32_t i = 191; i < 192; i++)
     // {
     //     KDTreeNode *node                   = &nodes[i];
@@ -2177,17 +2177,11 @@ void test()
     uint32_t *sampleIndices    = allocator.Alloc<uint32_t>(numSamples, 4u);
     uint32_t *newSampleIndices = allocator.Alloc<uint32_t>(numSamples, 4u);
 
-    LevelInfo *levelInfo = allocator.Alloc<LevelInfo>(1, 4u);
-
-    VMMQueue *reduceQueue        = allocator.Alloc<VMMQueue>(1, 4u);
-    VMMQueue *partitionQueue     = allocator.Alloc<VMMQueue>(1, 4u);
-    VMMQueue *vmmQueue           = allocator.Alloc<VMMQueue>(1, 4u);
     WorkItem *reductionWorkItems = allocator.Alloc<WorkItem>(2 * numSamples / blockSize, 4u);
     WorkItem *partitionWorkItems = allocator.Alloc<WorkItem>(2 * numSamples / blockSize, 4u);
     WorkItem *vmmWorkItems       = allocator.Alloc<WorkItem>(numSamples, 4u);
 
     cudaMemset(vmmWorkItems, 0, sizeof(WorkItem) * numSamples);
-    cudaMemset(vmmQueue, 0, sizeof(VMMQueue));
 
     VMMMapState *vmmMapStates = allocator.Alloc<VMMMapState>(maxNumNodes, 4u);
 

@@ -28,6 +28,7 @@ enum PathGuidingKernels : int
     PATH_GUIDING_KERNEL_GET_CHILD_NODE_OFFSET,
     PATH_GUIDING_KERNEL_FIND_LEAF_NODES,
     PATH_GUIDING_KERNEL_WRITE_SAMPLES_SOA,
+    PATH_GUIDING_KERNEL_PRINT_STATS,
 
     PATH_GUIDING_KERNEL_MAX,
 };
@@ -51,11 +52,14 @@ static const string pathGuidingKernelNames[] = {
     "GetChildNodeOffset",
     "FindLeafNodes",
     "WriteSamplesToSOA",
+    "PrintStatistics",
 };
 
 struct PathGuiding
 {
-    PathGuiding(Device *device);
+    // TODO: hardcoded
+    const uint32_t numSamples  = 1u << 22u;
+    const uint32_t maxNumNodes = 1u << 16u;
 
     GPUArena *gpuArena;
     Device *device;
@@ -66,9 +70,11 @@ struct PathGuiding
     uint32_t *numSamplesBuffer;
 
     // GPU visible memory
+    KDTreeBuildState *treeBuildState;
     KDTreeNode *nodes;
     SampleStatistics *sampleStatistics;
 
+    PathGuiding(Device *device);
     void Update();
 };
 

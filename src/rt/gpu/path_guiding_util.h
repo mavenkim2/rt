@@ -383,11 +383,14 @@ public:
 
 typedef GPUBounds<float3> Bounds3f;
 
-struct LevelInfo
+struct KDTreeBuildState
 {
-    uint32_t start;
-    uint32_t count;
-    uint32_t childCount;
+    uint32_t numNodes;
+    uint32_t nextLevelNumNodes;
+    uint32_t totalNumNodes;
+
+    uint32_t numReduceWorkItems;
+    uint32_t numPartitionWorkItems;
 };
 
 struct KDTreeNode
@@ -696,12 +699,6 @@ struct SplitStatistics
         numSamples[componentIndex]       = num;
     }
 #endif
-};
-
-struct VMMQueue
-{
-    uint32_t readOffset;
-    uint32_t writeOffset;
 };
 
 struct WorkItem
