@@ -490,7 +490,7 @@ struct SampleStatistics
     }
 
     RT_DEVICE void ConvertToFloat(float3 center, float3 halfExtent, float3 &outMean,
-                                  float3 &outVariance)
+                                  float3 &outVariance) const
     {
         longlong3 intMean = mean;
         longlong3 intVar  = variance;

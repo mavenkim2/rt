@@ -111,7 +111,6 @@ void PathGuiding::Update()
     // node indices
 
     // Update KD Tree
-
     // TODO: might have to block stride if there are too many nodes.
     for (uint32_t level = 0; level < MAX_TREE_DEPTH; level++)
     {
@@ -145,13 +144,14 @@ void PathGuiding::Update()
         device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_GET_CHILD_NODE_OFFSET], nodeBlocks,
                               WARP_SIZE, treeBuildState, nodes, level, nodeIndices);
     }
-
     if (wasInit)
     {
         device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_PRINT_STATS], 1, 1, treeBuildState,
                               sampleStatistics, nodes);
     }
     cudaDeviceSynchronize();
+
+    // Update VMMs
 }
 
 } // namespace rt

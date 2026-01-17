@@ -1475,6 +1475,72 @@ GPU_KERNEL UpdateComponentDistances(VMM *vmms, KDTreeNode *nodes, VMMStatistics 
     }
 }
 
+inline __device__ Bounds3f GetParentBounds(const Bounds3f &rootBounds,
+                                           const SampleStatistics *statistics,
+                                           const KDTreeNode &node)
+{
+    return node.parentIndex == -1 ? rootBounds : statistics[node.parentIndex].bounds;
+}
+
+inline __device__ void GetSampleCenterHalfExtent(Bounds3f bounds, float3 &center,
+                                                 float3 &halfExtent)
+{
+    center = bounds.GetCenter();
+    bounds.SetBoundsMin(center +
+                        (bounds.GetBoundsMin() - center) * INTEGER_SAMPLE_STATS_BOUND_SCALE);
+    bounds.SetBoundsMax(center +
+                        (bounds.GetBoundsMax() - center) * INTEGER_SAMPLE_STATS_BOUND_SCALE);
+
+    center     = bounds.GetCenter();
+    halfExtent = bounds.GetHalfExtent();
+}
+
+GPU_KERNEL ApplyParallaxShift(VMMStatistics *__restrict__ statistics,
+                              const uint32_t *__restrict__ leafNodeIndices,
+                              const uint32_t *__restrict__ numLeafNodes,
+                              const VMM *__restrict__ vmms,
+                              const SampleStatistics *__restrict__ sampleStatistics,
+                              const KDTreeNode *__restrict__ nodes,
+                              const Bounds3f *__restrict__ rootBounds)
+{
+    for (uint32_t indexIndex = 0; indexIndex < *numLeafNodes; indexIndex += gridDim.x)
+    {
+        uint32_t nodeIndex                  = leafNodeIndices[blockIdx.x];
+        const KDTreeNode &node              = nodes[nodeIndex];
+        uint32_t vmmIndex                   = node.vmmIndex;
+        const SampleStatistics &sampleStats = sampleStatistics[nodeIndex];
+
+        float3 center, halfExtent, sampleMean, sampleVariance;
+        GetSampleCenterHalfExtent(GetParentBounds(*rootBounds, sampleStatistics, node), center,
+                                  halfExtent);
+        sampleStats.ConvertToFloat(center, halfExtent, sampleMean, sampleVariance);
+
+        const VMM &vmm       = vmms[vmmIndex];
+        VMMStatistics &stats = statistics[vmmIndex];
+
+        // TODO: get from somewhere
+        float3 pivotPosition = make_float3(0.f);
+        const float3 shift   = pivotPosition - sampleMean;
+
+        if (threadIdx.x < vmm.numComponents)
+        {
+            float3 suffDirections = stats.sumWeightedDirections[threadIdx.x];
+            float suffMeanCosines = length(suffDirections);
+            suffDirections /= suffMeanCosines;
+            suffDirections *= vmm.distances[threadIdx.x];
+            suffDirections += shift;
+            const float dirLength = length(suffDirections);
+            suffDirections /= dirLength;
+            suffDirections *= suffMeanCosines;
+            stats.sumWeightedDirections[threadIdx.x] =
+                ((vmm.distances[threadIdx.x] > 0.0f) && (suffMeanCosines > 0.0f) &&
+                 (dirLength > FLT_EPSILON))
+                    ? suffDirections
+                    : stats.sumWeightedDirections[threadIdx.x];
+        }
+    }
+}
+
 // Reprojects samples to VMM
 GPU_KERNEL ReprojectSamples(SampleStatistics *statistics, SOASampleData samples,
                             const uint32_t *__restrict__ leafNodeIndices,
@@ -1492,16 +1558,8 @@ GPU_KERNEL ReprojectSamples(SampleStatistics *statistics, SOASampleData samples,
 
     SampleStatistics &sampleStatistics = statistics[nodeIndex];
 
-    Bounds3f scaledBounds = nodeIndex == 0 ? *bounds : statistics[node.parentIndex].bounds;
-    float3 center         = scaledBounds.GetCenter();
-    scaledBounds.SetBoundsMin(center + (scaledBounds.GetBoundsMin() - center) *
-                                           INTEGER_SAMPLE_STATS_BOUND_SCALE);
-    scaledBounds.SetBoundsMax(center + (scaledBounds.GetBoundsMax() - center) *
-                                           INTEGER_SAMPLE_STATS_BOUND_SCALE);
-
-    center            = scaledBounds.GetCenter();
-    float3 halfExtent = scaledBounds.GetHalfExtent();
-    float3 sampleMean, sampleVariance;
+    float3 center, halfExtent, sampleMean, sampleVariance;
+    GetSampleCenterHalfExtent(GetParentBounds(*bounds, statistics, node), center, halfExtent);
     sampleStatistics.ConvertToFloat(center, halfExtent, sampleMean, sampleVariance);
 
     float norm        = dot(sampleVariance, sampleVariance);
@@ -1722,20 +1780,13 @@ GPU_KERNEL CalculateSplitLocations(KDTreeBuildState *buildState, KDTreeNode *nod
     if (threadIndex >= buildState->numNodes) return;
 
     int nodeIndex    = nodeIndices[threadIndex];
-    KDTreeNode *node = &nodes[nodeIndex];
+    KDTreeNode &node = nodes[nodeIndex];
 
-    if (node->HasChild())
+    if (node.HasChild())
     {
-        Bounds3f scaledBounds =
-            nodeIndex == 0 ? *rootBounds : statistics[node->parentIndex].bounds;
-        float3 center = scaledBounds.GetCenter();
-        scaledBounds.SetBoundsMin(center + (scaledBounds.GetBoundsMin() - center) *
-                                               INTEGER_SAMPLE_STATS_BOUND_SCALE);
-        scaledBounds.SetBoundsMax(center + (scaledBounds.GetBoundsMax() - center) *
-                                               INTEGER_SAMPLE_STATS_BOUND_SCALE);
-
-        center            = scaledBounds.GetCenter();
-        float3 halfExtent = scaledBounds.GetHalfExtent();
+        float3 center, halfExtent;
+        GetSampleCenterHalfExtent(GetParentBounds(*rootBounds, statistics, node), center,
+                                  halfExtent);
 
         float3 sampleMean, sampleVariance;
         statistics[nodeIndex].ConvertToFloat(center, halfExtent, sampleMean, sampleVariance);
@@ -1745,8 +1796,8 @@ GPU_KERNEL CalculateSplitLocations(KDTreeBuildState *buildState, KDTreeNode *nod
         GetSplitDimensionAndPosition(sampleMean, sampleVariance, 2.f * halfExtent, splitDim,
                                      splitPos);
 
-        node->SetSplitDim(splitDim);
-        node->splitPos = splitPos;
+        node.SetSplitDim(splitDim);
+        node.splitPos = splitPos;
 
         assert(!isnan(sampleMean.x) && !isnan(sampleMean.y) && !isnan(sampleMean.z));
         assert(!isnan(sampleVariance.x) && !isnan(sampleVariance.y) &&
@@ -1900,24 +1951,12 @@ GPU_KERNEL CalculateNodeStatistics(KDTreeBuildState *buildState, WorkItem *workI
         __syncthreads();
 
         const uint32_t *blockSampleIndices = sampleIndices + node.offset + workItem.offset;
-        Bounds3f scaledBounds =
-            workItem.nodeIndex == 0 ? *rootBounds : statistics[node.parentIndex].bounds;
 
         SampleStatistics &blockStatistics = statistics[workItem.nodeIndex];
 
-        float3 center = scaledBounds.GetCenter();
-        if (threadIdx.x == 0)
-        {
-            float3 m  = scaledBounds.GetBoundsMin();
-            float3 mx = scaledBounds.GetBoundsMax();
-        }
-        scaledBounds.SetBoundsMin(center + (scaledBounds.GetBoundsMin() - center) *
-                                               INTEGER_SAMPLE_STATS_BOUND_SCALE);
-        scaledBounds.SetBoundsMax(center + (scaledBounds.GetBoundsMax() - center) *
-                                               INTEGER_SAMPLE_STATS_BOUND_SCALE);
-
-        center               = scaledBounds.GetCenter();
-        float3 invHalfExtent = scaledBounds.GetHalfExtent();
+        float3 center, invHalfExtent;
+        GetSampleCenterHalfExtent(GetParentBounds(*rootBounds, statistics, node), center,
+                                  invHalfExtent);
 
         invHalfExtent.x = invHalfExtent.x > 0.f ? 1.f / invHalfExtent.x : 0.f;
         invHalfExtent.y = invHalfExtent.y > 0.f ? 1.f / invHalfExtent.y : 0.f;
