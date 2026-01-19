@@ -910,6 +910,66 @@ GPU_KERNEL UpdateSplitStatistics(VMM *__restrict__ vmms,
     }
 }
 
+__device__ void SplitComponent(VMM &vmm, SplitStatistics &splitStats,
+                               VMMStatistics &vmmStatistics, const uint32_t componentIndex,
+                               const uint32_t newComponentIndex, const float maxMeanCosine)
+{
+    assert(newComponentIndex < MAX_COMPONENTS);
+    assert(componentIndex < MAX_COMPONENTS);
+
+    float sumWeights = splitStats.sumWeights[componentIndex];
+    float3 cov       = splitStats.covarianceTotals[componentIndex] / sumWeights;
+
+    float negB          = cov.x + cov.y;
+    float discriminant  = sqrt((cov.x - cov.y) * (cov.x - cov.y) - 4 * cov.z * cov.z);
+    float eigenValue0   = 0.5f * (negB + discriminant);
+    float2 eigenVector0 = make_float2(-cov.z, cov.x - eigenValue0);
+
+    float norm0 = dot(eigenVector0, eigenVector0);
+    norm0       = norm0 > FLT_EPSILON ? rsqrt(norm0) : 1.f;
+    eigenVector0 *= norm0;
+
+    if (discriminant > 1e-8f)
+    {
+        float2 temp     = eigenValue0 * eigenVector0 * 0.5f;
+        float2 meanDir0 = temp;
+        float2 meanDir1 = -temp;
+
+        float3 meanDirection = vmm.ReadDirection(componentIndex);
+
+        float3 basis0, basis1;
+        BuildOrthonormalBasis(meanDirection, basis0, basis1);
+
+        float3 meanDir3D0 = Map2DTo3D(meanDir0);
+        float3 meanDir3D1 = Map2DTo3D(meanDir1);
+
+        float3 meanDirection0 =
+            basis0 * meanDir3D0.x + basis1 * meanDir3D0.y + meanDirection * meanDir3D0.z;
+        float3 meanDirection1 =
+            basis0 * meanDir3D1.x + basis1 * meanDir3D1.y + meanDirection * meanDir3D1.z;
+
+        float meanCosine  = KappaToMeanCosine(vmm.kappas[componentIndex]);
+        float meanCosine0 = meanCosine / abs(dot(meanDirection0, meanDirection));
+        meanCosine0       = min(meanCosine0, maxMeanCosine);
+
+        float kappa    = MeanCosineToKappa(meanCosine0);
+        float weight   = vmm.weights[componentIndex] * 0.5f;
+        float distance = vmm.distances[componentIndex];
+
+        vmm.UpdateComponent_(componentIndex, kappa, meanDirection0, weight);
+        vmm.UpdateComponent(newComponentIndex, kappa, meanDirection1, weight, distance);
+
+        splitStats.SetComponent(componentIndex, make_float3(0.f), 0.f, 0.f, 0);
+        splitStats.SetComponent(newComponentIndex, make_float3(0.f), 0.f, 0.f, 0);
+
+        float sumStatsWeights = vmmStatistics.sumWeights[componentIndex] / 2.f;
+        vmmStatistics.SetComponent(componentIndex, sumStatsWeights,
+                                   meanDirection0 * meanCosine0 * sumStatsWeights);
+        vmmStatistics.SetComponent(newComponentIndex, sumStatsWeights,
+                                   meanDirection1 * meanCosine0 * sumStatsWeights);
+    }
+}
+
 GPU_KERNEL
 SplitComponents(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStatistics,
                 SplitStatistics *__restrict__ splitStatistics, const SOASampleData samples,
@@ -967,60 +1027,8 @@ SplitComponents(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStati
 
         if (split)
         {
-            assert(newComponentIndex < MAX_COMPONENTS);
-
-            float sumWeights = splitStats.sumWeights[componentIndex];
-            float3 cov       = splitStats.covarianceTotals[componentIndex] / sumWeights;
-
-            float negB          = cov.x + cov.y;
-            float discriminant  = sqrt((cov.x - cov.y) * (cov.x - cov.y) - 4 * cov.z * cov.z);
-            float eigenValue0   = 0.5f * (negB + discriminant);
-            float2 eigenVector0 = make_float2(-cov.z, cov.x - eigenValue0);
-
-            float norm0 = dot(eigenVector0, eigenVector0);
-            norm0       = norm0 > FLT_EPSILON ? rsqrt(norm0) : 1.f;
-            eigenVector0 *= norm0;
-
-            if (discriminant > 1e-8f)
-            {
-                float2 temp     = eigenValue0 * eigenVector0 * 0.5f;
-                float2 meanDir0 = temp;
-                float2 meanDir1 = -temp;
-
-                float3 meanDirection = vmm.ReadDirection(componentIndex);
-
-                float3 basis0, basis1;
-                BuildOrthonormalBasis(meanDirection, basis0, basis1);
-
-                float3 meanDir3D0 = Map2DTo3D(meanDir0);
-                float3 meanDir3D1 = Map2DTo3D(meanDir1);
-
-                float3 meanDirection0 = basis0 * meanDir3D0.x + basis1 * meanDir3D0.y +
-                                        meanDirection * meanDir3D0.z;
-                float3 meanDirection1 = basis0 * meanDir3D1.x + basis1 * meanDir3D1.y +
-                                        meanDirection * meanDir3D1.z;
-
-                float meanCosine  = KappaToMeanCosine(vmm.kappas[componentIndex]);
-                float meanCosine0 = meanCosine / abs(dot(meanDirection0, meanDirection));
-                meanCosine0       = min(meanCosine0, maxMeanCosine);
-
-                float kappa    = MeanCosineToKappa(meanCosine0);
-                float weight   = vmm.weights[componentIndex] * 0.5f;
-                float distance = vmm.distances[componentIndex];
-
-                vmm.UpdateComponent_(componentIndex, kappa, meanDirection0, weight);
-                vmm.UpdateComponent(newComponentIndex, kappa, meanDirection1, weight,
-                                    distance);
-
-                splitStats.SetComponent(componentIndex, make_float3(0.f), 0.f, 0.f, 0);
-                splitStats.SetComponent(newComponentIndex, make_float3(0.f), 0.f, 0.f, 0);
-
-                float sumStatsWeights = vmmStatistics.sumWeights[componentIndex] / 2.f;
-                vmmStatistics.SetComponent(componentIndex, sumStatsWeights,
-                                           meanDirection0 * meanCosine0 * sumStatsWeights);
-                vmmStatistics.SetComponent(newComponentIndex, sumStatsWeights,
-                                           meanDirection1 * meanCosine0 * sumStatsWeights);
-            }
+            SplitComponent(vmm, splitStats, vmmStatistics, componentIndex, newComponentIndex,
+                           maxMeanCosine);
         }
 
         if (threadIndex == 0)
@@ -1050,6 +1058,15 @@ SplitComponents(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStati
         uint32_t workItemIndex   = atomicAdd(numWorkItems, 1);
         workItems[workItemIndex] = workItem;
     }
+}
+
+GPU_KERNEL RecursiveSplitComponents(
+    VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStatistics,
+    SplitStatistics *__restrict__ splitStatistics, const SOASampleData samples,
+    const uint32_t *__restrict__ leafNodeIndices, const uint32_t *__restrict__ numLeafNodes,
+    const KDTreeNode *__restrict__ nodes, uint32_t *__restrict__ numWorkItems,
+    WorkItem *__restrict__ workItems)
+{
 }
 
 GPU_KERNEL MergeComponents(VMM *__restrict__ vmms,
