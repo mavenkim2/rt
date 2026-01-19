@@ -152,6 +152,8 @@ void PathGuiding::Update()
     cudaDeviceSynchronize();
 
     // Update VMMs
+    device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_FIND_LEAF_NODES], 1, 1, treeBuildState,
+                          nodes, buildNodeIndices, sampleStatistics, nodes);
 }
 
 } // namespace rt

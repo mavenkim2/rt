@@ -1518,7 +1518,7 @@ GPU_KERNEL ApplyParallaxShift(VMMStatistics *__restrict__ statistics,
         const VMM &vmm       = vmms[vmmIndex];
         VMMStatistics &stats = statistics[vmmIndex];
 
-        // TODO: get from somewhere
+        // TODO IMPORTANT: get from somewhere
         float3 pivotPosition = make_float3(0.f);
         const float3 shift   = pivotPosition - sampleMean;
 
@@ -2046,22 +2046,20 @@ GPU_KERNEL GetChildNodeOffset(KDTreeBuildState *buildState, KDTreeNode *nodes, u
     }
 }
 
-GPU_KERNEL FindLeafNodes(KDTreeBuildState *buildState, KDTreeNode *nodes,
+GPU_KERNEL FindLeafNodes(KDTreeBuildState *__restrict__ buildState, KDTreeNode *nodes,
                          uint32_t *nodeIndices, uint32_t *numLeafNodes, VMMMapState *states,
                          VMM *vmms)
 {
     const uint32_t blockSize = 256;
     assert(blockDim.x == blockSize);
-    // uint32_t threadIndex = threadIdx.x + blockIdx.x * blockDim.x;
-    // if (threadIndex >= levelInfo->start) return;
-    // KDTreeNode &node = nodes[threadIndex];
 
     for (uint32_t threadIndex = 0; threadIndex < buildState->totalNumNodes; threadIndex++)
     {
         KDTreeNode &node = nodes[threadIndex];
         if (node.IsChild())
         {
-            uint32_t index     = (*numLeafNodes)++; // atomicAdd(numLeafNodes, 1);
+            assert(!node.HasChild());
+            uint32_t index     = (*numLeafNodes)++;
             node.vmmIndex      = index;
             nodeIndices[index] = threadIndex;
 
