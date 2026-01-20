@@ -1099,6 +1099,9 @@ GPU_KERNEL RecursiveSplitComponents(
     __shared__ VMM vmm;
     __shared__ uint32_t sharedSplitMask;
     __shared__ uint32_t numUsedSamples;
+    __shared__ float weightedLogLikelihood;
+    __shared__ float sumSampleWeights;
+
     __shared__ float chiSquareTotals[MAX_COMPONENTS];
     __shared__ float3 covarianceTotals[MAX_COMPONENTS];
     __shared__ float sumWeights[MAX_COMPONENTS];
@@ -1183,6 +1186,23 @@ GPU_KERNEL RecursiveSplitComponents(
                 suffStatistics.maskedReplace(mask, tempSuffStatistics);
             }
 #endif
+            if (threadIndex < MAX_COMPONENTS)
+            {
+                chiSquareTotals[threadIndex]  = 0.f;
+                covarianceTotals[threadIndex] = make_float3(0.f);
+            }
+            if (threadIndex == 0)
+            {
+                weightedLogLikelihood = 0.f;
+                sumSampleWeights      = 0.f;
+            }
+            __syncthreads();
+
+            UpdateMixtureParameters(vmm, chiSquareTotals, covarianceTotals,
+                                    const VMMStatistics &previousStatistics, samples.dir,
+                                    samples.weights, sumSampleWeights, weightedLogLikelihood,
+                                    uint32_t sampleOffset, uint32_t sampleCount,
+                                    sharedSplitMask);
 
             __syncthreads();
         }
@@ -2184,9 +2204,10 @@ GPU_KERNEL GetChildNodeOffset(KDTreeBuildState *buildState, KDTreeNode *nodes, u
 }
 
 GPU_KERNEL FindLeafNodes(KDTreeBuildState *__restrict__ buildState, KDTreeNode *nodes,
-                         uint32_t *nodeIndices, uint32_t *numLeafNodes, VMMMapState *states,
+                         VMMUpdateWorkItem *newWorkItems, VMMUpdateWorkItem *oldWorkItems,
                          VMM *vmms)
 {
+    // TODO: make sure newnumvmms and oldnumvmms are zeroed out
     const uint32_t blockSize = 256;
     assert(blockDim.x == blockSize);
 
@@ -2196,19 +2217,42 @@ GPU_KERNEL FindLeafNodes(KDTreeBuildState *__restrict__ buildState, KDTreeNode *
         if (node.IsChild())
         {
             assert(!node.HasChild());
-            uint32_t index     = (*numLeafNodes)++;
-            node.vmmIndex      = index;
-            nodeIndices[index] = threadIndex;
 
-            states[index].numWorkItems          = (node.count + blockSize - 1) / blockSize;
-            states[index].numSamples            = node.count;
-            states[index].previousLogLikelihood = 0.f;
-            states[index].iteration             = 0;
+            uint32_t vmmIndex         = ~0u;
+            uint32_t outputIndex      = ~0u;
+            VMMUpdateWorkItem *output = 0;
 
-            vmms[index].Initialize();
+            if (node.IsNew())
+            {
+                vmmIndex    = buildState->totalNumVMMs++;
+                outputIndex = buildState->newNumVMMs++;
+                output      = newWorkItems;
+
+                node.SetVMMIndex(vmmIndex);
+                node.SetIsNew(false);
+
+                vmms[vmmIndex].Initialize();
+            }
+            else
+            {
+                vmmIndex    = node.GetVMMIndex();
+                outputIndex = buildState->oldNumVMMs++;
+                output      = oldWorkItems;
+            }
+
+            assert(vmmIndex != ~0u);
+            assert(outputIndex != ~0u);
+            assert(output);
+
+            VMMUpdateWorkItem workItem;
+            workItem.vmmIndex        = vmmIndex;
+            workItem.sharedSplitMask = 0xffffffff;
+            workItem.offset          = node.offset;
+            workItem.count           = node.count;
+
+            output[outputIndex] = workItem;
         }
     }
-    printf("%u\n", *numLeafNodes);
 }
 
 GPU_KERNEL
@@ -2393,8 +2437,6 @@ void test()
     WorkItem *vmmWorkItems       = allocator.Alloc<WorkItem>(numSamples, 4u);
 
     cudaMemset(vmmWorkItems, 0, sizeof(WorkItem) * numSamples);
-
-    VMMMapState *vmmMapStates = allocator.Alloc<VMMMapState>(maxNumNodes, 4u);
 
     float3 sceneMin = make_float3(0.f);
     float3 sceneMax = make_float3(100.f);

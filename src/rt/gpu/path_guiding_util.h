@@ -388,6 +388,11 @@ struct KDTreeBuildState
     // persists across updates
     uint32_t totalNumNodes;
 
+    // vmm
+    uint32_t newNumVMMs;
+    uint32_t oldNumVMMs;
+    uint32_t totalNumVMMs;
+
     // temporary values
     uint32_t numNodes;
     uint32_t nextLevelNumNodes;
@@ -410,7 +415,7 @@ struct KDTreeNode
 
     uint32_t offset;
     uint32_t count;
-    uint32_t vmmIndex;
+    uint32_t vmmIndex_isNewNode;
 
     RT_DEVICE uint32_t GetChildIndex() const { return (childIndex_dim << 2) >> 2; }
     RT_DEVICE void SetChildIndex(uint32_t childIndex)
@@ -428,6 +433,22 @@ struct KDTreeNode
     }
     RT_DEVICE bool HasChild() const { return childIndex_dim != ~0u; }
     RT_DEVICE bool IsChild() const { return (childIndex_dim >> 30u) == 3u; }
+
+    RT_DEVICE bool IsNew() const { return vmmIndex_isNewNode >> 31u; }
+    RT_DEVICE uint32_t GetVMMIndex() const { return (vmmIndex_isNewNode << 1u) >> 1u; }
+
+    RT_DEVICE void SetIsNew(bool isNew)
+    {
+        uint32_t vmmIndex  = GetVMMIndex();
+        vmmIndex_isNewNode = vmmIndex | (isNew << 31u);
+    }
+
+    RT_DEVICE void SetVMMIndex(uint32_t vmmIndex)
+    {
+        assert(vmmIndex < (1u << 31u));
+        bool isNew         = IsNew();
+        vmmIndex_isNewNode = vmmIndex | (isNew << 31u);
+    }
 };
 
 #define INTEGER_BINS                     float(1 << 18)
@@ -712,13 +733,12 @@ struct WorkItem
     uint32_t count;
 };
 
-struct VMMMapState
+struct VMMUpdateWorkItem
 {
-    int numWorkItems;
-    uint32_t numSamples;
-    uint32_t sampleOffset;
-    float previousLogLikelihood;
-    uint32_t iteration;
+    uint32_t vmmIndex;
+    uint32_t sharedSplitMask;
+    uint32_t offset;
+    uint32_t count;
 };
 
 } // namespace rt

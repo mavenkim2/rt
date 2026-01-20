@@ -154,6 +154,23 @@ void PathGuiding::Update()
     // Update VMMs
     device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_FIND_LEAF_NODES], 1, 1, treeBuildState,
                           nodes, buildNodeIndices, sampleStatistics, nodes);
+
+    // Splitting
+    for (uint32_t iteration = 0; iteration < MAX_COMPONENTS / 2; iteration++)
+    {
+        // need to reset new statistics here
+
+        // update split statistics
+        device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_UPDATE_SPLIT_STATISTICS],
+                              uint32_t numBlocks, uint32_t blockSize, Args args...);
+
+        device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_SPLIT_COMPONENTS],
+                              uint32_t numBlocks, uint32_t blockSize, Args args...);
+
+        // partial update
+
+        // prepare for next loop iteration
+    }
 }
 
 } // namespace rt
