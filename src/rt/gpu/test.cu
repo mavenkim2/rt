@@ -637,26 +637,56 @@ inline __device__ void UpdateMixtureParameters(
     }
 }
 
-__device__ void UpdateMixtureParams(VMM &sharedVMM, VMMStatistics &previousStatistics,
-                                    float *sumWeights, float3 *sumWeightedDirections,
-                                    float &sumSampleWeights, float &weightedLogLikelihood,
-                                    const SOASampleData samples, const KDTreeNode &node,
-                                    const uint32_t sharedSplitMask = ~0u)
+inline __device__ VMMUpdateWorkItem GetVMMWorkItem(KDTreeBuildState *state,
+                                                   const VMMUpdateWorkItem *oldWorkItems,
+                                                   const VMMUpdateWorkItem *newWorkItems,
+                                                   uint32_t workItemIndex)
 {
-    const uint32_t sampleCount = node.count;
-    const uint32_t offset      = node.offset;
-    const uint32_t vmmIndex    = node.vmmIndex;
+    return (workItemIndex >= state->newNumVMMs
+                ? oldWorkItems[workItemIndex - state->newNumVMMs]
+                : newWorkItems[workItemIndex]);
+}
+
+GPU_KERNEL UpdateMixture(KDTreeBuildState *state, VMM *__restrict__ vmms,
+                         VMMStatistics *__restrict__ currentStatistics,
+                         const SOASampleData samples, const VMMUpdateWorkItem *oldWorkItems,
+                         const VMMUpdateWorkItem *newWorkItems)
+{
+    __shared__ VMMStatistics sharedStatistics;
+    __shared__ VMM sharedVMM;
+    __shared__ float sumSampleWeights;
+    __shared__ float weightedLogLikelihood;
+
     const uint32_t threadIndex = threadIdx.x;
 
-    UpdateMixtureParameters(sharedVMM, sumWeights, sumWeightedDirections, previousStatistics,
-                            samples.dir, samples.weights, sumSampleWeights,
-                            weightedLogLikelihood, offset, sampleCount, sharedSplitMask);
-    __syncthreads();
+    const uint32_t numVMMs = state->oldNumVMMs + state->newNumVMMs;
+    for (uint32_t workItemIndex = blockIdx.x; workItemIndex < numVMMs; workItemIndex++)
+    {
+        const VMMUpdateWorkItem workItem =
+            GetVMMWorkItem(state, oldWorkItems, newWorkItems, workItemIndex);
 
-    AddVMMStatistics(previousStatistics, sumWeightedDirections, sumWeights, sumSampleWeights,
-                     sampleCount);
+        // TODO: fix this
+        const uint32_t vmmIndex        = workItem.vmmIndex;
+        const uint32_t sharedSplitMask = workItem.sharedSplitMask;
+        const uint32_t offset          = workItem.offset;
+        const uint32_t sampleCount     = workItem.count;
 
-    // TODO IMPORTANT: how do you calculate the sum of weights during partial updates?
+        if (threadIndex == 0)
+        {
+            sharedVMM = vmms[vmmIndex];
+        }
+        __syncthreads();
+
+        UpdateMixtureParameters(sharedVMM, sharedStatistics.sumWeights,
+                                sharedStatistics.sumWeightedDirections, previousStatistics,
+                                samples.dir, samples.weights, sumSampleWeights,
+                                weightedLogLikelihood, offset, sampleCount, sharedSplitMask);
+        __syncthreads();
+
+        AddVMMStatistics(previousStatistics, sumWeightedDirections, sumWeights,
+                         sumSampleWeights, sampleCount);
+
+        // TODO IMPORTANT: how do you calculate the sum of weights during partial updates?
 
 #if 0
     if constexpr (!partial)
@@ -701,90 +731,15 @@ __device__ void UpdateMixtureParams(VMM &sharedVMM, VMMStatistics &previousStati
         }
     }
 #endif
-}
 
-template <bool partial = false>
-__device__ void UpdateMixtureHelper(
-    VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStatistics,
-    const SOASampleData samples, const uint32_t *__restrict__ leafNodeIndices,
-    const uint32_t *__restrict__ numLeafNodes, const KDTreeNode *__restrict__ nodes,
-    const uint32_t *__restrict__ numWorkItems = 0, const WorkItem *workItems = 0)
-{
-    assert(!partial || (partial && numWorkItems && workItems));
-
-    __shared__ VMMStatistics sharedStatistics;
-    __shared__ VMM sharedVMM;
-    __shared__ float sumSampleWeights;
-    __shared__ float weightedLogLikelihood;
-
-    const uint32_t threadIndex = threadIdx.x;
-
-    uint32_t limit, nodeIndex, sharedSplitMask;
-    if constexpr (!partial)
-    {
-        limit = *numLeafNodes;
+        if (threadIndex == 0)
+        {
+            VMMStatistics &previousStatistics = currentStatistics[workItem.vmmIndex];
+            vmms[workItem.vmmIndex]           = sharedVMM;
+            previousStatistics.numSamplesAfterLastSplit += node.count;
+            previousStatistics.numSamplesAfterLastMerge += node.count;
+        }
     }
-    else
-    {
-        assert(numWorkItems);
-        assert(workItems);
-        limit = *numWorkItems;
-    }
-
-    if (blockIdx.x >= limit) return;
-
-    if constexpr (!partial)
-    {
-        nodeIndex = leafNodeIndices[blockIdx.x];
-    }
-    else
-    {
-        WorkItem workItem = workItems[blockIdx.x];
-        nodeIndex         = workItem.nodeIndex;
-        sharedSplitMask   = workItem.offset;
-    }
-
-    const KDTreeNode &node = nodes[nodeIndex];
-
-    if (threadIndex == 0)
-    {
-        sharedVMM = vmms[node.vmmIndex];
-    }
-
-    __syncthreads();
-
-    // TODO: for partial updates, previous statistics must be zeroed
-    UpdateMixtureParams(sharedVMM, currentStatistics[node.vmmIndex],
-                        sharedStatistics.sumWeights, sharedStatistics.sumWeightedDirections,
-                        sumSampleWeights, weightedLogLikelihood, samples, node);
-
-    if (threadIndex == 0)
-    {
-        VMMStatistics &previousStatistics = currentStatistics[node.vmmIndex];
-        vmms[node.vmmIndex]               = sharedVMM;
-        previousStatistics.numSamplesAfterLastSplit += node.count;
-        previousStatistics.numSamplesAfterLastMerge += node.count;
-    }
-}
-
-GPU_KERNEL
-UpdateMixture(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStatistics,
-              const SOASampleData samples, const uint32_t *__restrict__ leafNodeIndices,
-              const uint32_t *__restrict__ numLeafNodes, const KDTreeNode *__restrict__ nodes)
-{
-    UpdateMixtureHelper<false>(vmms, currentStatistics, samples, leafNodeIndices, numLeafNodes,
-                               nodes);
-}
-
-GPU_KERNEL
-PartialUpdateMixture(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStatistics,
-                     const SOASampleData samples, const uint32_t *__restrict__ leafNodeIndices,
-                     const uint32_t *__restrict__ numLeafNodes,
-                     const KDTreeNode *__restrict__ nodes,
-                     const uint32_t *__restrict__ numWorkItems, const WorkItem *workItems)
-{
-    UpdateMixtureHelper<true>(vmms, currentStatistics, samples, leafNodeIndices, numLeafNodes,
-                              nodes, numWorkItems, workItems);
 }
 
 __device__ void UpdateSplitStatistics(/*__shared__*/ float *__restrict__ sharedChiSquareTotals,
@@ -2253,6 +2208,8 @@ GPU_KERNEL FindLeafNodes(KDTreeBuildState *__restrict__ buildState, KDTreeNode *
             output[outputIndex] = workItem;
         }
     }
+
+    assert(buildState->oldNumVMMs + buildState->newNumVMMs == buildState->totalNumVMMs);
 }
 
 GPU_KERNEL

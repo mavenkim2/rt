@@ -163,11 +163,10 @@ void PathGuiding::Update()
         // update split statistics
         device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_UPDATE_SPLIT_STATISTICS],
                               uint32_t numBlocks, uint32_t blockSize, Args args...);
-
         device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_SPLIT_COMPONENTS],
                               uint32_t numBlocks, uint32_t blockSize, Args args...);
-
-        // partial update
+        device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_UPDATE_MIXTURE], uint32_t numBlocks,
+                              uint32_t blockSize, Args args...);
 
         // prepare for next loop iteration
     }
