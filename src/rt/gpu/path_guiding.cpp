@@ -1,4 +1,5 @@
 #include "path_guiding.h"
+#include "path_guiding_util.h"
 
 namespace rt
 {
@@ -155,14 +156,21 @@ void PathGuiding::Update()
     device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_FIND_LEAF_NODES], 1, 1, treeBuildState,
                           nodes, buildNodeIndices, sampleStatistics, nodes);
 
+    VMMUpdateWorkItem *workItems0 = 0;
+    VMMUpdateWorkItem *workItems1 = 0;
+
     // Splitting
     for (uint32_t iteration = 0; iteration < MAX_COMPONENTS / 2; iteration++)
     {
-        // need to reset new statistics here
+        VMMUpdateWorkItem *inputWorkItems  = iteration % 2 == 0 ? workItems0 : workItems1;
+        VMMUpdateWorkItem *outputWorkItems = iteration % 2 == 0 ? workItems1 : workItems0;
+
+        // reset statistics if isNew
 
         // update split statistics
         device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_UPDATE_SPLIT_STATISTICS],
                               uint32_t numBlocks, uint32_t blockSize, Args args...);
+        // TODO: zero buildState->numVMMs before this kernel
         device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_SPLIT_COMPONENTS],
                               uint32_t numBlocks, uint32_t blockSize, Args args...);
         device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_UPDATE_MIXTURE], uint32_t numBlocks,
@@ -170,6 +178,8 @@ void PathGuiding::Update()
 
         // prepare for next loop iteration
     }
+
+    // Merging
 }
 
 } // namespace rt

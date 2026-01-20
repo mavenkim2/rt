@@ -389,8 +389,7 @@ struct KDTreeBuildState
     uint32_t totalNumNodes;
 
     // vmm
-    uint32_t newNumVMMs;
-    uint32_t oldNumVMMs;
+    uint32_t numVMMs;
     uint32_t totalNumVMMs;
 
     // temporary values
@@ -735,10 +734,26 @@ struct WorkItem
 
 struct VMMUpdateWorkItem
 {
-    uint32_t vmmIndex;
+    uint32_t vmmIndex_isNew;
     uint32_t sharedSplitMask;
     uint32_t offset;
     uint32_t count;
+
+    RT_DEVICE bool IsNew() const { return vmmIndex_isNew >> 31u; }
+    RT_DEVICE uint32_t GetVMMIndex() const { return (vmmIndex_isNew << 1u) >> 1u; }
+
+    RT_DEVICE void SetIsNew(bool isNew)
+    {
+        uint32_t vmmIndex = GetVMMIndex();
+        vmmIndex_isNew    = vmmIndex | (isNew << 31u);
+    }
+
+    RT_DEVICE void SetVMMIndex(uint32_t vmmIndex)
+    {
+        assert(vmmIndex < (1u << 31u));
+        bool isNew     = IsNew();
+        vmmIndex_isNew = vmmIndex | (isNew << 31u);
+    }
 };
 
 } // namespace rt

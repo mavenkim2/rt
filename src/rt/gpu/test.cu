@@ -637,20 +637,9 @@ inline __device__ void UpdateMixtureParameters(
     }
 }
 
-inline __device__ VMMUpdateWorkItem GetVMMWorkItem(KDTreeBuildState *state,
-                                                   const VMMUpdateWorkItem *oldWorkItems,
-                                                   const VMMUpdateWorkItem *newWorkItems,
-                                                   uint32_t workItemIndex)
-{
-    return (workItemIndex >= state->newNumVMMs
-                ? oldWorkItems[workItemIndex - state->newNumVMMs]
-                : newWorkItems[workItemIndex]);
-}
-
 GPU_KERNEL UpdateMixture(KDTreeBuildState *state, VMM *__restrict__ vmms,
                          VMMStatistics *__restrict__ currentStatistics,
-                         const SOASampleData samples, const VMMUpdateWorkItem *oldWorkItems,
-                         const VMMUpdateWorkItem *newWorkItems)
+                         const SOASampleData samples, const VMMUpdateWorkItem *workItems)
 {
     __shared__ VMMStatistics sharedStatistics;
     __shared__ VMM sharedVMM;
@@ -659,11 +648,10 @@ GPU_KERNEL UpdateMixture(KDTreeBuildState *state, VMM *__restrict__ vmms,
 
     const uint32_t threadIndex = threadIdx.x;
 
-    const uint32_t numVMMs = state->oldNumVMMs + state->newNumVMMs;
-    for (uint32_t workItemIndex = blockIdx.x; workItemIndex < numVMMs; workItemIndex++)
+    for (uint32_t workItemIndex = blockIdx.x; workItemIndex < state->numVMMs;
+         workItemIndex += gridDim.x)
     {
-        const VMMUpdateWorkItem workItem =
-            GetVMMWorkItem(state, oldWorkItems, newWorkItems, workItemIndex);
+        const VMMUpdateWorkItem workItem = workItems[workItemIndex];
 
         // TODO: fix this
         const uint32_t vmmIndex        = workItem.vmmIndex;
@@ -742,108 +730,11 @@ GPU_KERNEL UpdateMixture(KDTreeBuildState *state, VMM *__restrict__ vmms,
     }
 }
 
-__device__ void UpdateSplitStatistics(/*__shared__*/ float *__restrict__ sharedChiSquareTotals,
-                                      float3 *__restrict__ covarianceTotals,
-                                      float *__restrict__ sumWeights,
-                                      uint32_t *__restrict__ sharedNumUsedSamples,
-                                      VMM &__restrict__ sharedVMM, const SOASampleData samples,
-                                      const KDTreeNode &node, const float mcEstimate)
-{
-    const uint32_t sampleCount      = node.count;
-    const uint32_t offset           = node.offset;
-    const uint32_t numSampleBatches = (sampleCount + blockDim.x - 1) / blockDim.x;
-    const uint32_t threadIndex      = threadIdx.x;
-    uint32_t numUsedSamples         = 0;
-
-    // Update split statistics
-    for (uint32_t batch = 0; batch < numSampleBatches; batch++)
-    {
-        VMMStatistics statistics;
-        uint32_t sampleIndex   = threadIndex + blockDim.x * batch;
-        bool hasData           = sampleIndex < sampleCount;
-        float V                = 0.f;
-        float3 sampleDirection = make_float3(0.f);
-        float sampleWeight     = 1.f;
-        float samplePDF        = 1.f;
-
-        if (hasData)
-        {
-            sampleDirection = samples.dir[sampleIndex + offset];
-            sampleWeight    = samples.weights[sampleIndex + offset];
-            samplePDF       = samples.pdfs[sampleIndex + offset];
-
-            V = SoftAssignment(sharedVMM, sampleDirection, statistics.sumWeights);
-        }
-
-        float sampleLi = sampleWeight * samplePDF;
-        hasData        = V > 0.f;
-        float invV     = V > 0.f ? 1.f / V : 0.f;
-        numUsedSamples += hasData;
-
-        // See equations 21 and 22 in Robust Fitting of Parallax-Aware Mixtures for
-        // Path Guiding. Note that this evaluates p^2/q - 2p + q, while the paper only
-        // evaluates p^2/q
-        for (uint32_t componentIndex = 0; componentIndex < sharedVMM.numComponents;
-             componentIndex++)
-        {
-            float vmfPdf          = hasData ? statistics.sumWeights[componentIndex] : 0.f;
-            float partialValuePDF = (vmfPdf * sampleLi) / (mcEstimate * V);
-
-            float chiSquareEstimate =
-                (vmfPdf * sampleLi * sampleLi) / (V * V * mcEstimate * mcEstimate);
-            chiSquareEstimate -= 2.f * partialValuePDF;
-            chiSquareEstimate += vmfPdf;
-            chiSquareEstimate /= samplePDF;
-            chiSquareEstimate = hasData ? chiSquareEstimate : 0.f;
-
-            // Calculate covariances
-            float3 t0, t1;
-            float3 vmmComponentDir = sharedVMM.ReadDirection(componentIndex);
-            BuildOrthonormalBasis(vmmComponentDir, t0, t1);
-            float3 localDirection =
-                make_float3(dot(t0, sampleDirection), dot(t1, sampleDirection),
-                            dot(vmmComponentDir, sampleDirection));
-
-            float softAssignmentWeight = vmfPdf * invV;
-            float assignedWeight       = softAssignmentWeight * sampleWeight;
-
-            float covXX = assignedWeight * localDirection.x * localDirection.x;
-            float covYY = assignedWeight * localDirection.y * localDirection.y;
-            float covXY = assignedWeight * localDirection.x * localDirection.y;
-            float3 cov  = make_float3(covXX, covYY, covXY);
-
-            chiSquareEstimate = WarpReduceSum(chiSquareEstimate);
-            cov               = WarpReduceSum(cov);
-            assignedWeight    = WarpReduceSum(assignedWeight);
-
-            assert(isfinite(cov.x) && !isnan(cov.x));
-            assert(isfinite(cov.y) && !isnan(cov.y));
-            assert(isfinite(cov.z) && !isnan(cov.z));
-            assert(isfinite(chiSquareEstimate) && !isnan(chiSquareEstimate));
-
-            if ((threadIndex & (WARP_SIZE - 1)) == 0)
-            {
-                atomicAdd(&sharedChiSquareTotals[componentIndex], chiSquareEstimate);
-                atomicAdd(&covarianceTotals[componentIndex], cov);
-                atomicAdd(&sumWeights[componentIndex], assignedWeight);
-            }
-        }
-    }
-
-    numUsedSamples = WarpReduceSum(numUsedSamples);
-    if ((threadIndex & (WARP_SIZE - 1)) == 0)
-    {
-        atomicAdd(sharedNumUsedSamples, numUsedSamples);
-    }
-}
-
-GPU_KERNEL UpdateSplitStatistics(VMM *__restrict__ vmms,
+GPU_KERNEL UpdateSplitStatistics(KDTreeBuildState *buildState, VMM *__restrict__ vmms,
                                  SplitStatistics *__restrict__ splitStatistics,
                                  VMMStatistics *__restrict__ currentStatistics,
                                  const SOASampleData samples,
-                                 const uint32_t *__restrict__ leafNodeIndices,
-                                 const uint32_t *__restrict__ numLeafNodes,
-                                 const KDTreeNode *__restrict__ nodes)
+                                 const VMMUpdateWorkItem *workItems)
 {
     __shared__ float sharedChiSquareTotals[MAX_COMPONENTS];
     __shared__ uint32_t numUsedSamples;
@@ -851,46 +742,132 @@ GPU_KERNEL UpdateSplitStatistics(VMM *__restrict__ vmms,
     const uint32_t threadIndex = threadIdx.x;
     const uint32_t wid         = threadIndex >> WARP_SHIFT;
 
-    if (blockIdx.x >= *numLeafNodes) return;
-
-    const KDTreeNode &node = nodes[leafNodeIndices[blockIdx.x]];
-    uint32_t sampleCount   = node.count;
-    uint32_t offset        = node.offset;
-
-    // const uint32_t totalNumSamples = previousStatistics.numSamples + sampleCount;
-    const uint32_t totalNumSamples  = sampleCount;
-    float sumSampleWeights          = currentStatistics[node.vmmIndex].sumSampleWeights;
-    const float mcEstimate          = sumSampleWeights / float(totalNumSamples);
-    const uint32_t numSampleBatches = (sampleCount + blockDim.x - 1) / blockDim.x;
-
-    const float maxKappa        = 32000.f;
-    const float maxMeanCosine   = KappaToMeanCosine(maxKappa);
-    VMM &sharedVMM              = vmms[node.vmmIndex];
-    SplitStatistics &splitStats = splitStatistics[node.vmmIndex];
-
-    if (threadIndex < MAX_COMPONENTS)
+    for (uint32_t workItemIndex = blockIdx.x; workItemIndex < buildState->numVMMs;
+         workItemIndex += gridDim.x)
     {
-        sharedChiSquareTotals[threadIndex] = 0.f;
-    }
-    if (threadIndex == 0)
-    {
-        numUsedSamples = 0;
-    }
+        const VMMUpdateWorkItem workItem = workItems[workItemIndex];
+        const uint32_t sampleCount       = workItem.count;
+        const uint32_t offset            = workItem.offset;
+        const uint32_t vmmIndex          = workItem.GetVMMIndex();
 
-    __syncthreads();
+        // const uint32_t totalNumSamples = previousStatistics.numSamples + sampleCount;
+        const uint32_t totalNumSamples  = sampleCount;
+        float sumSampleWeights          = currentStatistics[vmmIndex].sumSampleWeights;
+        const float mcEstimate          = sumSampleWeights / float(totalNumSamples);
+        const uint32_t numSampleBatches = (sampleCount + blockDim.x - 1) / blockDim.x;
 
-    UpdateSplitStatistics(sharedChiSquareTotals, splitStats.covarianceTotals,
-                          splitStats.sumWeights, &numUsedSamples, sharedVMM, samples, node,
-                          mcEstimate);
-    __syncthreads();
+        const float maxKappa        = 32000.f;
+        const float maxMeanCosine   = KappaToMeanCosine(maxKappa);
+        VMM &sharedVMM              = vmms[vmmIndex];
+        SplitStatistics &splitStats = splitStatistics[vmmIndex];
 
-    if (threadIndex < MAX_COMPONENTS)
-    {
-        float chi                = sharedChiSquareTotals[threadIndex];
-        uint32_t totalNumSamples = numUsedSamples + splitStats.numSamples[threadIndex];
-        splitStats.chiSquareTotals[threadIndex] +=
-            (chi - splitStats.chiSquareTotals[threadIndex] * numUsedSamples) / totalNumSamples;
-        splitStats.numSamples[threadIndex] = totalNumSamples;
+        if (threadIndex < MAX_COMPONENTS)
+        {
+            sharedChiSquareTotals[threadIndex] = 0.f;
+        }
+        if (threadIndex == 0)
+        {
+            numUsedSamples = 0;
+        }
+
+        __syncthreads();
+
+        const uint32_t numSampleBatches = (sampleCount + blockDim.x - 1) / blockDim.x;
+        const uint32_t threadIndex      = threadIdx.x;
+        uint32_t numUsedSamples         = 0;
+
+        // Update split statistics
+        for (uint32_t batch = 0; batch < numSampleBatches; batch++)
+        {
+            VMMStatistics statistics;
+            uint32_t sampleIndex   = threadIndex + blockDim.x * batch;
+            bool hasData           = sampleIndex < sampleCount;
+            float V                = 0.f;
+            float3 sampleDirection = make_float3(0.f);
+            float sampleWeight     = 1.f;
+            float samplePDF        = 1.f;
+
+            if (hasData)
+            {
+                sampleDirection = samples.dir[sampleIndex + offset];
+                sampleWeight    = samples.weights[sampleIndex + offset];
+                samplePDF       = samples.pdfs[sampleIndex + offset];
+
+                V = SoftAssignment(sharedVMM, sampleDirection, statistics.sumWeights);
+            }
+
+            float sampleLi = sampleWeight * samplePDF;
+            hasData        = V > 0.f;
+            float invV     = V > 0.f ? 1.f / V : 0.f;
+            numUsedSamples += hasData;
+
+            // See equations 21 and 22 in Robust Fitting of Parallax-Aware Mixtures for
+            // Path Guiding. Note that this evaluates p^2/q - 2p + q, while the paper only
+            // evaluates p^2/q
+            for (uint32_t componentIndex = 0; componentIndex < sharedVMM.numComponents;
+                 componentIndex++)
+            {
+                float vmfPdf          = hasData ? statistics.sumWeights[componentIndex] : 0.f;
+                float partialValuePDF = (vmfPdf * sampleLi) / (mcEstimate * V);
+
+                float chiSquareEstimate =
+                    (vmfPdf * sampleLi * sampleLi) / (V * V * mcEstimate * mcEstimate);
+                chiSquareEstimate -= 2.f * partialValuePDF;
+                chiSquareEstimate += vmfPdf;
+                chiSquareEstimate /= samplePDF;
+                chiSquareEstimate = hasData ? chiSquareEstimate : 0.f;
+
+                // Calculate covariances
+                float3 t0, t1;
+                float3 vmmComponentDir = sharedVMM.ReadDirection(componentIndex);
+                BuildOrthonormalBasis(vmmComponentDir, t0, t1);
+                float3 localDirection =
+                    make_float3(dot(t0, sampleDirection), dot(t1, sampleDirection),
+                                dot(vmmComponentDir, sampleDirection));
+
+                float softAssignmentWeight = vmfPdf * invV;
+                float assignedWeight       = softAssignmentWeight * sampleWeight;
+
+                float covXX = assignedWeight * localDirection.x * localDirection.x;
+                float covYY = assignedWeight * localDirection.y * localDirection.y;
+                float covXY = assignedWeight * localDirection.x * localDirection.y;
+                float3 cov  = make_float3(covXX, covYY, covXY);
+
+                chiSquareEstimate = WarpReduceSum(chiSquareEstimate);
+                cov               = WarpReduceSum(cov);
+                assignedWeight    = WarpReduceSum(assignedWeight);
+
+                assert(isfinite(cov.x) && !isnan(cov.x));
+                assert(isfinite(cov.y) && !isnan(cov.y));
+                assert(isfinite(cov.z) && !isnan(cov.z));
+                assert(isfinite(chiSquareEstimate) && !isnan(chiSquareEstimate));
+
+                if ((threadIndex & (WARP_SIZE - 1)) == 0)
+                {
+                    atomicAdd(&sharedChiSquareTotals[componentIndex], chiSquareEstimate);
+                    atomicAdd(&covarianceTotals[componentIndex], cov);
+                    atomicAdd(&sumWeights[componentIndex], assignedWeight);
+                }
+            }
+        }
+
+        numUsedSamples = WarpReduceSum(numUsedSamples);
+        if ((threadIndex & (WARP_SIZE - 1)) == 0)
+        {
+            atomicAdd(sharedNumUsedSamples, numUsedSamples);
+        }
+
+        __syncthreads();
+
+        if (threadIndex < MAX_COMPONENTS)
+        {
+            float chi                = sharedChiSquareTotals[threadIndex];
+            uint32_t totalNumSamples = numUsedSamples + splitStats.numSamples[threadIndex];
+            splitStats.chiSquareTotals[threadIndex] +=
+                (chi - splitStats.chiSquareTotals[threadIndex] * numUsedSamples) /
+                totalNumSamples;
+            splitStats.numSamples[threadIndex] = totalNumSamples;
+        }
     }
 }
 
@@ -955,211 +932,94 @@ __device__ void SplitComponent(VMM &vmm, SplitStatistics &splitStats,
 }
 
 GPU_KERNEL
-SplitComponents(VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStatistics,
+SplitComponents(KDTreeBuildState *buildState, VMM *__restrict__ vmms,
+                VMMStatistics *__restrict__ currentStatistics,
                 SplitStatistics *__restrict__ splitStatistics, const SOASampleData samples,
-                const uint32_t *__restrict__ leafNodeIndices,
-                const uint32_t *__restrict__ numLeafNodes,
-                const KDTreeNode *__restrict__ nodes, uint32_t *__restrict__ numWorkItems,
-                WorkItem *__restrict__ workItems)
+                const VMMUpdateWorkItem *__restrict__ workItems,
+                VMMUpdateWorkItem *__restrict__ outputWorkItems)
 {
+    const uint32_t threadIndex     = threadIdx.x;
     const float splittingThreshold = 0.5f;
     const float maxKappa           = 32000.f;
     const float maxMeanCosine      = KappaToMeanCosine(maxKappa);
     static_assert(MAX_COMPONENTS <= WARP_SIZE,
                   "MAX_COMPONENTS must not be greater than the warp size");
 
-    if (blockIdx.x >= *numLeafNodes) return;
-
-    uint32_t nodeIndex     = leafNodeIndices[blockIdx.x];
-    const KDTreeNode &node = nodes[nodeIndex];
-    uint32_t vmmIndex      = node.vmmIndex;
-    uint32_t sampleCount   = node.count;
-    uint32_t offset        = node.offset;
-
-    const uint32_t threadIndex = threadIdx.x;
-
-    VMM &vmm                     = vmms[vmmIndex];
-    SplitStatistics &splitStats  = splitStatistics[vmmIndex];
-    VMMStatistics &vmmStatistics = currentStatistics[vmmIndex];
-
-    if (vmmStatistics.numSamplesAfterLastSplit < MIN_SPLIT_SAMPLES) return;
-
     __shared__ uint32_t sharedSplitMask;
-    // Split components
-    if (threadIndex < MAX_COMPONENTS)
+
+    for (uint32_t workItemIndex = blockIdx.x; workItemIndex < buildState->numVMMs;
+         workItemIndex += gridDim.x)
     {
-        float chiSquareEstimate               = splitStats.chiSquareTotals[threadIndex];
-        uint32_t rank                         = 0;
-        const uint32_t numAvailableComponents = MAX_COMPONENTS - vmm.numComponents;
-        for (uint32_t i = 0; i < MAX_COMPONENTS; i++)
+        const VMMUpdateWorkItem workItem = workItems[workItemIndex];
+
+        const uint32_t vmmIndex    = workItem.GetVMMIndex();
+        const uint32_t offset      = workItem.offset;
+        const uint32_t sampleCount = workItem.count;
+        const bool isNew           = workItem.IsNew();
+
+        VMM &vmm                     = vmms[vmmIndex];
+        SplitStatistics &splitStats  = splitStatistics[vmmIndex];
+        VMMStatistics &vmmStatistics = currentStatistics[vmmIndex];
+
+        if (!isNew && vmmStatistics.numSamplesAfterLastSplit < MIN_SPLIT_SAMPLES) return;
+
+        // Split components
+        if (threadIndex < MAX_COMPONENTS)
         {
-            float chiSquare    = splitStats.chiSquareTotals[i];
-            uint32_t increment = chiSquare > chiSquareEstimate ||
-                                 (chiSquare == chiSquareEstimate && i < threadIndex);
-            rank += increment;
+            float chiSquareEstimate               = splitStats.chiSquareTotals[threadIndex];
+            uint32_t rank                         = 0;
+            const uint32_t numAvailableComponents = MAX_COMPONENTS - vmm.numComponents;
+            for (uint32_t i = 0; i < MAX_COMPONENTS; i++)
+            {
+                float chiSquare    = splitStats.chiSquareTotals[i];
+                uint32_t increment = chiSquare > chiSquareEstimate ||
+                                     (chiSquare == chiSquareEstimate && i < threadIndex);
+                rank += increment;
+            }
+
+            bool split = splitStats.chiSquareTotals[threadIndex] > splittingThreshold &&
+                         rank < numAvailableComponents;
+
+            uint32_t splitMask     = __ballot_sync(0xffffffff, split);
+            uint32_t numComponents = vmm.numComponents;
+            uint32_t newComponentIndex =
+                numComponents + __popc(splitMask & ((1u << threadIndex) - 1));
+
+            uint componentIndex = threadIndex;
+
+            if (split)
+            {
+                SplitComponent(vmm, splitStats, vmmStatistics, componentIndex,
+                               newComponentIndex, maxMeanCosine);
+            }
+
+            if (threadIndex == 0)
+            {
+                uint32_t newNumComponents = __popc(splitMask);
+                assert(vmm.numComponents + newNumComponents <= MAX_COMPONENTS);
+
+                uint32_t maskExtend = ((1u << newNumComponents) - 1u) << vmm.numComponents;
+
+                vmm.numComponents += newNumComponents;
+                vmmStatistics.numSamplesAfterLastSplit = 0;
+                sharedSplitMask                        = splitMask | maskExtend;
+            }
         }
 
-        bool split = splitStats.chiSquareTotals[threadIndex] > splittingThreshold &&
-                     rank < numAvailableComponents;
-
-        uint32_t splitMask     = __ballot_sync(0xffffffff, split);
-        uint32_t numComponents = vmm.numComponents;
-        uint32_t newComponentIndex =
-            numComponents + __popc(splitMask & ((1u << threadIndex) - 1));
-
-        uint componentIndex = threadIndex;
-
-        if (split)
-        {
-            SplitComponent(vmm, splitStats, vmmStatistics, componentIndex, newComponentIndex,
-                           maxMeanCosine);
-        }
-
-        if (threadIndex == 0)
-        {
-            uint32_t newNumComponents = __popc(splitMask);
-            assert(vmm.numComponents + newNumComponents <= MAX_COMPONENTS);
-
-            uint32_t maskExtend = ((1u << newNumComponents) - 1u) << vmm.numComponents;
-
-            vmm.numComponents += newNumComponents;
-            vmmStatistics.numSamplesAfterLastSplit = 0;
-            sharedSplitMask                        = splitMask | maskExtend;
-        }
-    }
-
-    __syncthreads();
-
-    // Update split components
-    if (threadIndex == 0 && sharedSplitMask)
-    {
-        printf("vmm: %u\n", vmmIndex);
-        WorkItem workItem;
-        workItem.nodeIndex = nodeIndex;
-        workItem.offset    = sharedSplitMask;
-        workItem.count     = 0;
-
-        uint32_t workItemIndex   = atomicAdd(numWorkItems, 1);
-        workItems[workItemIndex] = workItem;
-    }
-}
-
-GPU_KERNEL RecursiveSplitComponents(
-    VMM *__restrict__ vmms, VMMStatistics *__restrict__ currentStatistics,
-    SplitStatistics *__restrict__ splitStatistics, const SOASampleData samples,
-    const uint32_t *__restrict__ newLeafNodeIndices,
-    const uint32_t *__restrict__ numNewLeafNodes, const KDTreeNode *__restrict__ nodes,
-    uint32_t *__restrict__ numWorkItems, WorkItem *__restrict__ workItems)
-{
-    __shared__ VMM vmm;
-    __shared__ uint32_t sharedSplitMask;
-    __shared__ uint32_t numUsedSamples;
-    __shared__ float weightedLogLikelihood;
-    __shared__ float sumSampleWeights;
-
-    __shared__ float chiSquareTotals[MAX_COMPONENTS];
-    __shared__ float3 covarianceTotals[MAX_COMPONENTS];
-    __shared__ float sumWeights[MAX_COMPONENTS];
-
-    const uint32_t threadIndex = threadIdx.x;
-    const uint32_t blockIndex  = blockIdx.x;
-
-    for (uint32_t indexIndex = blockIndex; indexIndex < *numNewLeafNodes; indexIndex++)
-    {
-        uint32_t nodeIndex     = newLeafNodeIndices[indexIndex];
-        const KDTreeNode &node = nodes[nodeIndex];
-
-        uint32_t vmmIndex    = node.vmmIndex;
-        uint32_t sampleCount = node.count;
-        uint32_t offset      = node.offset;
-
-        float mcEstimate = ? ;
-
-        if (threadIdx.x == 0)
-        {
-            vmm = vmms[vmmIndex];
-        }
         __syncthreads();
 
-        int numSplits = -1;
-        while (vmm.numComponents < MAX_COMPONENTS && numSplits != 0)
+        // Update split components
+        if (threadIndex == 0 && sharedSplitMask)
         {
-            if (numSplits != -1)
-            {
-                printf("looped: %i\n", numSplits);
-            }
+            printf("vmm: %u\n", vmmIndex);
+            VMMUpdateWorkItem workItem;
+            workItem.vmmIndex        = vmmIndex;
+            workItem.sharedSplitMask = sharedSplitMask;
+            workItem.offset          = offset;
+            workItem.count           = sampleCount;
 
-            numSplits = 0;
-
-            if (threadIndex < MAX_COMPONENTS)
-            {
-                chiSquareTotals[threadIndex]  = 0.f;
-                covarianceTotals[threadIndex] = make_float3(0.f);
-                sumWeights[threadIndex]       = 0.f;
-            }
-            if (threadIndex == 0)
-            {
-                sharedSplitMask = 0;
-            }
-
-            __syncthreads();
-
-            UpdateSplitStatistics(chiSquareTotals, covarianceTotals, sumWeights,
-                                  &numUsedSamples, vmm, samples, node, mcEstimate);
-
-            __syncthreads();
-
-#if 0
-            std::vector<SplitCandidate> splitComps = splitStatistics.getSplitCandidates();
-
-            const uint32_t numComp = vmm.numComponents;
-            if (threadIndex <)
-            {
-                if (splitComps[k].chiSquareEst > splitThreshold &&
-                    vmm.numComponents < MAX_COMPONENTS)
-                {
-                    bool splitSucess = SplitComponent(vmm, splitStatistics, tempSuffStatistics,
-                                                      splitComps[k].componentIndex);
-                    if (splitSucess)
-                    {
-                        mask.setToTrue(splitComps[k].componentIndex);
-                        mask.setToTrue(vmm.numComponents - 1);
-                    }
-                    if (splitSucess)
-                    {
-                        numSplits++;
-                    }
-                }
-            }
-
-            if (sharedSplitMask)
-            {
-                tempSuffStatistics.clear(vmm._numComponents);
-                vmmFactory.partialUpdateMixture(vmm, mask, tempSuffStatistics, data, numData,
-                                                factoryCfg, vmmFitStats);
-                suffStatistics.setNumComponents(vmm._numComponents);
-                suffStatistics.maskedReplace(mask, tempSuffStatistics);
-            }
-#endif
-            if (threadIndex < MAX_COMPONENTS)
-            {
-                chiSquareTotals[threadIndex]  = 0.f;
-                covarianceTotals[threadIndex] = make_float3(0.f);
-            }
-            if (threadIndex == 0)
-            {
-                weightedLogLikelihood = 0.f;
-                sumSampleWeights      = 0.f;
-            }
-            __syncthreads();
-
-            UpdateMixtureParameters(vmm, chiSquareTotals, covarianceTotals,
-                                    const VMMStatistics &previousStatistics, samples.dir,
-                                    samples.weights, sumSampleWeights, weightedLogLikelihood,
-                                    uint32_t sampleOffset, uint32_t sampleCount,
-                                    sharedSplitMask);
-
-            __syncthreads();
+            uint32_t workItemIndex   = atomicAdd(&buildState->numVMMs, 1);
+            workItems[workItemIndex] = workItem;
         }
     }
 }
@@ -2159,8 +2019,7 @@ GPU_KERNEL GetChildNodeOffset(KDTreeBuildState *buildState, KDTreeNode *nodes, u
 }
 
 GPU_KERNEL FindLeafNodes(KDTreeBuildState *__restrict__ buildState, KDTreeNode *nodes,
-                         VMMUpdateWorkItem *newWorkItems, VMMUpdateWorkItem *oldWorkItems,
-                         VMM *vmms)
+                         VMMUpdateWorkItem *workItems, VMM *vmms)
 {
     // TODO: make sure newnumvmms and oldnumvmms are zeroed out
     const uint32_t blockSize = 256;
@@ -2173,15 +2032,12 @@ GPU_KERNEL FindLeafNodes(KDTreeBuildState *__restrict__ buildState, KDTreeNode *
         {
             assert(!node.HasChild());
 
-            uint32_t vmmIndex         = ~0u;
-            uint32_t outputIndex      = ~0u;
-            VMMUpdateWorkItem *output = 0;
+            uint32_t vmmIndex    = ~0u;
+            uint32_t outputIndex = buildState->numVMMs++;
 
             if (node.IsNew())
             {
-                vmmIndex    = buildState->totalNumVMMs++;
-                outputIndex = buildState->newNumVMMs++;
-                output      = newWorkItems;
+                vmmIndex = buildState->totalNumVMMs++;
 
                 node.SetVMMIndex(vmmIndex);
                 node.SetIsNew(false);
@@ -2190,14 +2046,11 @@ GPU_KERNEL FindLeafNodes(KDTreeBuildState *__restrict__ buildState, KDTreeNode *
             }
             else
             {
-                vmmIndex    = node.GetVMMIndex();
-                outputIndex = buildState->oldNumVMMs++;
-                output      = oldWorkItems;
+                vmmIndex = node.GetVMMIndex();
             }
 
             assert(vmmIndex != ~0u);
             assert(outputIndex != ~0u);
-            assert(output);
 
             VMMUpdateWorkItem workItem;
             workItem.vmmIndex        = vmmIndex;
@@ -2205,11 +2058,11 @@ GPU_KERNEL FindLeafNodes(KDTreeBuildState *__restrict__ buildState, KDTreeNode *
             workItem.offset          = node.offset;
             workItem.count           = node.count;
 
-            output[outputIndex] = workItem;
+            workItems[outputIndex] = workItem;
         }
     }
 
-    assert(buildState->oldNumVMMs + buildState->newNumVMMs == buildState->totalNumVMMs);
+    assert(buildState->numVMMs == buildState->totalNumVMMs);
 }
 
 GPU_KERNEL
