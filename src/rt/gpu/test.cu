@@ -619,7 +619,7 @@ inline __device__ void UpdateMixtureParameters(
     }
 }
 
-GPU_KERNEL UpdateMixture(KDTreeBuildState *state, VMM *__restrict__ vmms,
+GPU_KERNEL UpdateMixture(VMMUpdateState *state, VMM *__restrict__ vmms,
                          VMMStatistics *__restrict__ currentStatistics,
                          const SOASampleData samples, const VMMUpdateWorkItem *workItems)
 {
@@ -882,7 +882,7 @@ __device__ void SplitComponent(VMM &vmm, SplitStatistics &splitStats,
 }
 
 GPU_KERNEL
-SplitComponents(KDTreeBuildState *buildState, VMM *__restrict__ vmms,
+SplitComponents(VMMUpdateState *updateState, VMM *__restrict__ vmms,
                 VMMStatistics *__restrict__ currentStatistics,
                 SplitStatistics *__restrict__ splitStatistics, const SOASampleData samples,
                 const VMMUpdateWorkItem *__restrict__ workItems,
@@ -897,7 +897,7 @@ SplitComponents(KDTreeBuildState *buildState, VMM *__restrict__ vmms,
 
     __shared__ uint32_t sharedSplitMask;
 
-    for (uint32_t workItemIndex = blockIdx.x; workItemIndex < buildState->numVMMs;
+    for (uint32_t workItemIndex = blockIdx.x; workItemIndex < updateState->numVMMs;
          workItemIndex += gridDim.x)
     {
         const VMMUpdateWorkItem workItem = workItems[workItemIndex];
@@ -968,13 +968,13 @@ SplitComponents(KDTreeBuildState *buildState, VMM *__restrict__ vmms,
             outWorkItem.offset            = offset;
             outWorkItem.count             = sampleCount;
 
-            uint32_t workItemIndex         = atomicAdd(&buildState->numVMMs, 1);
+            uint32_t workItemIndex         = atomicAdd(&updateState->numVMMs, 1);
             outputWorkItems[workItemIndex] = outWorkItem;
         }
     }
 }
 
-GPU_KERNEL MergeComponents(KDTreeBuildState *buildState, VMM *__restrict__ vmms,
+GPU_KERNEL MergeComponents(VMMUpdateState *state, VMM *__restrict__ vmms,
                            VMMStatistics *__restrict__ currentStatistics,
                            SplitStatistics *__restrict__ splitStatistics,
                            const SOASampleData samples,
@@ -991,7 +991,7 @@ GPU_KERNEL MergeComponents(KDTreeBuildState *buildState, VMM *__restrict__ vmms,
     __shared__ uint2 componentsToMerge;
     __shared__ float minMergeCost;
 
-    for (uint32_t workItemIndex = blockIdx.x; workItemIndex < buildState->numVMMs;
+    for (uint32_t workItemIndex = blockIdx.x; workItemIndex < state->numVMMs;
          workItemIndex += gridDim.x)
     {
         VMMUpdateWorkItem workItem         = workItems[workItemIndex];
@@ -1308,7 +1308,7 @@ GPU_KERNEL MergeComponents(KDTreeBuildState *buildState, VMM *__restrict__ vmms,
     }
 }
 
-GPU_KERNEL UpdateComponentDistances(KDTreeBuildState *buildState, VMM *vmms, KDTreeNode *nodes,
+GPU_KERNEL UpdateComponentDistances(VMMUpdateState *state, VMM *vmms, KDTreeNode *nodes,
                                     VMMStatistics *vmmStatistics, SOASampleData samples,
                                     const VMMUpdateWorkItem *workItems)
 {
@@ -1316,7 +1316,7 @@ GPU_KERNEL UpdateComponentDistances(KDTreeBuildState *buildState, VMM *vmms, KDT
     __shared__ float batchDistances[MAX_COMPONENTS];
     __shared__ float batchSumWeights[MAX_COMPONENTS];
 
-    for (uint32_t workItemIndex = blockIdx.x; workItemIndex < buildState->numVMMs;
+    for (uint32_t workItemIndex = blockIdx.x; workItemIndex < state->numVMMs;
          workItemIndex += gridDim.x)
     {
         if (threadIndex < MAX_COMPONENTS)
@@ -1419,15 +1419,14 @@ inline __device__ void GetSampleCenterHalfExtent(Bounds3f bounds, float3 &center
     halfExtent = bounds.GetHalfExtent();
 }
 
-GPU_KERNEL ApplyParallaxShift(KDTreeBuildState *buildState,
-                              VMMStatistics *__restrict__ statistics,
+GPU_KERNEL ApplyParallaxShift(VMMUpdateState *state, VMMStatistics *__restrict__ statistics,
                               const VMM *__restrict__ vmms,
                               const SampleStatistics *__restrict__ sampleStatistics,
                               const KDTreeNode *__restrict__ nodes,
                               const Bounds3f *__restrict__ rootBounds,
                               VMMUpdateWorkItem *workItems, float3 *sampleMeans)
 {
-    for (uint32_t workItemIndex = blockIdx.x; workItemIndex < buildState->numVMMs;
+    for (uint32_t workItemIndex = blockIdx.x; workItemIndex < state->numVMMs;
          workItemIndex += gridDim.x)
     {
         VMMUpdateWorkItem workItem = workItems[workItemIndex];
@@ -1971,8 +1970,9 @@ GPU_KERNEL GetChildNodeOffset(KDTreeBuildState *buildState, KDTreeNode *nodes, u
     }
 }
 
-GPU_KERNEL FindLeafNodes(VMMUpdateState *__restrict__ state, KDTreeNode *nodes,
-                         VMMUpdateWorkItem *workItems, VMM *vmms)
+GPU_KERNEL CreateVMMUpdateWorkItems(KDTreeBuildState *__restrict__ buildState,
+                                    VMMUpdateState *__restrict__ state, KDTreeNode *nodes,
+                                    VMMUpdateWorkItem *workItems, VMM *vmms)
 {
     // TODO: make sure newnumvmms and oldnumvmms are zeroed out
     const uint32_t blockSize = 256;
@@ -2015,7 +2015,7 @@ GPU_KERNEL FindLeafNodes(VMMUpdateState *__restrict__ state, KDTreeNode *nodes,
         }
     }
 
-    assert(buildState->numVMMs == buildState->totalNumVMMs);
+    assert(state->numVMMs == state->totalNumVMMs);
 }
 
 GPU_KERNEL

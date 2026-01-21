@@ -170,11 +170,10 @@ void CUDADevice::MemSet(void *ptr, char ch, uint64_t size)
     CUDA_ASSERT(cuMemsetD8((CUdeviceptr)ptr, ch, size));
 }
 
-void CUDADevice::CopyFromDevice(void *)
-{
-    CUDA_ASSERT(cuMemcpyDtoHAsync(mem.host_pointer, (CUdeviceptr)mem.device_pointer,
-                                  mem.memory_size(), cuda_stream_),
-                "copy_from_device");
-}
+// void CUDADevice::CopyFromDevice(void *)
+// {
+//     CUDA_ASSERT(cuMemcpyDtoHAsync(mem.host_pointer, (CUdeviceptr)mem.device_pointer,
+//                                   mem.memory_size(), cuda_stream_));
+// }
 
 } // namespace rt

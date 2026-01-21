@@ -110,8 +110,6 @@ void PathGuiding::Update()
                               samplePositions, sampleIndices, numSamples, sceneMin, sceneMax);
     }
 
-    // node indices
-
     // Update KD Tree
     // TODO: might have to block stride if there are too many nodes.
     for (uint32_t level = 0; level < MAX_TREE_DEPTH; level++)
@@ -154,13 +152,14 @@ void PathGuiding::Update()
     cudaDeviceSynchronize();
 
     // Update VMMs
-    device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_FIND_LEAF_NODES], 1, 1, treeBuildState,
-                          nodes, buildNodeIndices, sampleStatistics, nodes);
+    device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_CREATE_VMM_UPDATE_WORK_ITEMS], 1, 1,
+                          treeBuildState, vmmUpdateState, nodes, buildNodeIndices,
+                          sampleStatistics, nodes);
 
     VMMUpdateWorkItem *workItems0 = 0;
     VMMUpdateWorkItem *workItems1 = 0;
 
-    device->CopyFromDevice();
+    // device->CopyFromDevice();
 
     // Splitting
     for (uint32_t iteration = 0; iteration < MAX_COMPONENTS / 2; iteration++)
@@ -176,11 +175,10 @@ void PathGuiding::Update()
         // update split statistics
         // TODO: zero buildState->numVMMs before this kernel
         device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_SPLIT_COMPONENTS], maxNumNodes,
-                              WARP_SIZE, Args args...);
-#if 0
-        device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_UPDATE_MIXTURE], uint32_t numBlocks,
-                              uint32_t blockSize, Args args...);
-#endif
+                              WARP_SIZE, vmmUpdateState, vmms, vmmStatistics, splitStatistics,
+                              samples, inputWorkItems, outputWorkItems);
+        device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_UPDATE_MIXTURE], maxNumNodes,
+                              blockSize, vmms, vmmStatistics, samples, outputWorkItems);
 
         // prepare for next loop iteration
     }
