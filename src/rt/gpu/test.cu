@@ -680,7 +680,8 @@ GPU_KERNEL UpdateMixture(KDTreeBuildState *state, VMM *__restrict__ vmms,
     }
 }
 
-GPU_KERNEL UpdateSplitStatistics(KDTreeBuildState *buildState, VMM *__restrict__ vmms,
+GPU_KERNEL UpdateSplitStatistics(VMMUpdateState *__restrict__ vmmUpdateState,
+                                 VMM *__restrict__ vmms,
                                  SplitStatistics *__restrict__ splitStatistics,
                                  VMMStatistics *__restrict__ currentStatistics,
                                  const SOASampleData samples,
@@ -692,7 +693,7 @@ GPU_KERNEL UpdateSplitStatistics(KDTreeBuildState *buildState, VMM *__restrict__
     const uint32_t threadIndex = threadIdx.x;
     const uint32_t wid         = threadIndex >> WARP_SHIFT;
 
-    for (uint32_t workItemIndex = blockIdx.x; workItemIndex < buildState->numVMMs;
+    for (uint32_t workItemIndex = blockIdx.x; workItemIndex < vmmUpdateState->numVMMs;
          workItemIndex += gridDim.x)
     {
         const VMMUpdateWorkItem workItem = workItems[workItemIndex];
@@ -1970,7 +1971,7 @@ GPU_KERNEL GetChildNodeOffset(KDTreeBuildState *buildState, KDTreeNode *nodes, u
     }
 }
 
-GPU_KERNEL FindLeafNodes(KDTreeBuildState *__restrict__ buildState, KDTreeNode *nodes,
+GPU_KERNEL FindLeafNodes(VMMUpdateState *__restrict__ state, KDTreeNode *nodes,
                          VMMUpdateWorkItem *workItems, VMM *vmms)
 {
     // TODO: make sure newnumvmms and oldnumvmms are zeroed out
@@ -1985,11 +1986,11 @@ GPU_KERNEL FindLeafNodes(KDTreeBuildState *__restrict__ buildState, KDTreeNode *
             assert(!node.HasChild());
 
             uint32_t vmmIndex    = ~0u;
-            uint32_t outputIndex = buildState->numVMMs++;
+            uint32_t outputIndex = state->numVMMs++;
 
             if (node.IsNew())
             {
-                vmmIndex = buildState->totalNumVMMs++;
+                vmmIndex = state->totalNumVMMs++;
 
                 node.SetVMMIndex(vmmIndex);
                 node.SetIsNew(false);

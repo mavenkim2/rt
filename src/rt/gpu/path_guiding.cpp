@@ -27,9 +27,10 @@ PathGuiding::PathGuiding(Device *device) : device(device), initialized(false)
     treeBuildState   = device->Alloc<KDTreeBuildState>(1, 4u);
     rootBounds       = device->Alloc<Bounds3f>(1, 4u);
 
-    VMM *vmms                        = device->Alloc<VMM>(maxNumNodes, 4u);
-    VMMStatistics *vmmStatistics     = device->Alloc<VMMStatistics>(maxNumNodes, 4);
-    SplitStatistics *splitStatistics = device->Alloc<SplitStatistics>(maxNumNodes, 4);
+    vmms            = device->Alloc<VMM>(maxNumNodes, 4u);
+    vmmStatistics   = device->Alloc<VMMStatistics>(maxNumNodes, 4);
+    splitStatistics = device->Alloc<SplitStatistics>(maxNumNodes, 4);
+    vmmUpdateState  = device->Alloc<VMMUpdateState>(1, 4u);
 
     device->MemSet(nodes, 0xff, sizeof(KDTreeNode) * maxNumNodes);
     device->MemZero(vmmStatistics, sizeof(VMMStatistics) * maxNumNodes);
@@ -68,6 +69,8 @@ void PathGuiding::Update()
 
     uint32_t *buildNodeIndices     = gpuArena->Alloc<uint32_t>(numSamples, 4u);
     uint32_t *buildNextNodeIndices = gpuArena->Alloc<uint32_t>(numSamples, 4u);
+
+    uint32_t *numVMMs = gpuArena->Alloc<uint32_t>(maxNumNodes, 4u);
 
     WorkItem *reductionWorkItems = gpuArena->Alloc<WorkItem>(2 * numSamples / blockSize, 4u);
     WorkItem *partitionWorkItems = gpuArena->Alloc<WorkItem>(2 * numSamples / blockSize, 4u);
@@ -157,21 +160,24 @@ void PathGuiding::Update()
     VMMUpdateWorkItem *workItems0 = 0;
     VMMUpdateWorkItem *workItems1 = 0;
 
+    device->CopyFromDevice();
+
     // Splitting
     for (uint32_t iteration = 0; iteration < MAX_COMPONENTS / 2; iteration++)
     {
         VMMUpdateWorkItem *inputWorkItems  = iteration % 2 == 0 ? workItems0 : workItems1;
         VMMUpdateWorkItem *outputWorkItems = iteration % 2 == 0 ? workItems1 : workItems0;
 
-        // reset statistics if isNew
-
-#if 0
-        // update split statistics
+        // TODO reset statistics if isNew
         device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_UPDATE_SPLIT_STATISTICS],
-                              uint32_t numBlocks, uint32_t blockSize, Args args...);
+                              maxNumNodes, blockSize, vmmUpdateState, vmms, splitStatistics,
+                              vmmStatistics, samples, inputWorkItems);
+
+        // update split statistics
         // TODO: zero buildState->numVMMs before this kernel
-        device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_SPLIT_COMPONENTS],
-                              uint32_t numBlocks, uint32_t blockSize, Args args...);
+        device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_SPLIT_COMPONENTS], maxNumNodes,
+                              WARP_SIZE, Args args...);
+#if 0
         device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_UPDATE_MIXTURE], uint32_t numBlocks,
                               uint32_t blockSize, Args args...);
 #endif

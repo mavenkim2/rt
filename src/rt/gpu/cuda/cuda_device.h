@@ -67,6 +67,7 @@ struct CUDADevice : Device
     void *Alloc(u32 size, uintptr_t alignment) override;
     void MemZero(void *ptr, uint64_t size) override;
     void MemSet(void *ptr, char ch, uint64_t size) override;
+    // void CopyFromDevice() override;
 
 protected:
     void ExecuteKernelInternal(KernelHandle handle, uint32_t numBlocks, uint32_t blockSize,

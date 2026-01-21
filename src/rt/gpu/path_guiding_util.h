@@ -388,10 +388,6 @@ struct KDTreeBuildState
     // persists across updates
     uint32_t totalNumNodes;
 
-    // vmm
-    uint32_t numVMMs;
-    uint32_t totalNumVMMs;
-
     // temporary values
     uint32_t numNodes;
     uint32_t nextLevelNumNodes;
@@ -754,6 +750,13 @@ struct VMMUpdateWorkItem
         bool isNew     = IsNew();
         vmmIndex_isNew = vmmIndex | (isNew << 31u);
     }
+};
+
+struct VMMUpdateState
+{
+    uint32_t numVMMs;
+    uint32_t totalNumVMMs;
+    uint32_t maxNumVMMs;
 };
 
 } // namespace rt

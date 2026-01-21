@@ -76,6 +76,11 @@ struct PathGuiding
     SampleStatistics *sampleStatistics;
     Bounds3f *rootBounds;
 
+    VMMUpdateState *vmmUpdateState;
+    VMM *vmms;
+    VMMStatistics *vmmStatistics;
+    SplitStatistics *splitStatistics;
+
     PathGuiding(Device *device);
     void Update();
 };
