@@ -76,8 +76,6 @@ void PathGuiding::Update()
     device->MemZero(&buildNodeIndices[0], sizeof(buildNodeIndices[0]));
     device->MemZero(vmmWorkItems, sizeof(WorkItem) * numSamples);
 
-    VMMMapState *vmmMapStates = gpuArena->Alloc<VMMMapState>(maxNumNodes, 4u);
-
     float3 sceneMin = make_float3(0.f);
     float3 sceneMax = make_float3(100.f);
 
@@ -167,6 +165,7 @@ void PathGuiding::Update()
 
         // reset statistics if isNew
 
+#if 0
         // update split statistics
         device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_UPDATE_SPLIT_STATISTICS],
                               uint32_t numBlocks, uint32_t blockSize, Args args...);
@@ -175,6 +174,7 @@ void PathGuiding::Update()
                               uint32_t numBlocks, uint32_t blockSize, Args args...);
         device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_UPDATE_MIXTURE], uint32_t numBlocks,
                               uint32_t blockSize, Args args...);
+#endif
 
         // prepare for next loop iteration
     }

@@ -1316,7 +1316,7 @@ GPU_KERNEL UpdateComponentDistances(KDTreeBuildState *buildState, VMM *vmms, KDT
     __shared__ float batchSumWeights[MAX_COMPONENTS];
 
     for (uint32_t workItemIndex = blockIdx.x; workItemIndex < buildState->numVMMs;
-         workItemIndex++)
+         workItemIndex += gridDim.x)
     {
         if (threadIndex < MAX_COMPONENTS)
         {
@@ -1326,11 +1326,10 @@ GPU_KERNEL UpdateComponentDistances(KDTreeBuildState *buildState, VMM *vmms, KDT
 
         __syncthreads();
 
-        uint32_t nodeIndex     = leafNodeIndices[blockIdx.x];
-        const KDTreeNode &node = nodes[nodeIndex];
-        uint32_t sampleCount   = node.count;
-        uint32_t sampleOffset  = node.offset;
-        uint32_t vmmIndex      = node.vmmIndex;
+        VMMUpdateWorkItem workItem  = workItems[workItemIndex];
+        const uint32_t vmmIndex     = workItem.GetVMMIndex();
+        const uint32_t sampleCount  = workItem.count;
+        const uint32_t sampleOffset = workItem.offset;
 
         const VMM &vmm = vmms[vmmIndex];
 
@@ -1419,32 +1418,34 @@ inline __device__ void GetSampleCenterHalfExtent(Bounds3f bounds, float3 &center
     halfExtent = bounds.GetHalfExtent();
 }
 
-GPU_KERNEL ApplyParallaxShift(VMMStatistics *__restrict__ statistics,
-                              const uint32_t *__restrict__ leafNodeIndices,
-                              const uint32_t *__restrict__ numLeafNodes,
+GPU_KERNEL ApplyParallaxShift(KDTreeBuildState *buildState,
+                              VMMStatistics *__restrict__ statistics,
                               const VMM *__restrict__ vmms,
                               const SampleStatistics *__restrict__ sampleStatistics,
                               const KDTreeNode *__restrict__ nodes,
-                              const Bounds3f *__restrict__ rootBounds)
+                              const Bounds3f *__restrict__ rootBounds,
+                              VMMUpdateWorkItem *workItems, float3 *sampleMeans)
 {
-    for (uint32_t indexIndex = 0; indexIndex < *numLeafNodes; indexIndex += gridDim.x)
+    for (uint32_t workItemIndex = blockIdx.x; workItemIndex < buildState->numVMMs;
+         workItemIndex += gridDim.x)
     {
-        uint32_t nodeIndex                  = leafNodeIndices[blockIdx.x];
-        const KDTreeNode &node              = nodes[nodeIndex];
-        uint32_t vmmIndex                   = node.vmmIndex;
-        const SampleStatistics &sampleStats = sampleStatistics[nodeIndex];
+        VMMUpdateWorkItem workItem = workItems[workItemIndex];
+        const uint32_t vmmIndex    = workItem.GetVMMIndex();
+        const float3 oldSampleMean = sampleMeans[vmmIndex];
+
+        // TODO IMPORTANT: sample statistics should be per leaf, not per node
+        const SampleStatistics &sampleStats = sampleStatistics[vmmIndex];
 
         float3 center, halfExtent, sampleMean, sampleVariance;
-        GetSampleCenterHalfExtent(GetParentBounds(*rootBounds, sampleStatistics, node), center,
-                                  halfExtent);
-        sampleStats.ConvertToFloat(center, halfExtent, sampleMean, sampleVariance);
+        // GetSampleCenterHalfExtent(GetParentBounds(*rootBounds, sampleStatistics, node),
+        // center,
+        //                           halfExtent);
+        // sampleStats.ConvertToFloat(center, halfExtent, sampleMean, sampleVariance);
 
         const VMM &vmm       = vmms[vmmIndex];
         VMMStatistics &stats = statistics[vmmIndex];
 
-        // TODO IMPORTANT: get from somewhere
-        float3 pivotPosition = make_float3(0.f);
-        const float3 shift   = pivotPosition - sampleMean;
+        const float3 shift = oldSampleMean - sampleMean;
 
         if (threadIdx.x < vmm.numComponents)
         {
@@ -1478,7 +1479,6 @@ GPU_KERNEL ReprojectSamples(SampleStatistics *statistics, SOASampleData samples,
     const KDTreeNode &node = nodes[nodeIndex];
     uint32_t sampleCount   = node.count;
     uint32_t sampleOffset  = node.offset;
-    uint32_t vmmIndex      = node.vmmIndex;
 
     SampleStatistics &sampleStatistics = statistics[nodeIndex];
 
@@ -2005,7 +2005,7 @@ GPU_KERNEL FindLeafNodes(KDTreeBuildState *__restrict__ buildState, KDTreeNode *
             assert(outputIndex != ~0u);
 
             VMMUpdateWorkItem workItem;
-            workItem.vmmIndex        = vmmIndex;
+            workItem.vmmIndex_isNew  = vmmIndex | (node.IsNew() << 31u);
             workItem.sharedSplitMask = 0xffffffff;
             workItem.offset          = node.offset;
             workItem.count           = node.count;
