@@ -36,7 +36,6 @@ enum PathGuidingKernels : int
 static const string pathGuidingKernelNames[] = {
     "InitializeSamples",
     "UpdateMixture",
-    "PartialUpdateMixture",
     "UpdateSplitStatistics",
     "SplitComponents",
     "MergeComponents",

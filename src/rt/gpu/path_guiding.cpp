@@ -35,6 +35,7 @@ PathGuiding::PathGuiding(Device *device) : device(device), initialized(false)
     device->MemSet(nodes, 0xff, sizeof(KDTreeNode) * maxNumNodes);
     device->MemZero(vmmStatistics, sizeof(VMMStatistics) * maxNumNodes);
     device->MemZero(splitStatistics, sizeof(SplitStatistics) * maxNumNodes);
+    device->MemZero(vmmUpdateState, sizeof(VMMUpdateState));
 }
 
 void PathGuiding::Update()
@@ -74,10 +75,11 @@ void PathGuiding::Update()
 
     WorkItem *reductionWorkItems = gpuArena->Alloc<WorkItem>(2 * numSamples / blockSize, 4u);
     WorkItem *partitionWorkItems = gpuArena->Alloc<WorkItem>(2 * numSamples / blockSize, 4u);
-    WorkItem *vmmWorkItems       = gpuArena->Alloc<WorkItem>(numSamples, 4u);
+
+    VMMUpdateWorkItem *vmmWorkItems0 = gpuArena->Alloc<VMMUpdateWorkItem>(maxNumNodes, 4u);
+    VMMUpdateWorkItem *vmmWorkItems1 = gpuArena->Alloc<VMMUpdateWorkItem>(maxNumNodes, 4u);
 
     device->MemZero(&buildNodeIndices[0], sizeof(buildNodeIndices[0]));
-    device->MemZero(vmmWorkItems, sizeof(WorkItem) * numSamples);
 
     float3 sceneMin = make_float3(0.f);
     float3 sceneMax = make_float3(100.f);
@@ -149,39 +151,38 @@ void PathGuiding::Update()
         device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_PRINT_STATS], 1, 1, treeBuildState,
                               sampleStatistics, nodes);
     }
-    cudaDeviceSynchronize();
 
     // Update VMMs
     device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_CREATE_VMM_UPDATE_WORK_ITEMS], 1, 1,
-                          treeBuildState, vmmUpdateState, nodes, buildNodeIndices,
+                          treeBuildState, vmmUpdateState, nodes, vmmWorkItems0,
                           sampleStatistics, nodes);
 
-    VMMUpdateWorkItem *workItems0 = 0;
-    VMMUpdateWorkItem *workItems1 = 0;
+    device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_UPDATE_MIXTURE], maxNumNodes, blockSize,
+                          vmmUpdateState, vmms, vmmStatistics, samples, vmmWorkItems0);
 
-    // device->CopyFromDevice();
+    cudaDeviceSynchronize();
 
     // Splitting
-    for (uint32_t iteration = 0; iteration < MAX_COMPONENTS / 2; iteration++)
-    {
-        VMMUpdateWorkItem *inputWorkItems  = iteration % 2 == 0 ? workItems0 : workItems1;
-        VMMUpdateWorkItem *outputWorkItems = iteration % 2 == 0 ? workItems1 : workItems0;
-
-        // TODO reset statistics if isNew
-        device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_UPDATE_SPLIT_STATISTICS],
-                              maxNumNodes, blockSize, vmmUpdateState, vmms, splitStatistics,
-                              vmmStatistics, samples, inputWorkItems);
-
-        // update split statistics
-        // TODO: zero buildState->numVMMs before this kernel
-        device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_SPLIT_COMPONENTS], maxNumNodes,
-                              WARP_SIZE, vmmUpdateState, vmms, vmmStatistics, splitStatistics,
-                              samples, inputWorkItems, outputWorkItems);
-        device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_UPDATE_MIXTURE], maxNumNodes,
-                              blockSize, vmms, vmmStatistics, samples, outputWorkItems);
-
-        // prepare for next loop iteration
-    }
+    // for (uint32_t iteration = 0; iteration < MAX_COMPONENTS / 2; iteration++)
+    // {
+    //     VMMUpdateWorkItem *inputWorkItems  = iteration % 2 == 0 ? workItems0 : workItems1;
+    //     VMMUpdateWorkItem *outputWorkItems = iteration % 2 == 0 ? workItems1 : workItems0;
+    //
+    //     // TODO reset statistics if isNew
+    //     device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_UPDATE_SPLIT_STATISTICS],
+    //                           maxNumNodes, blockSize, vmmUpdateState, vmms, splitStatistics,
+    //                           vmmStatistics, samples, inputWorkItems);
+    //
+    //     // update split statistics
+    //     // TODO: zero buildState->numVMMs before this kernel
+    //     device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_SPLIT_COMPONENTS], maxNumNodes,
+    //                           WARP_SIZE, vmmUpdateState, vmms, vmmStatistics,
+    //                           splitStatistics, samples, inputWorkItems, outputWorkItems);
+    //     device->ExecuteKernel(handles[PATH_GUIDING_KERNEL_UPDATE_MIXTURE], maxNumNodes,
+    //                           blockSize, vmms, vmmStatistics, samples, outputWorkItems);
+    //
+    //     // prepare for next loop iteration
+    // }
 
     // Merging
 }

@@ -1974,10 +1974,6 @@ GPU_KERNEL CreateVMMUpdateWorkItems(KDTreeBuildState *__restrict__ buildState,
                                     VMMUpdateState *__restrict__ state, KDTreeNode *nodes,
                                     VMMUpdateWorkItem *workItems, VMM *vmms)
 {
-    // TODO: make sure newnumvmms and oldnumvmms are zeroed out
-    const uint32_t blockSize = 256;
-    assert(blockDim.x == blockSize);
-
     for (uint32_t threadIndex = 0; threadIndex < buildState->totalNumNodes; threadIndex++)
     {
         KDTreeNode &node = nodes[threadIndex];
@@ -1988,18 +1984,16 @@ GPU_KERNEL CreateVMMUpdateWorkItems(KDTreeBuildState *__restrict__ buildState,
             uint32_t vmmIndex    = ~0u;
             uint32_t outputIndex = state->numVMMs++;
 
-            if (node.IsNew())
+            if (node.vmmIndex == ~0u)
             {
-                vmmIndex = state->totalNumVMMs++;
-
-                node.SetVMMIndex(vmmIndex);
-                node.SetIsNew(false);
+                vmmIndex      = state->totalNumVMMs++;
+                node.vmmIndex = vmmIndex;
 
                 vmms[vmmIndex].Initialize();
             }
             else
             {
-                vmmIndex = node.GetVMMIndex();
+                vmmIndex = node.vmmIndex;
             }
 
             assert(vmmIndex != ~0u);
