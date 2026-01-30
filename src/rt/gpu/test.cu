@@ -2000,7 +2000,7 @@ GPU_KERNEL CreateVMMUpdateWorkItems(KDTreeBuildState *__restrict__ buildState,
             assert(outputIndex != ~0u);
 
             VMMUpdateWorkItem workItem;
-            workItem.vmmIndex_isNew  = vmmIndex | (node.IsNew() << 31u);
+            // workItem.vmmIndex_isNew  = vmmIndex | (node.IsNew() << 31u);
             workItem.sharedSplitMask = 0xffffffff;
             workItem.offset          = node.offset;
             workItem.count           = node.count;

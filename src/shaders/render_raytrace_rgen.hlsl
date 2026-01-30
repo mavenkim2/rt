@@ -153,6 +153,7 @@ void main()
     float bsdfPdf = 0.f;
     uint flags = 0;
 
+#if 0
     int nanovdbIndex = 0;
     pnanovdb_grid_handle_t grid = {0};
 
@@ -175,7 +176,6 @@ void main()
     // p ratio (nee)
 
     // temp volume rendering...
-#if 0
     RNG dupeRng = rng;
     float3 dupePos = pos;
     float3 dupeDir = dir;
@@ -603,58 +603,6 @@ void main()
         float3 wo = normalize(float3(dot(hitInfo.ss, -query.WorldRayDirection()), 
                                      dot(frameY, -query.WorldRayDirection()),
                                      dot(hitInfo.n, -query.WorldRayDirection())));
-
-#if 0
-        // Photon mapping
-        // A Stack-Free Traversal Algorithm for Left-Balanced k-d Trees
-        // https://doi.org/10.48550/arXiv.2210.12859
-        if (!(material.roughness == 0.f && material.specTrans == 1.f))
-        {
-            uint numPoints = 0; // TODO
-            int curr = 0;
-            int prev = -1;
-            for (;;)
-            {
-                int parent = (curr + 1) / 2 - 1;
-                if (curr >= numPoints)
-                {
-                    prev = curr;
-                    curr = parent;
-                    continue;
-                }
-                bool fromParent = prev < curr;
-                if (fromParent)
-                {
-                    // TODO add contribution if photon within radius
-                }
-                int splitDim = kdTreeDims[curr];
-                float splitPos = kdTreePoints[curr][splitDim];
-                float signedDist = origin - splitPos;
-                int closeSide = signedDist > 0.f;
-                int closeChild = 2 * curr + 1 + closeSide;
-                int farChild = 2 * curr + 2 - closeSide;
-                bool farInRange = abs(signedDist) <= maxSearchRadius;
-
-                int next;
-                if (fromParent)
-                {
-                    next = closeChild;
-                }
-                else if (prev == closeChild)
-                {
-                    next = farChild;
-                }
-                else 
-                {
-                    next = parent;
-                }
-
-                if (next == -1) break;
-                prev = curr;
-                curr = next;
-            }
-        }
-#endif
 
         // NEE
         if (!(material.roughness == 0.f && material.specTrans == 1.f))
