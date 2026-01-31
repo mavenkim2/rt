@@ -6,10 +6,14 @@
 #include "../device.h"
 
 #include <cuda.h>
+#ifdef WITH_OPTIX
+#include <optix_stubs.h>
+#endif
 
 namespace rt
 {
 
+struct BVH;
 struct CUDADevice;
 
 struct CUDAContextScope
@@ -59,6 +63,10 @@ struct CUDADevice : Device
     std::vector<CUmodule> cudaModules;
     std::vector<CUfunction> cudaKernels;
 
+#ifdef WITH_OPTIX
+    OptixDeviceContext optixDeviceContext;
+#endif
+
     CUDADevice();
     ModuleHandle RegisterModule(string module) override;
     KernelHandle RegisterKernels(const char *kernel, ModuleHandle module) override;
@@ -67,6 +75,11 @@ struct CUDADevice : Device
     void *Alloc(u32 size, uintptr_t alignment) override;
     void MemZero(void *ptr, uint64_t size) override;
     void MemSet(void *ptr, char ch, uint64_t size) override;
+
+#ifdef WITH_OPTIX
+    void InitializeOptix();
+#endif
+    void BuildBVH(BVH *bvh) override;
     // void CopyFromDevice() override;
 
 protected:

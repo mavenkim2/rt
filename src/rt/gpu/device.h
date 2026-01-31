@@ -7,6 +7,8 @@
 namespace rt
 {
 
+struct BVH;
+
 typedef u32 ModuleHandle;
 typedef u32 KernelHandle;
 
@@ -44,6 +46,7 @@ struct Device
     }
     virtual void MemZero(void *ptr, uint64_t size)         = 0;
     virtual void MemSet(void *ptr, char ch, uint64_t size) = 0;
+    virtual void BuildBVH(BVH *bvh)                        = 0;
     virtual GPUArena *CreateArena(size_t maxSize)          = 0;
 
 protected:

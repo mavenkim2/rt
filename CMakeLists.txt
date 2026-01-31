@@ -1,10 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
 project(RT LANGUAGES CXX C)
+
+# FindCMake
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/src/cmake")
     
 set (CMAKE_CXX_STANDARD 17)
 set (CMAKE_CXX_STANDARD_REQUIRED ON)
 
-option (WITH_CUDA "Build with NVIDIA CUDA. Currently used only for GPU path guiding." ON) 
 option(USE_GPU "USE_GPU" OFF)
 
 if (MSVC)
@@ -182,7 +184,6 @@ set (VULKAN_INCLUDE_DIR
 
 if (USE_GPU)
     list (APPEND RT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/gpu_scene.cpp)
-    list (APPEND RT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/photon_mapping/photon_mapping.cpp)
 
     if (WITH_CUDA)
         list (APPEND RT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/gpu/path_guiding.cpp)
@@ -345,40 +346,40 @@ if (USE_GPU)
     file(GLOB_RECURSE SHADER_INCLUDES "${SHADER_SRC_DIR}/*.hlsl" "${SHADER_SRC_DIR}/*.hlsli")
     file(GLOB_RECURSE SHADER_INTEROP "${CMAKE_CURRENT_SOURCE_DIR}/src/rt/shader_interop/*.h")
     
-    if (NOT DEFINED SHADER_COMPILER)
-        set(SHADER_COMPILER "dxc")
-    endif()
-    
-    foreach(SHADER_FILE ${SHADER_FILES})
-        get_filename_component(SHADER_NAME ${SHADER_FILE} NAME_WE)
-        get_property(SHADER_TYPE SOURCE ${SHADER_FILE} PROPERTY name)
-        set(SHADER_SPV ${SHADER_SPV_DIR}/${SHADER_NAME}.spv)
-        # set(SHADER_SPV ${SHADER_SPV_DIR}/${SHADER_NAME}.cso)
-    
-        if (${SHADER_TYPE} STREQUAL "rt")
-            set (SHADER_TYPE_FLAG "-T lib_6_6")
-        elseif (${SHADER_TYPE} STREQUAL "cs")
-            set (SHADER_TYPE_FLAG "-T cs_6_6")
-        elseif (${SHADER_TYPE} STREQUAL "task")
-            set (SHADER_TYPE_FLAG "-T as_6_6")
-        endif()
-    
-        add_custom_command(
-            OUTPUT ${SHADER_SPV}
-            COMMAND ${SHADER_COMPILER} 
-            "-spirv" "-fspv-target-env=vulkan1.3" "-fvk-use-scalar-layout" 
-            "-Wno-parameter-usage"
-            ${SHADER_TYPE_FLAG} "$<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:-Zi>" 
-            "$<$<CONFIG:Release>:-O3>"
-            "-Fo ${SHADER_SPV}" "${SHADER_FILE}" 
-            DEPENDS ${SHADER_FILE} ${SHADER_INCLUDES} ${SHADER_INTEROP}
-            COMMENT "Compiling HLSL shader: ${SHADER_FILE} -> ${SHADER_SPV}"
-            VERBATIM
-        )
-        list (APPEND SHADER_SPV_FILES ${SHADER_SPV})
-    endforeach()
-    
-    add_custom_target(shaders DEPENDS ${SHADER_SPV_FILES})
+    # if (NOT DEFINED SHADER_COMPILER)
+    #     set(SHADER_COMPILER "dxc")
+    # endif()
+    # 
+    # foreach(SHADER_FILE ${SHADER_FILES})
+    #     get_filename_component(SHADER_NAME ${SHADER_FILE} NAME_WE)
+    #     get_property(SHADER_TYPE SOURCE ${SHADER_FILE} PROPERTY name)
+    #     set(SHADER_SPV ${SHADER_SPV_DIR}/${SHADER_NAME}.spv)
+    #     # set(SHADER_SPV ${SHADER_SPV_DIR}/${SHADER_NAME}.cso)
+    # 
+    #     if (${SHADER_TYPE} STREQUAL "rt")
+    #         set (SHADER_TYPE_FLAG "-T lib_6_6")
+    #     elseif (${SHADER_TYPE} STREQUAL "cs")
+    #         set (SHADER_TYPE_FLAG "-T cs_6_6")
+    #     elseif (${SHADER_TYPE} STREQUAL "task")
+    #         set (SHADER_TYPE_FLAG "-T as_6_6")
+    #     endif()
+    # 
+    #     add_custom_command(
+    #         OUTPUT ${SHADER_SPV}
+    #         COMMAND ${SHADER_COMPILER} 
+    #         "-spirv" "-fspv-target-env=vulkan1.3" "-fvk-use-scalar-layout" 
+    #         "-Wno-parameter-usage"
+    #         ${SHADER_TYPE_FLAG} "$<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:-Zi>" 
+    #         "$<$<CONFIG:Release>:-O3>"
+    #         "-Fo ${SHADER_SPV}" "${SHADER_FILE}" 
+    #         DEPENDS ${SHADER_FILE} ${SHADER_INCLUDES} ${SHADER_INTEROP}
+    #         COMMENT "Compiling HLSL shader: ${SHADER_FILE} -> ${SHADER_SPV}"
+    #         VERBATIM
+    #     )
+    #     list (APPEND SHADER_SPV_FILES ${SHADER_SPV})
+    # endforeach()
+    # 
+    # add_custom_target(shaders DEPENDS ${SHADER_SPV_FILES})
 endif()
 
 # convert
@@ -424,6 +425,11 @@ target_compile_definitions(convert PRIVATE ${RT_DEFINITIONS})
 target_compile_options(convert PRIVATE ${RT_CXX_FLAGS})
 
 # CUDA support
+if (NOT (APPLE OR (WIN32 AND CMAKE_SYSTEM_PROCESSOR STREQUAL "ARM64")))
+    option (WITH_CUDA "Build with NVIDIA CUDA." ON) 
+    option (WITH_OPTIX "Build with NVIDIA Optix." ON)
+endif()
+
 include(CheckLanguage)
 if (WITH_CUDA)
     check_language(CUDA)
@@ -435,7 +441,14 @@ if (WITH_CUDA)
         list (APPEND deps CUDA::cudart)
         list (APPEND RT_DEFINITIONS WITH_CUDA)
     endif()
+
+    find_package(OptiX)
+    if (OPTIX_FOUND)
+        message(STATUS "Optix version: ${OPTIX_VERSION}")
+        list (APPEND RT_DEFINITIONS WITH_OPTIX)
+    endif()
 endif()
+
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/src/rt/gpu)
 
@@ -472,7 +485,6 @@ add_executable(rt_exe
 )
 
 if (USE_GPU)
-    add_dependencies(rt_exe shaders)
 else()
     list (APPEND RT_DEFINITIONS "USE_SUBDIVISION")
 endif()
@@ -484,6 +496,7 @@ target_include_directories(rt_exe PRIVATE
     ${NANOVDB_INCLUDE_DIR}
     ${VULKAN_INCLUDE_DIR}
     ${ZLIB_INCLUDE_DIR}
+    ${OPTIX_INCLUDE_DIR}
 )
 
 target_compile_options(rt_exe PRIVATE ${RT_CXX_FLAGS}

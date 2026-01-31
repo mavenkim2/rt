@@ -29,7 +29,6 @@
 #include "win32.h"
 #include "graphics/ptex.h"
 #include "virtual_geometry/virtual_geometry_manager.h"
-#include "photon_mapping/photon_mapping.h"
 #include "volume.h"
 
 #include "gpu/path_guiding.h"
@@ -983,9 +982,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     CommandBuffer *dgfTransferCmd = device->BeginCommandBuffer(QueueType_Compute);
     virtualGeometryManager.FinalizeResources(dgfTransferCmd);
-
-    // Photon mapping
-    PhotonMapper photonMapper(sceneScratch.temp.arena);
 
     // Path guiding
     // PathGuiding pathGuiding(sceneScratch.temp.arena);

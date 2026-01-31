@@ -1,5 +1,6 @@
 #include "../../platform.h"
 #include "cuda_device.h"
+#include "../../wavefront/bvh.h"
 
 namespace rt
 {
@@ -168,6 +169,27 @@ void CUDADevice::MemSet(void *ptr, char ch, uint64_t size)
 {
     CUDAContextScope scope(this);
     CUDA_ASSERT(cuMemsetD8((CUdeviceptr)ptr, ch, size));
+}
+
+#ifdef WITH_OPTIX
+void CUDADevice::InitializeOptix()
+{
+    OptixDeviceContextOptions contextOptions = {};
+    // optixDeviceContextCreate(, &contextOptions, &optixDeviceContext);
+}
+#endif
+
+void CUDADevice::BuildBVH(BVH *bvh)
+{
+#ifdef WITH_OPTIX
+    // OPTIXAPI OptixResult optixAccelBuild(
+    //     OptixDeviceContext context, CUstream stream,
+    //     const OptixAccelBuildOptions *accelOptions, const OptixBuildInput *buildInputs,
+    //     unsigned int numBuildInputs, CUdeviceptr tempBuffer, size_t tempBufferSizeInBytes,
+    //     CUdeviceptr outputBuffer, size_t outputBufferSizeInBytes,
+    //     OptixTraversableHandle *outputHandle, const OptixAccelEmitDesc *emittedProperties,
+    //     unsigned int numEmittedProperties);
+#endif
 }
 
 // void CUDADevice::CopyFromDevice(void *)
