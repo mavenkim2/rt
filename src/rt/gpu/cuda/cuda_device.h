@@ -34,6 +34,19 @@ struct CUDAContextScope
         }                                                                                     \
     }
 
+#ifdef WITH_OPTIX
+#define OPTIX_ASSERT(statement)                                                               \
+    {                                                                                         \
+        OptixResult result = statement;                                                       \
+        if (result != OPTIX_SUCCESS)                                                          \
+        {                                                                                     \
+            const char *name = optixGetErrorString(result);                                   \
+            printf("Optix Error: %s in %s (%s:%d)", name, #statement, __FILE__, __LINE__);    \
+            Trap();                                                                           \
+        }                                                                                     \
+    }
+#endif
+
 struct CUDAArena : GPUArena
 {
     CUDADevice *device;

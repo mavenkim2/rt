@@ -2,6 +2,10 @@
 #include "cuda_device.h"
 #include "../../wavefront/bvh.h"
 
+#ifdef WITH_OPTIX
+#include <optix_function_table_definition.h>
+#endif
+
 namespace rt
 {
 
@@ -175,7 +179,25 @@ void CUDADevice::MemSet(void *ptr, char ch, uint64_t size)
 void CUDADevice::InitializeOptix()
 {
     OptixDeviceContextOptions contextOptions = {};
-    // optixDeviceContextCreate(, &contextOptions, &optixDeviceContext);
+    contextOptions.logCallbackFunction       = [](unsigned int level, const char *tag,
+                                            const char *message, void *cbdata) {
+        string type = {};
+
+        switch (level)
+        {
+            case 1: type = "Fatal Error"; break;
+            case 2: type = "Error"; break;
+            case 3: type = "Warning"; break;
+            case 4: type = "Status"; break;
+            default: break;
+        }
+
+        Print("Optix %S: %s\n", type, message);
+    };
+    contextOptions.logCallbackLevel = 4;
+    contextOptions.validationMode   = OPTIX_DEVICE_CONTEXT_VALIDATION_MODE_ALL;
+
+    OPTIX_ASSERT(optixDeviceContextCreate(cudaContext, &contextOptions, &optixDeviceContext));
 }
 #endif
 
